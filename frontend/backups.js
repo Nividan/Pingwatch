@@ -6,7 +6,35 @@ let _bkDevices     = [];           // cached device list from /api/backups
 let _bkRunning     = new Set();    // device IDs currently backing up
 let _bkInited      = false;
 let _bkKeepMax     = 3;            // backup_keep from settings (configs to keep per device)
-let _bkGrpExpanded = { enabled: true, disabled: false }; // section collapse state
+let _bkGrpExpanded = { enabled: true, disabled: false }; // top-section collapse state
+// Per-site collapse state, keyed `${section}:${site}` so the same site can be
+// expanded in Enabled and collapsed in Disabled independently. Persisted in
+// localStorage; missing keys default to "open" inside Enabled and "closed"
+// inside Disabled to keep first-paint quiet for a long disabled list.
+let _bkSiteCollapsed = new Set();
+try {
+  const raw = localStorage.getItem('pw_bk_site_collapsed');
+  if (raw) _bkSiteCollapsed = new Set(JSON.parse(raw));
+} catch {}
+function _bkSaveSiteCollapsed() {
+  try { localStorage.setItem('pw_bk_site_collapsed', JSON.stringify([..._bkSiteCollapsed])); } catch {}
+}
+function _bkToggleSite(key) {
+  if (_bkSiteCollapsed.has(key)) _bkSiteCollapsed.delete(key);
+  else _bkSiteCollapsed.add(key);
+  _bkSaveSiteCollapsed();
+  const collapsed = _bkSiteCollapsed.has(key);
+  // Toggle the chevron on the header row and hide every device row tagged
+  // with this site key. Header row itself stays visible so the user can
+  // re-expand without searching the page.
+  const idSafe = key.replace(/[^A-Za-z0-9_-]/g, '_');
+  const arr = document.getElementById('bk-site-arr-' + idSafe);
+  if (arr) arr.classList.toggle('open', !collapsed);
+  document
+    .querySelectorAll(`tr[data-bk-site-row="${CSS.escape(key)}"]`)
+    .forEach(tr => { tr.style.display = collapsed ? 'none' : ''; });
+}
+const _BK_UNSITED = 'Unsited';
 
 // ── Init / refresh ───────────────────────────────────────────────────
 async function _bkInit() {
@@ -175,9 +203,14 @@ function _bkRenderTable(devices) {
         ? 'Click to view latest config'
         : 'Click to configure — no backups yet';
 
-      // Right-hand actions: Run + Edit settings
+      // Right-hand actions: Extract subnets + Run + Edit settings.
+      // Extract is only meaningful once the device has a successful backup
+      // (we need its config text), so we gate on last_run_id + last_success.
       const runBtn = eligible
         ? `<button class="iconbtn ${isRunning?'bk-btn-spin':''}" onclick="event.stopPropagation();_bkTriggerRun('${esc(dev.did)}')" ${isRunning?'disabled':''} title="Run backup now">${icon('play',13)}</button>`
+        : '';
+      const extractBtn = (dev.last_run_id && dev.last_success === true)
+        ? `<button class="iconbtn rbac-op" onclick="event.stopPropagation();_bkExtractSubnets('${esc(dev.did)}','${esc(dev.name||dev.did)}')" title="Extract subnets from this config into IPAM">${icon('ipam',13)}</button>`
         : '';
       const setBtn = `<button class="iconbtn" onclick="event.stopPropagation();_bkOpenSettings('${esc(dev.did)}')" title="Edit device settings">${icon('edit',13)}</button>`;
 
@@ -189,8 +222,66 @@ function _bkRenderTable(devices) {
         <td>${stripCell}</td>
         <td>${diffCell}</td>
         <td>${statusCell}</td>
-        <td class="bk-acts" onclick="event.stopPropagation()">${runBtn}${setBtn}</td>
+        <td class="bk-acts" onclick="event.stopPropagation()">${extractBtn}${runBtn}${setBtn}</td>
       </tr>`;
+    }).join('');
+  }
+
+  // Bucket a list of devices by site for the secondary-axis grouping.
+  // Returns a sorted array of [siteName, devList] tuples with Unsited last.
+  function bucketBySite(devList) {
+    const map = new Map();
+    for (const d of devList) {
+      const site = (d.site || '').trim() || _BK_UNSITED;
+      if (!map.has(site)) map.set(site, []);
+      map.get(site).push(d);
+    }
+    return [...map.entries()].sort(([a], [b]) => {
+      if (a === _BK_UNSITED) return  1;
+      if (b === _BK_UNSITED) return -1;
+      return a.localeCompare(b);
+    });
+  }
+
+  // Tag a device row's source <tr> output with the composite site key so
+  // _bkToggleSite can hide/show every device in a site without touching
+  // the header row. We splice the data-attribute into the open tag the
+  // existing buildRows() produces — easier than fanning the attribute all
+  // the way down through the row builder.
+  function tagRowsWithSite(html, key) {
+    return html.replace(/<tr /g, `<tr data-bk-site-row="${key}" `);
+  }
+
+  // Interleaved site-header rows + device rows inside a single section
+  // <tbody>. Multiple <tbody> elements at the same <table> level are valid
+  // HTML; *nesting* tbodies is not, so we keep everything as <tr> here.
+  function buildSectionBody(sectionKey, devList) {
+    const buckets = bucketBySite(devList);
+    return buckets.map(([siteName, sd]) => {
+      const compositeKey  = sectionKey + ':' + siteName;
+      const defaultClosed = (sectionKey === 'disabled');
+      const userToggled   = _bkSiteCollapsed.has(compositeKey);
+      const collapsed     = defaultClosed ? !userToggled : userToggled;
+      const idSafe        = compositeKey.replace(/[^A-Za-z0-9_-]/g, '_');
+      const arrCls        = collapsed ? 'bk-grp-arr' : 'bk-grp-arr open';
+      const rowStyle      = collapsed ? 'style="display:none"' : '';
+      // Header row uses the same .bk-grp-hdr / .bk-site-hdr classes so the
+      // existing CSS picks it up as a header band. The header is always
+      // visible; only the device rows beneath it collapse.
+      const header = `
+        <tr class="bk-grp-hdr bk-site-hdr" onclick="_bkToggleSite('${compositeKey.replace(/'/g, "\\'")}')">
+          <td colspan="8">
+            <span class="${arrCls}" id="bk-site-arr-${idSafe}">▶</span>
+            <span class="bk-grp-title bk-site-title">${esc(siteName)}</span>
+            <span class="bk-grp-cnt">${sd.length}</span>
+          </td>
+        </tr>`;
+      // buildRows returns the raw <tr> markup for each device; we splice
+      // a data-bk-site-row attribute onto each so the toggle handler can
+      // find them, plus an inline display:none when collapsed by default.
+      let rows = tagRowsWithSite(buildRows(sd), compositeKey);
+      if (collapsed) rows = rows.replace(/<tr /g, '<tr style="display:none" ');
+      return header + rows;
     }).join('');
   }
 
@@ -198,6 +289,9 @@ function _bkRenderTable(devices) {
     const expanded = _bkGrpExpanded[key] !== false;
     const arrClass = expanded ? 'bk-grp-arr open' : 'bk-grp-arr';
     const bodyAttr = expanded ? '' : ' class="bk-grp-collapsed"';
+    const inner = devList.length
+      ? buildSectionBody(key, devList)
+      : '<tr><td colspan="8" class="muted" style="padding:10px 14px;font-size:12px">No devices</td></tr>';
     return `
       <tbody class="bk-grp-hdr" onclick="_bkToggleGroup('${key}')">
         <tr><td colspan="8">
@@ -206,7 +300,7 @@ function _bkRenderTable(devices) {
           <span class="bk-grp-cnt">${devList.length}</span>
         </td></tr>
       </tbody>
-      <tbody id="bk-grp-${key}"${bodyAttr}>${buildRows(devList)}</tbody>`;
+      <tbody id="bk-grp-${key}"${bodyAttr}>${inner}</tbody>`;
   }
 
   const eligible     = devices.filter(_bkIsEligible);
@@ -298,6 +392,55 @@ function _bkRelTime(isoStr) {
   if (diff < 3600)  return `${Math.round(diff / 60)}m ago`;
   if (diff < 86400) return `${Math.round(diff / 3600)}h ago`;
   return `${Math.round(diff / 86400)}d ago`;
+}
+
+// ── Extract subnets from the most recent backup ───────────────────────
+// Calls the extractor on the device's latest successful config, then hands
+// the resulting CSV off to the Import Subnets modal pre-filled. The user
+// reviews + confirms there; this function never writes to IPAM directly.
+async function _bkExtractSubnets(did, deviceName) {
+  if (typeof window._ipamOpenImport !== 'function' && typeof _ipamOpenImport !== 'function') {
+    toast('IPAM module not loaded', 'err');
+    return;
+  }
+  toast('Extracting subnets…');
+  let j;
+  try {
+    const r = await fetch(`/api/backups/${encodeURIComponent(did)}/extract-subnets`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'same-origin',
+      body: JSON.stringify({}),
+    });
+    j = await r.json().catch(() => ({}));
+    if (!r.ok) {
+      toast(j.error || `Extract failed: ${r.statusText}`, 'err');
+      return;
+    }
+  } catch (e) {
+    toast('Extract request failed: ' + (e.message || e), 'err');
+    return;
+  }
+  const vendor = j.vendor || '';
+  const rows   = j.rows   || [];
+  if (!rows.length) {
+    toast(vendor
+      ? `No subnets found in ${deviceName}'s ${vendor} config`
+      : `Could not detect vendor for ${deviceName} — paste manually`,
+      'warn');
+    return;
+  }
+  const banner =
+    `<strong>Pre-filled from ${esc(deviceName)}</strong>` +
+    (vendor ? ` · vendor: ${esc(vendor)}` : '') +
+    ` · ${rows.length} subnet${rows.length===1?'':'s'} found` +
+    (j.source_site ? ` · site default: <strong>${esc(j.source_site)}</strong>` : '') +
+    `<div style="margin-top:3px;opacity:0.85;font-size:11px">Review the rows below, uncheck anything you don't want, then click Import.</div>`;
+  _ipamOpenImport({
+    prefillText: j.csv || '',
+    banner: banner,
+    autoPreview: true,
+  });
 }
 
 // ── Trigger backup ────────────────────────────────────────────────────

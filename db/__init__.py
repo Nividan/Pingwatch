@@ -109,8 +109,31 @@ from db.groups      import (
     db_get_oidc_mapped_groups,
 )
 
+# sites (Live Map metadata sidecar)
+from db.sites       import (
+    db_list_sites,
+    db_get_site_meta,
+    db_upsert_site_meta,
+    db_ensure_site_meta,
+    db_rename_site_meta,
+    db_delete_site_meta,
+    db_distinct_site_names,
+    db_site_usage,
+    KNOWN_KINDS,
+)
+
 # audit
 from db.audit       import db_log_audit, db_get_audit
+
+# api_tokens — Bearer-token auth (scripts / CI / Terraform)
+from db.api_tokens  import (
+    db_create_api_token,
+    db_get_api_token_by_hash,
+    db_get_api_token,
+    db_list_api_tokens,
+    db_revoke_api_token,
+    db_touch_api_token_last_used,
+)
 
 # ipam
 from db.ipam        import (
@@ -126,6 +149,9 @@ from db.ipam        import (
     db_get_allocations,
     db_upsert_allocation,
     db_clear_allocation,
+    db_mark_allocations_stale,
+    apply_subnet_scan_results,
+    db_search_allocations,
     db_set_device_role,
     db_get_device_roles,
     db_update_dns,
@@ -263,10 +289,15 @@ __all__ = [
     "db_get_saml_mapped_groups", "db_get_oidc_mapped_groups",
     # audit
     "db_log_audit", "db_get_audit",
+    # api_tokens
+    "db_create_api_token", "db_get_api_token_by_hash", "db_get_api_token",
+    "db_list_api_tokens", "db_revoke_api_token", "db_touch_api_token_last_used",
     # ipam
     "db_list_subnets", "db_get_subnet", "db_add_subnet", "db_rename_subnet", "db_delete_subnet",
     "db_update_subnet", "db_set_auto_discover", "db_approve_first_scan", "db_set_subnet_last_scan",
     "db_get_allocations", "db_upsert_allocation", "db_clear_allocation",
+    "db_mark_allocations_stale", "apply_subnet_scan_results",
+    "db_search_allocations",
     "db_set_device_role", "db_get_device_roles", "db_update_dns",
     "ipam_sync_device_add", "ipam_sync_device_update",
     "ipam_sync_device_delete", "ipam_sync_subnet_add",

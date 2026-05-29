@@ -285,6 +285,210 @@ function _buildSettingsTab_groups() {
     </div>`;
 }
 
+// ── API Tokens tab ────────────────────────────────────────────────
+// Bearer-token management for scripts / CI / Terraform. Admin-only.
+// Tokens are SHA-256 hashed in the DB; the plaintext value is shown
+// exactly once at creation via _apiTokenReveal().
+function _buildSettingsTab_apitokens() {
+  return `<div class="mbdy stab-fade" id="stab-apitokens" style="display:none;overflow-y:auto;flex:1">
+      <div class="alrt-panel-hdr" style="margin-bottom:10px">
+        <span style="color:var(--text3);font-size:12px">
+          Bearer tokens for scripts, CI, and Terraform. Read-only tokens accept GET requests only; full tokens can do anything the owning user can. See <a href="/API.md" target="_blank" style="color:var(--accent)">API.md</a> for usage.
+        </span>
+        <button class="btn-p rbac-admin" style="font-size:12px;padding:5px 12px" onclick="openCreateApiToken()">＋ Generate Token</button>
+      </div>
+      <div id="apiTokenList"><div class="alrt-loading">Loading…</div></div>
+    </div>`;
+}
+
+function _apiTokFmtTs(ts) {
+  if (!ts) return '—';
+  try { return new Date(Math.floor(ts * 1000)).toLocaleString(); }
+  catch (e) { return '—'; }
+}
+
+function _apiTokScopePill(s) {
+  const cls = s === 'full' ? 'warn' : 'up';
+  return `<span class="pill ${cls}" style="font-size:10px;padding:2px 7px">${esc(s)}</span>`;
+}
+
+function _renderApiTokenTable(tokens) {
+  if (!tokens.length) {
+    return '<div class="alrt-empty" style="padding:24px;text-align:center;color:var(--text3)">No API tokens yet. Generate one to drive the REST API from scripts, CI, or Terraform.</div>';
+  }
+  const rows = tokens.map(t => `
+    <tr>
+      <td>${esc(t.name)}</td>
+      <td>${esc(t.username)}</td>
+      <td>${_apiTokScopePill(t.scope)}</td>
+      <td style="white-space:nowrap;color:var(--text3);font-size:11px">${_apiTokFmtTs(t.created_at)}</td>
+      <td style="white-space:nowrap;color:var(--text3);font-size:11px">${t.last_used_at ? _apiTokFmtTs(t.last_used_at) : 'never'}</td>
+      <td style="white-space:nowrap;color:var(--text3);font-size:11px">${t.expires_at ? _apiTokFmtTs(t.expires_at) : 'never'}</td>
+      <td style="text-align:right"><button class="btn-s" style="font-size:11px;padding:4px 10px;color:var(--down)" onclick="revokeApiToken(${t.id}, ${esc(JSON.stringify(t.name||''))})">Revoke</button></td>
+    </tr>`).join('');
+  return `<table class="tbl" style="width:100%;font-size:12px">
+      <thead><tr>
+        <th>Name</th><th>Owner</th><th>Scope</th><th>Created</th><th>Last used</th><th>Expires</th><th></th>
+      </tr></thead>
+      <tbody>${rows}</tbody>
+    </table>`;
+}
+
+async function loadApiTokens() {
+  const el = document.getElementById('apiTokenList');
+  if (!el) return;
+  try {
+    const r = await api('GET', '/api/tokens');
+    if (r && r.error) {
+      el.innerHTML = `<div class="alrt-empty" style="color:var(--down)">${esc(r.error)}</div>`;
+      return;
+    }
+    el.innerHTML = _renderApiTokenTable(r.tokens || []);
+  } catch (e) {
+    el.innerHTML = '<div class="alrt-empty" style="color:var(--down)">Failed to load tokens.</div>';
+  }
+}
+
+function openCreateApiToken() {
+  closeM('mApiTok');
+  const o = document.createElement('div');
+  o.className = 'mo'; o.id = 'mApiTok';
+  _overlayClose(o, () => closeM('mApiTok'));
+  o.innerHTML = `
+    <div class="mbox" style="width:480px;max-width:95vw">
+      <div class="mhd">
+        <div class="mttl">Generate API Token</div>
+        <button class="mclose" onclick="closeM('mApiTok')">✕</button>
+      </div>
+      <div class="mbdy">
+        <div class="fr"><label class="fl">Name</label>
+          <input type="text" id="apiTok-name" placeholder="e.g. ci-readonly, terraform-prod" maxlength="100"/>
+          <div class="fh">A human label so you can tell tokens apart in the list.</div>
+        </div>
+        <div class="fr"><label class="fl">Scope</label>
+          <select id="apiTok-scope">
+            <option value="read">read — GET / HEAD only</option>
+            <option value="full">full — any HTTP method, capped by owner's role</option>
+          </select>
+          <div class="fh">Cookie sessions always run with full scope. Read tokens cannot create devices, ack alerts, or change settings.</div>
+        </div>
+        <div class="fr"><label class="fl">Expires</label>
+          <select id="apiTok-exp">
+            <option value="">Never</option>
+            <option value="30">30 days</option>
+            <option value="90">90 days</option>
+            <option value="365">1 year</option>
+          </select>
+          <div class="fh">Revoke is the primary kill switch — expiry is optional.</div>
+        </div>
+        <div id="apiTok-err" style="color:var(--down);font-size:12px;margin-top:8px"></div>
+      </div>
+      <div class="mft">
+        <button class="btn-s" onclick="closeM('mApiTok')">Cancel</button>
+        <button class="btn-p" onclick="_apiTokenCreate()">Generate</button>
+      </div>
+    </div>`;
+  document.body.appendChild(o);
+  setTimeout(() => { const n = document.getElementById('apiTok-name'); if (n) n.focus(); }, 30);
+}
+
+async function _apiTokenCreate() {
+  const errEl = document.getElementById('apiTok-err');
+  if (errEl) errEl.textContent = '';
+  const name  = (document.getElementById('apiTok-name')?.value || '').trim();
+  const scope = document.getElementById('apiTok-scope')?.value || 'read';
+  const expRaw = document.getElementById('apiTok-exp')?.value || '';
+  if (!name) { if (errEl) errEl.textContent = 'Name is required.'; return; }
+  let expires_at = null;
+  if (expRaw) {
+    const days = parseInt(expRaw, 10);
+    if (days > 0) expires_at = Math.floor(Date.now() / 1000) + days * 86400;
+  }
+  try {
+    const r = await api('POST', '/api/tokens', {name, scope, expires_at});
+    if (r && r.error) { if (errEl) errEl.textContent = r.error; return; }
+    closeM('mApiTok');
+    _apiTokenReveal(r);
+    loadApiTokens();
+  } catch (e) {
+    if (errEl) errEl.textContent = 'Could not create token.';
+  }
+}
+
+function _apiTokenReveal(meta) {
+  closeM('mApiTokReveal');
+  const o = document.createElement('div');
+  o.className = 'mo'; o.id = 'mApiTokReveal';
+  _overlayClose(o, () => closeM('mApiTokReveal'));
+  const tok = meta.token || '';
+  o.innerHTML = `
+    <div class="mbox" style="width:600px;max-width:96vw">
+      <div class="mhd">
+        <div class="mttl" style="color:var(--warn)">⚠ Copy your token now</div>
+        <button class="mclose" onclick="closeM('mApiTokReveal')">✕</button>
+      </div>
+      <div class="mbdy">
+        <div style="margin-bottom:12px;color:var(--text2);font-size:12px;line-height:1.5">
+          This is the only time the full token value will be shown.
+          PingWatch only stores its SHA-256 hash — there is no way to recover it later.
+          If you lose it, revoke this entry and generate a new one.
+        </div>
+        <div style="display:flex;gap:6px;align-items:center">
+          <input type="text" id="apiTok-reveal-val" readonly value="${esc(tok)}"
+                 style="flex:1;font-family:'JetBrains Mono',monospace;font-size:12px;background:var(--bg3);color:var(--accent2);padding:8px"/>
+          <button class="btn-p" style="padding:7px 14px" onclick="_apiTokenCopy()">Copy</button>
+        </div>
+        <div style="margin-top:14px;padding-top:14px;border-top:1px solid var(--border);font-size:12px;color:var(--text3)">
+          Name: <b style="color:var(--text)">${esc(meta.name || '')}</b> ·
+          Scope: <b style="color:var(--text)">${esc(meta.scope || '')}</b> ·
+          Owner: <b style="color:var(--text)">${esc(meta.username || '')}</b>
+        </div>
+        <div style="margin-top:10px;font-size:12px;color:var(--text3)">Try it:
+          <pre style="background:var(--bg3);padding:8px;border-radius:4px;margin-top:6px;overflow:auto;font-size:11px">curl -H "Authorization: Bearer ${esc(tok)}" \\
+     ${location.origin}/api/devices</pre>
+        </div>
+      </div>
+      <div class="mft">
+        <button class="btn-p" onclick="closeM('mApiTokReveal')">I copied it — close</button>
+      </div>
+    </div>`;
+  document.body.appendChild(o);
+}
+
+function _apiTokenCopy() {
+  const el = document.getElementById('apiTok-reveal-val');
+  if (!el) return;
+  el.select();
+  let ok = false;
+  try {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(el.value);
+      ok = true;
+    } else {
+      ok = document.execCommand('copy');
+    }
+  } catch (e) { ok = false; }
+  if (typeof toast === 'function') {
+    toast(ok ? 'Copied to clipboard' : 'Copy failed — select and Ctrl+C',
+          ok ? 'ok' : 'err');
+  }
+}
+
+async function revokeApiToken(id, name) {
+  const msg = `Revoke API token "${esc(name)}"?<br><br>
+    <span style="color:var(--text3);font-size:12px">Any client still using it will start getting 401 within a few seconds.</span>`;
+  _pwConfirm(msg, async () => {
+    try {
+      const r = await api('DELETE', '/api/tokens/' + id);
+      if (r && r.error) { toast(r.error, 'err'); return; }
+      toast('Token revoked', 'ok');
+      loadApiTokens();
+    } catch (e) {
+      toast('Revoke failed', 'err');
+    }
+  }, 'Revoke', {danger: true, html: true});
+}
+
 function _buildSettingsTab_integrations(sr) {
   const _ari = Number.isFinite(sr.auth_refresh_interval_min) ? sr.auth_refresh_interval_min : 60;
   return `<div class="mbdy stab-fade" id="stab-integrations" style="display:none;overflow-y:auto;flex:1">
@@ -1522,6 +1726,7 @@ async function openSettings(initialTab){
       <div class="stab-section">Identity</div>
       <button class="stab-nav" id="stab-btn-users" onclick="switchSettingsTab('users')">${icon('user',13)} Users</button>
       <button class="stab-nav" id="stab-btn-groups" onclick="switchSettingsTab('groups')">${icon('devices',13)} Groups</button>
+      <button class="stab-nav rbac-admin" id="stab-btn-apitokens" onclick="switchSettingsTab('apitokens')">${icon('shield',13)} API Tokens</button>
       <div class="stab-section">Monitoring</div>
       <button class="stab-nav" id="stab-btn-sensors" onclick="switchSettingsTab('sensors')">${icon('activity',13)} Sensors</button>
       <button class="stab-nav" id="stab-btn-auto-discovery" onclick="switchSettingsTab('auto-discovery')">${icon('zoom',13)} Auto-Discovery</button>
@@ -1535,6 +1740,7 @@ async function openSettings(initialTab){
     ${_buildSettingsTab_retention(sr)}
     ${_buildSettingsTab_users(sr, ur)}
     ${_buildSettingsTab_groups()}
+    ${_buildSettingsTab_apitokens()}
     ${_buildSettingsTab_integrations(sr)}
     ${_buildSettingsTab_database(sr)}
     ${_buildSettingsTab_reports(sr)}
@@ -1557,6 +1763,9 @@ async function openSettings(initialTab){
       <button class="btn-p" onclick="saveSecuritySettings()">Save Security</button>
     </div>
     <div class="mft" id="stab-footer-groups" style="display:none">
+      <button class="btn-s" onclick="closeM('mset')">Close</button>
+    </div>
+    <div class="mft" id="stab-footer-apitokens" style="display:none">
       <button class="btn-s" onclick="closeM('mset')">Close</button>
     </div>
     <div class="mft" id="stab-footer-integrations" style="display:none">
@@ -1609,7 +1818,7 @@ async function openSettings(initialTab){
 let _stabSwitching = false;
 function switchSettingsTab(tab){
   if (_stabSwitching) return;
-  const tabs = ['general','retention','users','groups','integrations','database','reports','sensors','networking','certificates','backup','auto-discovery','diagnostics'];
+  const tabs = ['general','retention','users','groups','apitokens','integrations','database','reports','sensors','networking','certificates','backup','auto-discovery','diagnostics'];
 
   // Find currently visible tab
   let cur = null;
@@ -1647,6 +1856,7 @@ function switchSettingsTab(tab){
             if (tab === 'backup')         _loadBackupScheduleSettings();
             if (tab === 'database')       _loadDbBackupSettings();
             if (tab === 'groups')         _groupsLoad();
+            if (tab === 'apitokens')      loadApiTokens();
             if (tab === 'integrations')   _loadIntegrationsStatus();
             if (tab === 'certificates')   _loadTrustedCAs();
             if (tab === 'auto-discovery') _loadAutoDiscoveryStatus();
@@ -1663,6 +1873,7 @@ function switchSettingsTab(tab){
     if (tab === 'backup')        _loadBackupScheduleSettings();
     if (tab === 'database')      _loadDbBackupSettings();
     if (tab === 'groups')        _groupsLoad();
+    if (tab === 'apitokens')     loadApiTokens();
     if (tab === 'integrations')  _loadIntegrationsStatus();
     if (tab === 'certificates')  _loadTrustedCAs();
     if (tab === 'auto-discovery') _loadAutoDiscoveryStatus();

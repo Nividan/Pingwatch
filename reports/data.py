@@ -1105,13 +1105,18 @@ def _maint_windows(start_ts: float, end_ts: float) -> list:
 
 # ── Device / sensor counts for cover page ──────────────────────────────
 
-def _inventory_summary() -> dict:
+def _inventory_summary(device_ids: list = None) -> dict:
+    """Live device + sensor totals. When device_ids is set (site-scoped
+    report), only those devices contribute."""
     from core.app_state import STATE
+    scope = set(device_ids) if device_ids else None
     dev_count = 0
     sen_count = 0
     dev_up = dev_down = dev_warn = 0
     with STATE._lock:
         for dev in STATE.devices.values():
+            if scope is not None and dev.device_id not in scope:
+                continue
             dev_count += 1
             sen_count += len(dev.sensors)
             alive = any(getattr(s, "alive", False) for s in dev.sensors.values())
@@ -1125,12 +1130,16 @@ def _inventory_summary() -> dict:
 
 # ── Inventory / compliance payload ─────────────────────────────────────
 
-def _inventory_devices() -> list:
-    """All devices with live status + sensor counts (from STATE)."""
+def _inventory_devices(device_ids: list = None) -> list:
+    """All devices with live status + sensor counts (from STATE). When
+    device_ids is set (site-scoped report), only those devices are returned."""
     from core.app_state import STATE
+    scope = set(device_ids) if device_ids else None
     out = []
     with STATE._lock:
         for dev in STATE.devices.values():
+            if scope is not None and dev.device_id not in scope:
+                continue
             sensors = list(dev.sensors.values())
             up    = sum(1 for s in sensors if getattr(s, "alive", False))
             down  = sum(1 for s in sensors if getattr(s, "alive", None) is False)
@@ -1609,6 +1618,12 @@ def build_report_context(kind: str,
     availability = _availability_by_device(start_ts, end_ts, device_ids) if need_avail else []
     overall      = _overall_availability(availability) if need_avail else {"up": 0, "total": 0, "pct": None}
     flaps_raw    = _flaps_in_window(start_ts, end_ts) if need_flaps else []
+    # When a site scope is in effect, drop flaps whose device isn't in the
+    # selected site. flap_log rows persist their did so we can filter
+    # in-process without a query rewrite.
+    if device_ids:
+        _did_set = set(device_ids)
+        flaps_raw = [f for f in flaps_raw if f.get("did") in _did_set]
     flaps        = _filter_flaps_by_severity(flaps_raw, severity_min)
     # Split out sensor-misconfig noise ("Unknown metric: on", SSL-verify errors,
     # bad OIDs, etc.) so they don't inflate the incident summary or noisy-sensor
@@ -1663,6 +1678,7 @@ def build_report_context(kind: str,
         "generated_by": config.get("triggered_by", ""),
         "render_ms":    None,   # filled below
         "severity_min": severity_min,
+        "site_filter":  (config.get("site_filter") or "").strip(),
         "sections":     sorted(sections) if is_custom else [],
         "show_individual_events": bool(opts.get("show_individual_events")) if is_custom else False,
     }
@@ -1678,7 +1694,7 @@ def build_report_context(kind: str,
         "meta":         meta,
         "company":      company,
         "period":       period_dict,
-        "inventory":    _inventory_summary(),
+        "inventory":    _inventory_summary(device_ids),
         "availability": availability,
         "overall":      overall,
         "incidents":    {
@@ -1741,7 +1757,7 @@ def build_report_context(kind: str,
         ctx["tls_expiring"] = _tls_expiring(tls_days)
 
     if kind == "inventory" or want("device_inventory"):
-        ctx["inventory_devices"] = _inventory_devices()
+        ctx["inventory_devices"] = _inventory_devices(device_ids)
     if kind == "inventory" or want("backup_coverage"):
         ctx["backup_coverage"]   = _inventory_backup_coverage()
     if kind == "inventory" or want("ipam"):

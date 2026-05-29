@@ -9,87 +9,54 @@ async function openEditGroup(groupName) {
   o.className = 'mo'; o.id = 'meg';
   _overlayClose(o, () => closeM('meg'));
   o.innerHTML = `
-    <div class="mbox" style="min-width:520px;max-width:600px">
+    <div class="mbox meg-mbox" style="min-width:560px;max-width:640px">
       <div class="mhd">
         <div class="mttl">Edit Group — ${esc(groupName)}</div>
         <button class="mclose" onclick="closeM('meg')">&#x2715;</button>
       </div>
-      <div class="mbdy">
-        <div class="alrt-section">
-          <div class="alrt-section-hdr">Group Name</div>
-          <div class="fr">
+      <div class="mbdy meg-body">
+        <div class="meg-row2">
+          <div class="meg-sec">
+            <div class="meg-h">Group Name</div>
             <input type="text" id="eg-name" value="${esc(groupName)}" autocomplete="off"/>
-            <div class="fh">Rename this group. All devices in the group will follow.</div>
           </div>
-        </div>
-
-        <div class="alrt-section">
-          <div class="alrt-section-hdr">Site</div>
-          <div class="fr">
+          <div class="meg-sec">
+            <div class="meg-h">Site</div>
             <input type="text" id="eg-site" list="eg-site-dl"
                    placeholder="(loading…)" autocomplete="off"/>
             <datalist id="eg-site-dl"></datalist>
-            <div class="fh" id="eg-site-hint">
-              Assigning a site here applies to every device in this group.
-              Leave empty to clear (Unsited).
-            </div>
+            <div class="fh" id="eg-site-hint">Applies to every device in this group.</div>
           </div>
         </div>
 
-        <div class="alrt-section">
-          <div class="alrt-section-hdr">Device Icon (NTM Live map)</div>
-          <div class="fr">
-            <select id="eg-icon">
-              <option value="">— Auto-detect from name / group —</option>
-              <option value="switch">Switch</option>
-              <option value="bb-switch">Backbone Switch</option>
-              <option value="firewall">Firewall</option>
-              <option value="wan-switch">WAN Switch</option>
-              <option value="server">Server</option>
-              <option value="pc">PC / Workstation</option>
-              <option value="laptop">Laptop</option>
-              <option value="ap">WiFi Access Point</option>
-              <option value="connector">Cato Connector</option>
-              <option value="remote-pc">Remote PC</option>
-              <option value="cloud">Cloud / Internet</option>
-              <option value="router">Router / Gateway</option>
-              <option value="vm">Virtual Machine</option>
-              <option value="appliance">Network Appliance</option>
-              <option value="storage">Storage / NAS</option>
-              <option value="phone">IP Phone / VoIP</option>
-              <option value="camera">IP Camera / CCTV</option>
-              <option value="printer">Printer / MFP</option>
-              <option value="load-balancer">Load Balancer</option>
-              <option value="hypervisor">Hypervisor / ESXi</option>
-              <option value="ups">UPS / PDU</option>
-              <option value="container">Container Host</option>
-              <option value="ipmi">IPMI / BMC</option>
-            </select>
-            <div class="fh">
-              Default icon for every device in this group on the NTM Live map.
-              Per-device icon overrides (set from the NTM panel) still take
-              precedence.
-            </div>
+        <div class="meg-row2">
+          <div class="meg-sec">
+            <div class="meg-h">Tier (Live Map)</div>
+            <select id="eg-tier">${_lmTierOptionsHtml('')}</select>
+            <div class="fh">Forces every device into this Live Map tier. Auto = name-pattern inference.</div>
+          </div>
+          <div class="meg-sec">
+            <div class="meg-h">Mute alerts</div>
+            <label class="meg-mute">
+              <input type="checkbox" id="eg-muted"/>
+              <span>🔕 Suppress for this group</span>
+            </label>
+            <div class="fh">Silences alerts &amp; flap events; probes still run.</div>
           </div>
         </div>
 
-        <div class="alrt-section">
-          <div class="alrt-section-hdr">Alert Profile</div>
-          <div id="eg-profile-body" style="font-size:12px;color:var(--text3)">
-            Loading\u2026
-          </div>
+        <div class="meg-sec">
+          <div class="meg-h">Parent Devices (Live Map)</div>
+          <div id="eg-parents-chips" class="pw-chip-input"></div>
+          <input type="text" id="eg-parents-input" list="eg-parents-dl"
+                 placeholder="Type to search — Enter or comma to add" autocomplete="off"/>
+          <datalist id="eg-parents-dl"></datalist>
+          <div class="fh">Default parents for every device in this group (drives Live Map connection lines). Per-device parents override this.</div>
         </div>
 
-        <div class="alrt-section">
-          <div class="alrt-section-hdr">Alerts</div>
-          <label style="display:flex;align-items:center;gap:8px;cursor:pointer;user-select:none">
-            <input type="checkbox" id="eg-muted"/>
-            <span>🔕 Mute alerts for this group</span>
-          </label>
-          <div class="fh" style="margin-top:4px">
-            Suppresses alert dispatch and flap events for every device and sensor in this
-            group. Probes still run and device cards still reflect their real status.
-          </div>
+        <div class="meg-sec">
+          <div class="meg-h">Alert Profile</div>
+          <div id="eg-profile-body" style="font-size:12px;color:var(--text3)">Loading\u2026</div>
         </div>
 
       </div>
@@ -107,15 +74,151 @@ async function openEditGroup(groupName) {
   // Site picker: prefill from the unique sites currently used by devices in
   // this group. Populate the autocomplete datalist from /api/sites.
   _loadGroupSiteState(groupName);
-  // NTM device-icon default: pull the current setting and select the option.
-  _loadGroupIconState(groupName);
+  // Live Map tier override: pull the current setting and select the option.
+  _loadGroupTierState(groupName);
+  // Live Map parent devices override: chip multi-select.
+  _loadGroupParentsState(groupName);
 }
 
-async function _loadGroupIconState(groupName) {
-  const sel = document.getElementById('eg-icon');
+// ── Group Parent Devices chip input ────────────────────────────────
+// Module-level state for the open Edit Group modal. Stored as a list of
+// device IDs (not names), serialized as JSON into pw_group_parents.
+let _egParentIds = [];
+
+// Same sentinel as Edit Device — the datalist offers "Foo  ·  group (N)"
+// entries so the user can pick a whole group as a parent without typing a
+// device id. Stored ref form: "group:<name>".
+const _EG_GRP_SFX = '  ·  group';
+
+function _egRenderParentChips() {
+  const wrap = document.getElementById('eg-parents-chips');
+  if (!wrap) return;
+  if (!_egParentIds.length) {
+    wrap.innerHTML = '<span class="pw-chip-empty">None — devices inherit per-device parents only</span>';
+    return;
+  }
+  wrap.innerHTML = _egParentIds.map((ref, i) => {
+    if (typeof ref === 'string' && ref.indexOf('group:') === 0) {
+      const gname = ref.slice(6);
+      return `<span class="pw-chip pw-chip-group" data-i="${i}">
+        <span class="pw-chip-badge">GROUP</span>${esc(gname)}
+        <button class="pw-chip-x" onclick="_egRemoveParent(${i})" title="Remove">&times;</button>
+      </span>`;
+    }
+    const d = S.devices[ref];
+    const label = d ? (d.name || ref) : `(missing: ${ref})`;
+    return `<span class="pw-chip" data-i="${i}">
+      ${esc(label)}
+      <button class="pw-chip-x" onclick="_egRemoveParent(${i})" title="Remove">&times;</button>
+    </span>`;
+  }).join('');
+}
+
+function _egRemoveParent(idx) {
+  _egParentIds.splice(idx, 1);
+  _egRenderParentChips();
+}
+
+function _egAddParent(ref) {
+  if (!ref || _egParentIds.includes(ref)) return;
+  if (_egParentIds.length >= 8) {
+    toast('Max 8 parent devices', 'err');
+    return;
+  }
+  _egParentIds.push(ref);
+  _egRenderParentChips();
+}
+
+function _egPopulateParentDatalist() {
+  const dl = document.getElementById('eg-parents-dl');
+  if (!dl) return;
+  const devOpts = Object.values(S.devices || {})
+    .sort((a, b) => (a.name || '').localeCompare(b.name || ''))
+    .map(d => `<option value="${esc(d.name || d.device_id)}"></option>`);
+  // Group entries — aggregate by group name + member count. Drop singletons
+  // (a 1-device "group" adds nothing over picking the device directly).
+  const groupCount = new Map();
+  Object.values(S.devices || {}).forEach(d => {
+    const g = (d.group || 'Default Group').trim();
+    groupCount.set(g, (groupCount.get(g) || 0) + 1);
+  });
+  const grpOpts = [...groupCount.entries()]
+    .filter(([, n]) => n >= 2)
+    .sort((a, b) => a[0].localeCompare(b[0]))
+    .map(([g, n]) => `<option value="${esc(g + _EG_GRP_SFX + ' (' + n + ')')}"></option>`);
+  dl.innerHTML = [...devOpts, ...grpOpts].join('');
+}
+
+function _egCommitParentFromInput(input) {
+  const raw = (input.value || '').trim();
+  if (!raw) return;
+  // Group entry — strip the sentinel suffix and store as "group:<name>".
+  const grpSfxIdx = raw.indexOf(_EG_GRP_SFX);
+  if (grpSfxIdx > 0) {
+    const gname = raw.slice(0, grpSfxIdx);
+    const exists = Object.values(S.devices || {}).some(
+      d => (d.group || 'Default Group') === gname
+    );
+    if (!exists) { toast(`Group "${gname}" not found`, 'err'); return; }
+    _egAddParent('group:' + gname);
+    input.value = '';
+    return;
+  }
+  // Device by name (case-insensitive) or by id.
+  const lc = raw.toLowerCase();
+  let match = Object.values(S.devices || {}).find(
+    d => (d.name || '').toLowerCase() === lc
+  );
+  if (!match && S.devices[raw]) match = S.devices[raw];
+  if (match) {
+    _egAddParent(match.device_id);
+    input.value = '';
+    return;
+  }
+  // Bare group name (typed without the suffix).
+  const groupSet = new Set(Object.values(S.devices || {}).map(
+    d => (d.group || 'Default Group')
+  ));
+  if (groupSet.has(raw)) {
+    _egAddParent('group:' + raw);
+    input.value = '';
+    return;
+  }
+  toast(`No device or group named "${raw}"`, 'err');
+}
+
+async function _loadGroupParentsState(groupName) {
+  _egParentIds = [];
+  _egPopulateParentDatalist();
+  try {
+    const r = await api('GET', '/api/settings/pw_group_parents').catch(() => null);
+    const map = (r && r.value && typeof r.value === 'object') ? r.value : {};
+    const cur = Array.isArray(map[groupName]) ? map[groupName] : [];
+    _egParentIds = cur.filter(p => typeof p === 'string' && p);
+  } catch { /* default: empty */ }
+  _egRenderParentChips();
+  // Wire up input — commit on Enter or comma.
+  const input = document.getElementById('eg-parents-input');
+  if (input) {
+    input.dataset.initial = JSON.stringify(_egParentIds);
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ',') {
+        e.preventDefault();
+        _egCommitParentFromInput(input);
+      } else if (e.key === 'Backspace' && !input.value && _egParentIds.length) {
+        _egParentIds.pop();
+        _egRenderParentChips();
+      }
+    });
+    input.addEventListener('change', () => _egCommitParentFromInput(input));
+  }
+}
+
+async function _loadGroupTierState(groupName) {
+  const sel = document.getElementById('eg-tier');
   if (!sel) return;
   try {
-    const r = await api('GET', '/api/settings/pw_group_icons');
+    const r = await api('GET', '/api/settings/pw_group_tiers');
     const map = (r && r.value) || {};
     const cur = map[groupName] || '';
     sel.value = cur;
@@ -213,32 +316,57 @@ async function saveEditGroup(oldName) {
   const newName = (document.getElementById('eg-name')?.value || '').trim();
   if (!newName) { toast('Group name cannot be empty', 'err'); return; }
 
-  // Device-icon default (NTM Live map) — write BEFORE rename so we can also
-  // migrate the entry if the group is being renamed in the same save.
-  const iconSel = document.getElementById('eg-icon');
-  let _iconWrote = false, _wantIcon = '', _hadIcon = '';
-  if (iconSel && iconSel.dataset.initial !== undefined) {
-    _wantIcon = (iconSel.value || '').trim();
-    _hadIcon  = iconSel.dataset.initial || '';
-    if (_wantIcon !== _hadIcon || newName !== oldName) {
+  // Live Map tier override — write BEFORE rename so the map entry can be
+  // migrated if the group is being renamed in the same save.
+  const tierSel = document.getElementById('eg-tier');
+  let _tierWrote = false;
+  if (tierSel && tierSel.dataset.initial !== undefined) {
+    const wantTier = (tierSel.value || '').trim();
+    const hadTier  = tierSel.dataset.initial || '';
+    if (wantTier !== hadTier || newName !== oldName) {
       try {
-        const cur = await api('GET', '/api/settings/pw_group_icons').catch(() => null);
+        const cur = await api('GET', '/api/settings/pw_group_tiers').catch(() => null);
         const map = (cur && cur.value && typeof cur.value === 'object') ? { ...cur.value } : {};
         // Remove the old name's entry first (handles both rename and clear).
         delete map[oldName];
-        if (_wantIcon) map[newName] = _wantIcon;
-        await api('PATCH', '/api/settings/pw_group_icons', { value: map });
-        // NTM Live tab runs in an iframe — postMessage triggers an in-place
-        // re-render with the new icon map instead of waiting for the next
-        // full tab load.
-        const _mf = document.getElementById('map-frame');
-        _mf?.contentWindow?.postMessage(
-          { type: 'pw_group_icons', value: map },
+        if (wantTier) map[newName] = wantTier;
+        await api('PATCH', '/api/settings/pw_group_tiers', { value: map });
+        // Live Map runs in an iframe — postMessage triggers a refresh so the
+        // drill-in re-buckets devices with the new override applied.
+        const _lf = document.getElementById('livemap-frame');
+        _lf?.contentWindow?.postMessage(
+          { type: 'lm_refresh' },
           window.location.origin
         );
-        _iconWrote = true;
+        _tierWrote = true;
       } catch (e) {
-        toast('Icon save failed: ' + (e.message || e), 'err');
+        toast('Tier save failed: ' + (e.message || e), 'err');
+        return;
+      }
+    }
+  }
+
+  // Live Map parent-devices override — same write-before-rename pattern.
+  const parentsInput = document.getElementById('eg-parents-input');
+  if (parentsInput && parentsInput.dataset.initial !== undefined) {
+    const wantParents = Array.isArray(_egParentIds) ? _egParentIds.slice() : [];
+    const hadParents  = JSON.parse(parentsInput.dataset.initial || '[]');
+    const same = wantParents.length === hadParents.length &&
+                 wantParents.every((p, i) => p === hadParents[i]);
+    if (!same || newName !== oldName) {
+      try {
+        const cur = await api('GET', '/api/settings/pw_group_parents').catch(() => null);
+        const map = (cur && cur.value && typeof cur.value === 'object') ? { ...cur.value } : {};
+        delete map[oldName];
+        if (wantParents.length) map[newName] = wantParents;
+        await api('PATCH', '/api/settings/pw_group_parents', { value: map });
+        const _lf = document.getElementById('livemap-frame');
+        _lf?.contentWindow?.postMessage(
+          { type: 'lm_refresh' },
+          window.location.origin
+        );
+      } catch (e) {
+        toast('Parent save failed: ' + (e.message || e), 'err');
         return;
       }
     }
@@ -273,7 +401,6 @@ async function saveEditGroup(oldName) {
           window._pwSitesCache = null;  // refresh autocomplete next open
           // Re-render moved devices so their .grp-wrap parents update.
           dids.forEach(d => { const dv = S.devices[d]; if (dv) renderDp(dv); });
-          if (typeof pruneEmptyGroups === 'function') pruneEmptyGroups();
         } catch (e) {
           toast('Site update failed: ' + (e.message || e), 'err');
           return;

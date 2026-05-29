@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Network Topology Manager</title>
+<title>Topology Design</title>
 <link rel="icon" href="/favicon.ico" type="image/x-icon">
 <link rel="stylesheet" href="/map.css">
 <script>
@@ -23,7 +23,7 @@
 
 <header>
   <div class="logo-pulse"></div>
-  <h1>NETWORK TOPOLOGY MANAGER</h1>
+  <h1>TOPOLOGY DESIGN</h1>
   <div class="search-wrap">
     <input id="search-input" class="search-input" placeholder="⌕ SEARCH DEVICES..." autocomplete="off" />
   </div>
@@ -102,7 +102,7 @@
       <span id="panel-title">SELECT AN ELEMENT</span>
     </div>
     <div class="panel-body" id="panel-body">
-      <div style="color:rgba(255,255,255,0.25);font-family:Share Tech Mono,monospace;font-size:11px;text-align:center;padding:40px 0;">
+      <div style="color:rgba(255,255,255,0.25);font-family:'JetBrains Mono',monospace;font-size:11px;text-align:center;padding:40px 0;">
         Click a node or link<br>to view and edit it
       </div>
     </div>
@@ -198,7 +198,7 @@
 		<div class="field-label">NAME COLOR (optional)</div>
 		<div class="color-row" style="align-items:center;gap:8px;">
 			<input type="checkbox" id="node-name-color-enabled" style="width:14px;height:14px;accent-color:var(--accent);cursor:pointer;flex-shrink:0"/>
-			<label for="node-name-color-enabled" style="font-family:Share Tech Mono,monospace;font-size:9px;color:rgba(0,212,255,0.5);letter-spacing:1px;cursor:pointer;flex:1;">OVERRIDE DEFAULT</label>
+			<label for="node-name-color-enabled" style="font-family:'JetBrains Mono',monospace;font-size:9px;color:rgba(0,212,255,0.5);letter-spacing:1px;cursor:pointer;flex:1;">OVERRIDE DEFAULT</label>
 			<input type="color" class="field-color" id="node-name-color" value="#00d4ff" title="Device name color"/>
 		</div>
 	  </div>
@@ -208,7 +208,7 @@
 	      <div id="vlan-chip-wrap" style="background:var(--input-bg);border:1px solid var(--border);border-radius:4px;padding:4px 6px 4px 6px;min-height:34px;display:flex;flex-wrap:wrap;gap:4px;align-items:center;cursor:text;padding-right:28px;" onclick="document.getElementById('vlan-chip-inp').focus()">
 	        <span id="vlan-chips"></span>
 	        <input id="vlan-chip-inp" placeholder="Add VLAN…" autocomplete="off"
-	          style="background:none;border:none;outline:none;color:var(--text);font-family:'Share Tech Mono',monospace;font-size:11px;width:80px;flex-shrink:0;"
+	          style="background:none;border:none;outline:none;color:var(--text);font-family:'JetBrains Mono',monospace;font-size:11px;width:80px;flex-shrink:0;"
 	          onkeydown="vlanChipKey(event)"
 	          oninput="vlanDropdownFilter(this.value)"
 	          onfocus="vlanDropdownFilter(this.value)"
@@ -223,20 +223,23 @@
         <div class="field-label">NODE COLOR</div>
         <div class="color-row" style="align-items:center;gap:8px;">
           <input type="checkbox" id="node-color-enabled" style="width:14px;height:14px;accent-color:var(--accent);cursor:pointer;flex-shrink:0"/>
-          <label for="node-color-enabled" style="font-family:Share Tech Mono,monospace;font-size:9px;color:rgba(0,212,255,0.5);letter-spacing:1px;cursor:pointer;flex:1;">OVERRIDE DEFAULT</label>
+          <label for="node-color-enabled" style="font-family:'JetBrains Mono',monospace;font-size:9px;color:rgba(0,212,255,0.5);letter-spacing:1px;cursor:pointer;flex:1;">OVERRIDE DEFAULT</label>
           <input type="color" class="field-color" id="node-color" value="#00d4ff" title="Custom node color"/>
         </div>
       </div>
       <div id="info-editor">
         <div class="field-label">INFO BOX CONTENT</div>
-      
+
         <div id="info-lines"></div>
-      
+
         <div style="display:flex; gap:10px; margin-top:10px;">
           <button class="btn btn-primary" type="button" onclick="addInfoLine()">+ ADD LINE</button>
           <button class="btn btn-danger" type="button" onclick="clearInfoLines()">CLEAR</button>
         </div>
-      
+
+        <div class="field-label" style="margin-top:16px">NOTES <span style="opacity:.55;font-weight:normal">(optional — shown inside the info box)</span></div>
+        <textarea id="info-notes-ta" class="node-notes-ta" placeholder="Add notes…" style="width:100%;min-height:60px;box-sizing:border-box"></textarea>
+
         <div class="mini-hint">
         </div>
       </div>
@@ -276,6 +279,7 @@
           <option value="ha">HA Cluster (red)</option>
           <option value="internet">Internet (gold)</option>
           <option value="tunnel">ZTNA Tunnel (purple)</option>
+          <option value="ipsec">IPsec Tunnel (orange)</option>
           <option value="wifi">WiFi (purple dashed)</option>
         </select>
       </div>
@@ -295,13 +299,13 @@
       <button class="modal-close" onclick="closeModal('modal-vlan')">✕</button>
     </div>
     <div class="modal-body">
-      <p style="font-family:Share Tech Mono,monospace;font-size:10px;color:rgba(255,255,255,0.4);margin-bottom:16px;line-height:1.6;">
+      <p style="font-family:'JetBrains Mono',monospace;font-size:10px;color:rgba(255,255,255,0.4);margin-bottom:16px;line-height:1.6;">
         Colors apply globally to all VLAN badges on switches, APs, and backbone devices.
       </p>
 
       <!-- column headers -->
       <div style="display:grid;grid-template-columns:80px 48px 1fr 32px;gap:10px;align-items:center;
-                  font-family:Share Tech Mono,monospace;font-size:9px;color:rgba(0,212,255,0.5);
+                  font-family:'JetBrains Mono',monospace;font-size:9px;color:rgba(0,212,255,0.5);
                   letter-spacing:1px;margin-bottom:8px;padding:0 2px;">
         <span>VLAN ID</span><span>COLOR</span><span>PREVIEW</span><span></span>
       </div>
@@ -316,7 +320,7 @@
           onkeydown="if(event.key==='Enter')addVlanRow()" />
         <input type="color" class="field-color" id="new-vlan-color" value="#00d4ff"
           style="width:48px;height:34px;" />
-        <span style="font-family:Share Tech Mono,monospace;font-size:10px;color:rgba(255,255,255,0.3);">new vlan</span>
+        <span style="font-family:'JetBrains Mono',monospace;font-size:10px;color:rgba(255,255,255,0.3);">new vlan</span>
         <button class="icon-btn" style="width:32px;height:34px;border-color:var(--accent2);color:var(--accent2);font-size:16px;"
           onclick="addVlanRow()" title="Add VLAN">+</button>
       </div>

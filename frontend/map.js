@@ -38,8 +38,10 @@ let VLAN_COLORS = { '10': '#00d4ff', '20': '#ff8c00', '30': '#a855f7', '40': '#f
 // loadPingWatchPage calls from a previous switch self-cancel when superseded.
 let _pageGen = 0;
 
-// ═══════════════════════════ PINGWATCH LIVE TAB ═══════════════════════════
-let isPingWatchPage = true;   // true while PingWatch live tab is active
+// ═══════════════════════════ PINGWATCH LIVE TAB (DISABLED) ════════════════
+// The live overlay was moved to /livemap.html. This page is now manual-only,
+// so isPingWatchPage stays false and the tab is omitted from renderPageBar.
+let isPingWatchPage = false;
 let pwDevices = [];           // cached device list from /api/devices
 let _pwDevMap = {};           // device_id → device object (O(1) lookup)
 let pwSSE = null;             // SSE EventSource for live status updates
@@ -189,7 +191,7 @@ function _schedulePwLiveUpdate(did) {
 }
 
 // ═══════════════════════════ PAGES ═══════════════════════════
-let pages = [], currentPageId = 1;
+let pages = [], currentPageId = 1, _pageDataLoaded = false;
 
 async function loadPages() {
   try {
@@ -206,17 +208,8 @@ async function loadPages() {
 function renderPageBar() {
   const bar = document.getElementById('page-bar');
   bar.innerHTML = '';
-  // ── PingWatch live tab (always first) ──────────────────────────
-  const pwTab = document.createElement('div');
-  pwTab.className = 'page-tab' + (isPingWatchPage ? ' active' : '');
-  const dot = document.createElement('span');
-  dot.id = 'pw-tab-dot';
-  dot.style.cssText = 'display:inline-block;width:7px;height:7px;border-radius:50%;background:#00ff9d;margin-right:5px;vertical-align:middle;box-shadow:0 0 5px #00ff9d;flex-shrink:0;';
-  pwTab.appendChild(dot);
-  pwTab.appendChild(document.createTextNode('PingWatch'));
-  pwTab.onclick = () => switchToPingWatchPage();
-  bar.appendChild(pwTab);
-  // ── DB topology pages ──────────────────────────────────────────
+  // ── DB topology pages (manual-editor only) ─────────────────────
+  // The PingWatch Live tab was removed — its NOC view moved to /livemap.
   for (const pg of pages) {
     const tab = document.createElement('div');
     tab.className = 'page-tab' + (pg.id === currentPageId && !isPingWatchPage ? ' active' : '');
@@ -250,8 +243,9 @@ function renderPageBar() {
 }
 
 async function switchPage(id) {
-  if (id === currentPageId && !isPingWatchPage) return;
+  if (id === currentPageId && !isPingWatchPage && _pageDataLoaded) return;
   isPingWatchPage = false;
+  _pageDataLoaded = true;
   _selectedPwDid = null;
   stopPwSSE();
   currentPageId = id;
@@ -299,47 +293,15 @@ async function deletePage(id, name) {
   });
 }
 
-// ═══════════════════════════ PINGWATCH LIVE TAB FUNCTIONS ═══════════════════════════
-
-async function switchToPingWatchPage() {
-  isPingWatchPage = true;
-  selectedEl = null;
-  sessionStorage.setItem('ntm_active_tab', 'pw');
-  renderPageBar();
-  await loadPingWatchPage();
-}
-
-async function loadPingWatchPage() {
-  const gen = ++_pageGen;
-  try {
-    const [data, ovrRes, grpRes, lnkRes, iconRes, rolesRes, subnetsRes] = await Promise.all([
-      fetch('/api/devices').then(r => r.json()),
-      api('GET', '/api/settings/pw_node_overrides').catch(() => null),
-      api('GET', '/api/settings/pw_group_overrides').catch(() => null),
-      api('GET', '/api/settings/pw_links').catch(() => null),
-      api('GET', '/api/settings/pw_group_icons').catch(() => null),
-      api('GET', '/api/topology/roles').catch(() => null),
-      api('GET', '/api/ipam/subnets').catch(() => null),
-    ]);
-    if (gen !== _pageGen) return; // superseded by a newer tab switch
-    pwDevices = data.devices || [];
-    _pwDevMap = {}; pwDevices.forEach(d => _pwDevMap[d.device_id] = d);
-    pwOverrides = ovrRes?.value || {};
-    pwGroupOverrides = grpRes?.value || {};
-    pwLinks = lnkRes?.value || [];
-    // Per-group icon defaults — may have been updated from the Devices tab's
-    // Edit Group modal between page loads; live updates from that modal also
-    // mutate `pwGroupIcons` directly + trigger renderPingWatchCanvas().
-    pwGroupIcons = (iconRes?.value && typeof iconRes.value === 'object') ? iconRes.value : {};
-    window._pwGroupIconsCache = pwGroupIcons;
-    // Topology auto-link inputs — roles map + subnet list.
-    pwRoles   = (rolesRes && rolesRes.roles) || {};
-    pwSubnets = (subnetsRes && subnetsRes.subnets) || (Array.isArray(subnetsRes) ? subnetsRes : []);
-  } catch(e) { if (gen !== _pageGen) return; pwDevices = []; _pwDevMap = {}; }
-  renderPingWatchCanvas();
-  startPwSSE();
-  fitToView();
-}
+// ═══════════════════════════ PINGWATCH LIVE TAB (REMOVED) ═══════════════
+// The live overlay moved to /livemap.html. The entry-point functions
+// (switchToPingWatchPage / loadPingWatchPage) have been deleted so the dead
+// tab can't be reactivated by accident.
+//
+// A handful of live-mode helpers below (renderPingWatchCanvas, _pwLiveUpdate,
+// startPwSSE, etc.) remain in the file — they're unreachable without the
+// entry points but are interlinked enough that surgically removing them
+// pre-1.0 is too risky. Targeted for a post-1.0 cleanup.
 
 function pwStatusColor(status) {
   if (status === 'up')   return '#00ff9d';
@@ -546,6 +508,58 @@ function _pwComputeAutoLinks() {
     }
   }
 
+  // Rule 7 — group fallback. For every group whose devices were NOT picked
+  // up by Rule 1 (because the subnet has no role-tagged anchor, or the
+  // subnet isn't tracked in IPAM at all), link the group's first device to
+  // the first role-tagged device in the same site (any tier). Ensures
+  // every group has at least one visible "this is on the site's network"
+  // line — otherwise large clusters of un-IPAM'd devices appear floating
+  // and disconnected from the topology.
+  const _groupsAnchored = new Set();
+  for (const lk of out) {
+    const sDev = _pwDevMap[lk.src_did];
+    if (sDev) _groupsAnchored.add(`${sDev.site || ''}${sDev.group || ''}`);
+  }
+  const _orphanGroupFirst = new Map();
+  for (const dev of pwDevices) {
+    if (pwRoles[dev.device_id]) continue;  // tagged devices handled by uplink rules
+    const key = `${dev.site || ''}${dev.group || ''}`;
+    if (_groupsAnchored.has(key)) continue;
+    if (!_orphanGroupFirst.has(key)) _orphanGroupFirst.set(key, dev);
+  }
+  for (const [, firstDev] of _orphanGroupFirst) {
+    const site = firstDev.site || '';
+    for (const role of ['switch', 'backbone', 'core', 'gateway']) {
+      const arr = byRoleBySite[role].get(site) || [];
+      if (arr.length && arr[0].device_id !== firstDev.device_id) {
+        out.push({ src_did: firstDev.device_id, tgt_did: arr[0].device_id, kind: 'l2' });
+        break;
+      }
+    }
+  }
+
+  // Rule 6 — gateway → Internet. Each gateway in a non-WAN site links to one
+  // representative device in a WAN-named site (Internet / OFF-Site / WAN /
+  // Cloud / External / Edge). Makes "the network reaches the public Internet"
+  // explicit on the canvas without requiring a manual link. Picks the first
+  // device of the first WAN site (alphabetical) as the representative.
+  const _wanSiteName = pwDevices
+    .map(d => d.site || '')
+    .filter(s => s && _WAN_KEYWORDS.test(s.trim()))
+    .sort()[0];
+  if (_wanSiteName) {
+    const wanRep = pwDevices.find(d => (d.site || '') === _wanSiteName);
+    if (wanRep) {
+      for (const [, gws] of byRoleBySite.gateway) {
+        for (const gw of gws) {
+          if ((gw.site || '') === _wanSiteName) continue;  // gateway already in WAN site
+          if (gw.device_id === wanRep.device_id) continue;
+          out.push({ src_did: gw.device_id, tgt_did: wanRep.device_id, kind: 'wan' });
+        }
+      }
+    }
+  }
+
   // Drop pairs already covered by a manual pwLink, dedup self-pairs, suppress
   // intra-group fan-out, and BUNDLE cross-group fan-out down to one line per
   // (source-group, target-device) pair.
@@ -600,29 +614,76 @@ function renderPwAutoLinks() {
     const src = nodeMap[_pwNodeId(lk.src_did)];
     const tgt = nodeMap[_pwNodeId(lk.tgt_did)];
     if (!src || !tgt) continue;
-    // Shrink the line end-points to the node edges (not centers) so the
-    // arrowhead lands cleanly on the target's border instead of inside it.
-    const sc = nodeCenter(src), tc = nodeCenter(tgt);
-    const dx = tc.x - sc.x, dy = tc.y - sc.y;
-    const len = Math.hypot(dx, dy) || 1;
-    // Approx half-tile inset; tile sizes are ~95x50, so 40px works for most.
-    const inset = 40;
-    const x1 = sc.x + (dx / len) * inset;
-    const y1 = sc.y + (dy / len) * inset;
-    const x2 = tc.x - (dx / len) * inset;
-    const y2 = tc.y - (dy / len) * inset;
-    const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
-    line.setAttribute('x1', x1); line.setAttribute('y1', y1);
-    line.setAttribute('x2', x2); line.setAttribute('y2', y2);
-    line.setAttribute('stroke', COL[lk.kind] || '#888');
-    line.setAttribute('stroke-width', lk.kind === 'wan' ? '2.8' : '2.2');
-    line.setAttribute('stroke-dasharray', '8 5');
-    line.setAttribute('stroke-opacity', '0.7');
-    line.setAttribute('class', 'pw-auto-link');
-    line.setAttribute('marker-end', `url(#${ARR[lk.kind] || 'arr-blue'})`);
-    line.setAttribute('pointer-events', 'none');
-    layer.appendChild(line);
+    // Orthogonal routing — endpoints + mode picked together so anchors align
+    // with elbow direction (top/bottom for vertical exit, left/right for
+    // horizontal). Cross-tier links exit vertically through the tier gap.
+    const { mode, sa, tb } = _orthoEndpoints(src, tgt);
+    const d = _orthoPath(sa.x, sa.y, tb.x, tb.y, mode);
+    const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+    path.setAttribute('d', d);
+    path.setAttribute('fill', 'none');
+    path.setAttribute('stroke', COL[lk.kind] || '#888');
+    path.setAttribute('stroke-width', lk.kind === 'wan' ? '2.8' : '2.2');
+    path.setAttribute('stroke-dasharray', '8 5');
+    path.setAttribute('stroke-opacity', '0.7');
+    path.setAttribute('stroke-linecap', 'round');
+    path.setAttribute('stroke-linejoin', 'round');
+    path.setAttribute('class', 'pw-auto-link');
+    path.setAttribute('marker-end', `url(#${ARR[lk.kind] || 'arr-blue'})`);
+    path.setAttribute('pointer-events', 'none');
+    layer.appendChild(path);
   }
+}
+
+// ═══════════════════════════ TIER COMPUTATION ═══════════════════════════
+// Each group gets a tier 1..5 based on the highest-priority topology role of
+// any device in it. Drives the new tier-row layout inside each site frame:
+// gateway/FW groups anchor the top, switches mid, endpoint groups at bottom.
+const _TIER_BY_ROLE = { gateway: 1, core: 2, backbone: 3, switch: 4 };
+function _groupTier(devs) {
+  let best = 5;
+  for (const d of devs) {
+    const r = (pwRoles && pwRoles[d.device_id]) || '';
+    const t = _TIER_BY_ROLE[r];
+    if (t && t < best) best = t;
+  }
+  return best;
+}
+// WAN/Internet sites anchor the top of the canvas (rank 0). Sites containing
+// only gateway/core groups anchor rank 1. Internal sites rank 2.
+const _WAN_KEYWORDS = /^(internet|off.?site|wan|cloud|external|edge)$/i;
+function _siteRank(siteName, groupTiers) {
+  if (_WAN_KEYWORDS.test(String(siteName || '').trim())) return 0;
+  if (groupTiers.length && Math.max(...groupTiers) <= 2) return 1;
+  return 2;
+}
+// 2D corner-based bin packer: find topmost-leftmost (x, y) where rect (w, h)
+// fits without overlapping any rect in `placed`, with hgap/vgap clearance.
+// Used both for packing groups inside a site's tier band AND for packing
+// sites on the canvas. Eliminates dead whitespace by letting small items
+// slot into corners next to large ones instead of starting fresh rows.
+// `maxX` (optional) caps placement so a tier with many groups wraps to
+// multiple rows instead of stretching into one infinitely-wide row.
+function _fitFreeCorner(placed, w, h, hgap, vgap, originX, originY, maxX) {
+  if (!placed.length) return { x: originX, y: originY };
+  const candidates = [{ x: originX, y: originY }];
+  for (const p of placed) {
+    candidates.push({ x: p.x + p.w + hgap, y: p.y });
+    candidates.push({ x: p.x, y: p.y + p.h + vgap });
+  }
+  candidates.sort((a, b) => a.y - b.y || a.x - b.x);
+  for (const c of candidates) {
+    if (c.x < originX || c.y < originY) continue;
+    if (maxX != null && c.x + w > maxX) continue;
+    const fits = !placed.some(p => {
+      const xClear = (c.x + w + hgap <= p.x) || (p.x + p.w + hgap <= c.x);
+      const yClear = (c.y + h + vgap <= p.y) || (p.y + p.h + vgap <= c.y);
+      return !xClear && !yClear;
+    });
+    if (fits) return c;
+  }
+  const maxBottom = placed.reduce((m, p) => Math.max(m, p.y + p.h), originY);
+  return { x: originX, y: maxBottom + vgap };
 }
 
 function calcPwLayout(devices) {
@@ -672,17 +733,19 @@ function calcPwLayout(devices) {
     const ncols = Math.ceil(devs.length / MAX_ROWS);
     const gtitle = site ? `${site} → ${group}` : group;
     return { gname: gkey, gtitle, site, group, devs, NW, NH,
+             tier: _groupTier(devs),
              w: ncols * NW + PAD * 2,
              h: nrows * NH + PAD * 2 + 28 };
   });
-  // Sort entries so groups belonging to the same site are placed consecutively
-  // in the index-based grid. This makes "Reset Layout" naturally cluster groups
-  // by site, which lets the site backdrops fit tightly around their contents.
-  // Unsited groups sort last so they don't break up real site clusters.
+  // Sort entries: within a site, tier-ascending (gateway top → endpoint bottom),
+  // then larger groups first, then alphabetical tiebreak. Across sites, sort
+  // by site rank (WAN/edge sites first) then by name. Unsited sites last.
   entries.sort((a, b) => {
-    const aS = a.site || '￿';   // Unsited → end
+    const aS = a.site || '￿';
     const bS = b.site || '￿';
     if (aS !== bS) return aS.localeCompare(bS);
+    if (a.tier !== b.tier) return a.tier - b.tier;
+    if (b.devs.length !== a.devs.length) return b.devs.length - a.devs.length;
     return (a.group || '').localeCompare(b.group || '');
   });
 
@@ -695,10 +758,10 @@ function calcPwLayout(devices) {
   // The COLS/GGAP/ROWGAP constants above still apply; SITE_PAD adds the
   // breathing room between the site frame and its inner groups, and
   // SITE_GAP separates one site block from the next.
-  const SITE_PAD = 24, SITE_TITLE_H = 34, SITE_GAP = 40;
+  const SITE_PAD = 24, SITE_TITLE_H = 34, SITE_GAP = 80, TIER_ROWGAP = 30;
 
-  // Group entries by site (entries was already sorted site-then-name above,
-  // so siteOrder preserves alphabetical order with Unsited at the end).
+  // Group entries by site (entries was already sorted site → tier → size
+  // by the comparator above; siteOrder preserves that order with Unsited last).
   const siteBuckets = new Map();   // site -> entries[]
   for (const ent of entries) {
     const s = ent.site || '';
@@ -713,49 +776,94 @@ function calcPwLayout(devices) {
   // site -> {x, y, w, h} of the site frame (header + content area).
   const siteNaturalFrames = {};
 
-  // PASS 1 — measure each site's natural size WITHOUT committing positions.
-  // Records the per-entry offset within the site's content area so PASS 2
-  // can place groups once the site's (x0, y0) is finalized by bin-packing.
-  const sitesArr = [];  // { site, sEntries, w, h, offsets: [{entry, offX, offY}] }
+  // PASS 1 — measure each site's natural size and tier ranking WITHOUT
+  // committing positions. Records each entry's offset within the site's
+  // content area so PASS 2 can finalize after bin-packing.
+  //
+  // Groups inside a site are bucketed by tier (1=gateway → 5=endpoint), then
+  // each tier band is packed using 2D corner-based bin packing — small groups
+  // slot into corners alongside larger ones instead of starting fresh narrow
+  // rows. Each tier band has its own vertical region within the site; tiers
+  // are separated by TIER_ROWGAP for visual layering.
+  const sitesArr = [];  // { site, sEntries, w, h, offsets, rank }
   for (const [site, sEntries] of siteBuckets) {
+    // Bucket this site's groups by tier (1..5)
+    const byTier = new Map();
+    const tiersPresent = [];
+    for (const ent of sEntries) {
+      if (!byTier.has(ent.tier)) { byTier.set(ent.tier, []); tiersPresent.push(ent.tier); }
+      byTier.get(ent.tier).push(ent);
+    }
+    tiersPresent.sort((a, b) => a - b);
+
     let innerRowY = 0;
     let maxInnerW = 0;
     const offsets = [];
-    for (let r = 0; r < sEntries.length; r += COLS) {
-      const row  = sEntries.slice(r, r + COLS);
-      const rowH = Math.max(...row.map(e => e.h));
-      let gx = 0;
-      for (const ent of row) {
-        offsets.push({ entry: ent, offX: gx, offY: innerRowY });
-        gx += ent.w + GGAP;
+    for (const tier of tiersPresent) {
+      // Largest first so they anchor row tops; small groups slot beside them.
+      const tierEnts = [...byTier.get(tier)].sort((a, b) => (b.w * b.h) - (a.w * a.h));
+      const tierStartY = innerRowY;
+      const tierPlaced = [];
+      let tierMaxY = tierStartY;
+      // Width cap for this tier: aim for ~2:1 aspect ratio so a tier with many
+      // groups wraps to multiple rows instead of stretching into a single
+      // 10000+ px row (which would make the whole site frame wider than the
+      // canvas). Floor at (2 × widest + GGAP) so at least two large groups
+      // can sit side-by-side.
+      const totalArea  = tierEnts.reduce((s, e) => s + e.w * e.h, 0);
+      const widestEnt  = Math.max(...tierEnts.map(e => e.w));
+      const smallestEnt = Math.min(...tierEnts.map(e => e.w));
+      const TIER_TARGET_W = Math.max(
+        Math.sqrt(totalArea * 2.0),
+        widestEnt + smallestEnt + GGAP
+      );
+      for (const ent of tierEnts) {
+        const pos = _fitFreeCorner(tierPlaced, ent.w, ent.h, GGAP, ROWGAP, 0, tierStartY, TIER_TARGET_W);
+        offsets.push({ entry: ent, offX: pos.x, offY: pos.y });
+        tierPlaced.push({ x: pos.x, y: pos.y, w: ent.w, h: ent.h });
+        maxInnerW = Math.max(maxInnerW, pos.x + ent.w);
+        tierMaxY  = Math.max(tierMaxY,  pos.y + ent.h);
       }
-      // Width of this row (excluding trailing GGAP after last cell)
-      maxInnerW = Math.max(maxInnerW, gx - GGAP);
-      innerRowY += rowH + ROWGAP;
+      innerRowY = tierMaxY + TIER_ROWGAP;
     }
-    const innerH = innerRowY - ROWGAP;  // strip trailing ROWGAP
+    const innerH = Math.max(0, innerRowY - TIER_ROWGAP);
     const siteW  = maxInnerW + SITE_PAD * 2;
     const siteH  = SITE_TITLE_H + SITE_PAD + innerH + SITE_PAD;
-    sitesArr.push({ site, sEntries, w: siteW, h: siteH, offsets });
+    const rank   = _siteRank(site, tiersPresent);
+    sitesArr.push({ site, sEntries, w: siteW, h: siteH, offsets, rank });
   }
 
-  // PASS 2 — shelf-pack sites into rows so small sites fit beside or under
-  // a big one rather than stacking vertically with wasted right margin.
-  // maxRowW = widest site (typically the largest cluster), so small sites
-  // wrap into rows of their own beneath it. Preserves the alphabetical site
-  // order from siteBuckets.
-  const maxRowW = Math.max(...sitesArr.map(s => s.w), 0);
-  let curX = STARTX, rowH = 0;
+  // Site ordering for corner-pack placement (left to right, top to bottom):
+  //   1. The single largest internal site anchors the top-left as the visual
+  //      backbone of the canvas (most groups → most attention).
+  //   2. WAN/Internet sites (rank 0) come next — they pack to the right of
+  //      the anchor, acting as the "bridge" between the main LAN and other
+  //      small internal LANs.
+  //   3. Remaining sites by area descending — small LANs (like a lab/branch)
+  //      end up to the right of the WAN site, completing a left-to-right
+  //      "Big LAN → Internet → Small LAN" reading order.
+  const _largestSite = sitesArr.reduce(
+    (best, s) => (!best || s.w * s.h > best.w * best.h) ? s : best, null);
+  sitesArr.sort((a, b) => {
+    if (a === _largestSite) return -1;
+    if (b === _largestSite) return 1;
+    if (a.rank !== b.rank) return a.rank - b.rank;
+    return (b.w * b.h) - (a.w * a.h);
+  });
+
+  // PASS 2 — pack sites onto the canvas using 2D corner-based bin packing.
+  // sitesArr is already sorted (rank asc → size desc → name); the corner
+  // packer places each site at the topmost-leftmost free corner, so small
+  // rank-0 sites (WAN/Internet) anchor the top-left and the next-rank sites
+  // fill the empty horizontal space beside them instead of starting a fresh
+  // row below. Eliminates the "L-shape" wasted whitespace.
+  const placedSitesPos = [];
+  let maxBottom = STARTY;
   for (const sInfo of sitesArr) {
-    // Wrap when adding this site would overflow the row (always place at
-    // least one site per row to avoid an infinite loop when sInfo.w > maxRowW).
-    if (curX !== STARTX && (curX + sInfo.w) > (STARTX + maxRowW)) {
-      curY += rowH + SITE_GAP;
-      curX  = STARTX;
-      rowH  = 0;
-    }
-    const x0 = curX;
-    const y0 = curY;
+    const pos = _fitFreeCorner(placedSitesPos, sInfo.w, sInfo.h, SITE_GAP, SITE_GAP, STARTX, STARTY);
+    const x0 = pos.x;
+    const y0 = pos.y;
+    placedSitesPos.push({ x: x0, y: y0, w: sInfo.w, h: sInfo.h });
     const contentX = x0 + SITE_PAD;
     const contentY = y0 + SITE_TITLE_H + SITE_PAD;
     // Replay the per-entry offsets recorded in PASS 1 to produce final hints.
@@ -766,12 +874,10 @@ function calcPwLayout(devices) {
     // Even Unsited gets a frame entry so block stacking lines up, but it
     // won't be rendered as a backdrop (syntheticSites filters site === '').
     siteNaturalFrames[sInfo.site] = { x: x0, y: y0, w: sInfo.w, h: sInfo.h };
-    curX += sInfo.w + SITE_GAP;
-    rowH  = Math.max(rowH, sInfo.h);
+    maxBottom = Math.max(maxBottom, y0 + sInfo.h);
   }
-  // Advance curY past the last row so any later layout (none today, but
-  // future-proof) starts beneath the packed sites.
-  curY += rowH + SITE_GAP;
+  // Advance curY past the last placed site (future-proof; no caller today).
+  curY = maxBottom + SITE_GAP;
 
   // ── Phase 1 — fixed groups (have a saved x/y override). ──────────
   const placedRects = [];
@@ -1088,15 +1194,14 @@ function showPwDashboardPanel() {
       <div class="dash-section-title" style="margin-bottom:8px">ACTIVE INCIDENTS</div>
       <div id="pw-incident-list">${_buildIncidentList()}</div>
     </div>
-    <div style="margin-top:14px;text-align:center">
-      <button class="btn btn-primary" style="font-size:9px;padding:5px 12px;letter-spacing:1px" onclick="loadPingWatchPage()">REFRESH</button>
-    </div>
+    <!-- REFRESH button removed: loadPingWatchPage no longer exists. -->
   `;
   document.getElementById('panel-actions').innerHTML = `
     <div style="display:flex;gap:8px;width:100%">
       <button class="btn" style="flex:1;font-size:10px;letter-spacing:1px" onclick="exportPwLayout()">⬇ EXPORT</button>
       <button class="btn" style="flex:1;font-size:10px;letter-spacing:1px" onclick="document.getElementById('pw-layout-import-file').click()">⬆ IMPORT</button>
     </div>
+    <button class="btn" style="width:100%;font-size:10px;letter-spacing:1px;margin-top:6px;color:#22d3ee" onclick="autoArrangePwLayout()" title="Re-layout sites by tier (gateway → switch → endpoint) with orthogonal links">⚡ AUTO-ARRANGE</button>
     <button class="btn" style="width:100%;font-size:10px;letter-spacing:1px;margin-top:6px" onclick="resetPwLayout()">↺ RESET LAYOUT</button>
     <button class="btn" style="width:100%;font-size:10px;letter-spacing:1px;margin-top:6px;color:#f85149" onclick="clearPwManualLinks()">✕ CLEAR MANUAL LINKS</button>
   `;
@@ -1232,11 +1337,11 @@ function showPwNodePanel(did) {
     document.getElementById('panel-body').innerHTML = `
       <div class="field-group">
         <div class="field-label">TYPE</div>
-        <span style="color:var(--gold);font-family:'Share Tech Mono',monospace;font-size:11px;">Cloud / Internet</span>
+        <span style="color:var(--gold);font-family:'JetBrains Mono',monospace;font-size:11px;">Cloud / Internet</span>
       </div>
       <div class="field-group" style="margin-top:8px">
         <div class="field-label">POSITION</div>
-        <span style="color:var(--pt-dim);font-size:10px;font-family:'Share Tech Mono',monospace">Drag to reposition</span>
+        <span style="color:var(--pt-dim);font-size:10px;font-family:'JetBrains Mono',monospace">Drag to reposition</span>
       </div>
     `;
     document.getElementById('panel-actions').innerHTML = '';
@@ -1274,20 +1379,20 @@ function showPwNodePanel(did) {
   document.getElementById('panel-body').innerHTML = `
     <div class="field-group">
       <div class="field-label">STATUS</div>
-      <span style="color:${col};font-family:'Share Tech Mono',monospace;font-size:11px;font-weight:700">${(dev.status||'unknown').toUpperCase()}</span>
+      <span style="color:${col};font-family:\'JetBrains Mono\',monospace;font-size:11px;font-weight:700">${(dev.status||'unknown').toUpperCase()}</span>
     </div>
     <div class="field-group">
       <div class="field-label">HOST / IP</div>
-      <span style="color:${col};font-family:'Share Tech Mono',monospace;font-size:11px">${escXml(dev.host)}</span>
+      <span style="color:${col};font-family:'JetBrains Mono',monospace;font-size:11px">${escXml(dev.host)}</span>
     </div>
     ${(dev.secondary_ips||[]).length ? `
     <div class="field-group">
       <div class="field-label">SECONDARY IPS</div>
-      <div style="display:flex;flex-direction:column;gap:2px">${(dev.secondary_ips||[]).map(ip=>`<span style="color:var(--pt-accent);font-family:'Share Tech Mono',monospace;font-size:10px">${escXml(ip)}</span>`).join('')}</div>
+      <div style="display:flex;flex-direction:column;gap:2px">${(dev.secondary_ips||[]).map(ip=>`<span style="color:var(--pt-accent);font-family:'JetBrains Mono',monospace;font-size:10px">${escXml(ip)}</span>`).join('')}</div>
     </div>` : ''}
     <div class="field-group">
       <div class="field-label">GROUP</div>
-      <span style="color:var(--pt-sub);font-family:'Share Tech Mono',monospace;font-size:10px">${escXml(dev.group||'Default Group')}</span>
+      <span style="color:var(--pt-sub);font-family:\'JetBrains Mono\',monospace;font-size:10px">${escXml(dev.group||'Default Group')}</span>
     </div>
     <div class="field-group">
       <div class="field-label">DEVICE ICON</div>
@@ -1298,10 +1403,10 @@ function showPwNodePanel(did) {
       <div class="dash-section-title" style="margin-bottom:4px">SENSORS</div>
       <table style="width:100%;border-collapse:collapse">
         <thead><tr>
-          <th style="padding:2px 6px;font-family:'Share Tech Mono',monospace;font-size:8px;color:var(--pt-accent);text-align:left;font-weight:400">NAME</th>
-          <th style="padding:2px 6px;font-family:'Share Tech Mono',monospace;font-size:8px;color:var(--pt-accent);text-align:left;font-weight:400">TYPE</th>
-          <th style="padding:2px 6px;font-family:'Share Tech Mono',monospace;font-size:8px;color:var(--pt-accent);text-align:left;font-weight:400">ST</th>
-          <th style="padding:2px 6px;font-family:'Share Tech Mono',monospace;font-size:8px;color:var(--pt-accent);text-align:left;font-weight:400">MS</th>
+          <th style="padding:2px 6px;font-family:'JetBrains Mono',monospace;font-size:8px;color:var(--pt-accent);text-align:left;font-weight:400">NAME</th>
+          <th style="padding:2px 6px;font-family:'JetBrains Mono',monospace;font-size:8px;color:var(--pt-accent);text-align:left;font-weight:400">TYPE</th>
+          <th style="padding:2px 6px;font-family:'JetBrains Mono',monospace;font-size:8px;color:var(--pt-accent);text-align:left;font-weight:400">ST</th>
+          <th style="padding:2px 6px;font-family:'JetBrains Mono',monospace;font-size:8px;color:var(--pt-accent);text-align:left;font-weight:400">MS</th>
         </tr></thead>
         <tbody>${sRows}</tbody>
       </table>
@@ -1314,7 +1419,7 @@ function showPwNodePanel(did) {
                style="width:36px;height:24px;cursor:pointer;border:none;background:none;padding:0"/>
         ${pwOverrides[did]?.color
           ? `<button class="btn" style="font-size:10px;padding:2px 8px" onclick="resetPwNodeColor('${did}')">Reset</button>`
-          : `<span style="color:var(--pt-dimmer);font-size:10px;font-family:'Share Tech Mono',monospace">auto (status color)</span>`}
+          : `<span style="color:var(--pt-dimmer);font-size:10px;font-family:'JetBrains Mono',monospace">auto (status color)</span>`}
       </div>
     </div>
   `;
@@ -1806,6 +1911,65 @@ function applyVlanStyles() {
   ).join('\n');
   refreshVlanDatalist();
 }
+// ═══════════════════════════ ORTHOGONAL LINK ROUTING ═══════════════════════════
+// Manhattan / elbow path generator. Replaces straight diagonals with right-angle
+// elbows for a NOC-style professional look. Used by both manual links and auto-links.
+// strategy: 'auto' | 'h-v' | 'v-h' | 'h-v-h' (dogleg through midX) | 'v-h-v' (dogleg through midY)
+function _orthoPath(x1, y1, x2, y2, strategy) {
+  const dx = x2 - x1, dy = y2 - y1;
+  const adx = Math.abs(dx), ady = Math.abs(dy);
+  let mode = strategy || 'auto';
+  if (mode === 'auto') {
+    // Prefer vertical exit when there's significant vertical separation —
+    // this routes cross-tier links through the gap BETWEEN tier rows instead
+    // of horizontally across adjacent groups in the same tier.
+    if (ady > 60) mode = (adx > 60) ? 'v-h-v' : 'v-h';
+    else if (adx > 60) mode = 'h-v';
+    else mode = (adx >= ady) ? 'h-v' : 'v-h';
+  }
+  if (mode === 'h-v')   return `M${x1},${y1} L${x2},${y1} L${x2},${y2}`;
+  if (mode === 'v-h')   return `M${x1},${y1} L${x1},${y2} L${x2},${y2}`;
+  if (mode === 'h-v-h') { const mx = ((x1+x2)/2).toFixed(1); return `M${x1},${y1} L${mx},${y1} L${mx},${y2} L${x2},${y2}`; }
+  if (mode === 'v-h-v') { const my = ((y1+y2)/2).toFixed(1); return `M${x1},${y1} L${x1},${my} L${x2},${my} L${x2},${y2}`; }
+  return `M${x1},${y1} L${x2},${y2}`;
+}
+// Pick orthogonal endpoints + mode in one pass. Returns { mode, sa, tb }.
+// Anchors are placed on the rect edges that match the elbow's exit/entry
+// direction (top/bottom for vertical, left/right for horizontal), so the
+// path visually connects to the node boundary instead of stopping in midair.
+function _orthoEndpoints(src, tgt) {
+  const sc = nodeCenter(src), tc = nodeCenter(tgt);
+  const dx = tc.x - sc.x, dy = tc.y - sc.y;
+  const adx = Math.abs(dx), ady = Math.abs(dy);
+  let mode;
+  if (ady > 60) mode = (adx > 60) ? 'v-h-v' : 'v-h';
+  else if (adx > 60) mode = 'h-v';
+  else mode = (adx >= ady) ? 'h-v' : 'v-h';
+  const ss = nsize(src.type, src), ts = nsize(tgt.type, tgt);
+  const firstH = mode.startsWith('h');
+  const lastH  = mode.endsWith('h');
+  const sa = firstH
+    ? { x: dx > 0 ? src.x + ss.w : src.x, y: src.y + ss.h/2 }
+    : { x: src.x + ss.w/2, y: dy > 0 ? src.y + ss.h : src.y };
+  const tb = lastH
+    ? { x: dx > 0 ? tgt.x : tgt.x + ts.w, y: tgt.y + ts.h/2 }
+    : { x: tgt.x + ts.w/2, y: dy > 0 ? tgt.y : tgt.y + ts.h };
+  return { mode, sa, tb };
+}
+// Legacy single-endpoint anchor — kept for callers that don't have a partner
+// node (e.g. rubber-band line during link draw). New link renderers should
+// use _orthoEndpoints() to get both endpoints aligned with the elbow mode.
+function _edgeAnchor(node, towardX, towardY) {
+  const s = nsize(node.type, node);
+  const r = { x: node.x, y: node.y, w: s.w, h: s.h };
+  const cx = r.x + r.w/2, cy = r.y + r.h/2;
+  const dx = towardX - cx, dy = towardY - cy;
+  if (Math.abs(dx) * r.h > Math.abs(dy) * r.w) {
+    return { x: dx > 0 ? r.x + r.w : r.x, y: cy };
+  }
+  return { x: cx, y: dy > 0 ? r.y + r.h : r.y };
+}
+
 const LINK_CFG = {
   trunk:    { stroke:'#00ff9d', cls:'link-trunk',    marker:'arr-green',  width:2.5 },
   access:   { stroke:'#00d4ff', cls:'link-access',   marker:'arr-blue',   width:2   },
@@ -1847,10 +2011,16 @@ function nsize(type, node) {
   if (type === 'info-box' && node) {
     const p = node.properties || {};
     const lines = Array.isArray(p.lines) ? p.lines : [];
+    // Notes: each \n-separated row counts toward the auto-fit height.
+    // Empty / missing notes contribute 0 so layout doesn't change for boxes
+    // that don't use the feature.
+    const notesText = (p.notes || '').toString().trim();
+    const noteRows  = notesText ? notesText.split('\n').length : 0;
+    const notesH    = noteRows ? (12 /* gap */ + 14 /* header */ + noteRows * 14 + 4 /* pad */) : 0;
     const wOverride = (typeof p.w === 'number' && p.w >= 140) ? p.w : null;
     const hOverride = (typeof p.h === 'number' && p.h >= 60)  ? p.h : null;
     const w = wOverride || 240;
-    const h = hOverride || Math.max(80, 28 + lines.length * 18 + 14);
+    const h = hOverride || Math.max(80, 28 + lines.length * 18 + 14 + notesH);
     return { w, h };
   }
   if (!node) return NODE_SIZE[type] || { w: 160, h: 60 };
@@ -2009,7 +2179,7 @@ function _computeBundlesFromEdges(edges) {
   };
   for (const e of edges) {
     if (!e.src || !e.tgt) continue;
-    if (e.link_type === 'tunnel') continue;
+    if (_TUNNEL_TYPES.has(e.link_type)) continue;
     const ga = _groupContainingNode(e.src);
     const gb = _groupContainingNode(e.tgt);
     if (ga && gb && ga.id === gb.id) continue;
@@ -2158,20 +2328,27 @@ function renderPwLinksInLayer(layer, lblLayer) {
     const gg = document.createElementNS('http://www.w3.org/2000/svg', 'g');
     gg.setAttribute('class', 'link-g pw-link');
     gg.setAttribute('data-pwlid', lk.id);
+    // Orthogonal routing — endpoints + mode picked together so anchors align
+    // with elbow direction. Bundled siblings share the same midX (the bundle
+    // waypoint's X) so their H-V-H doglegs collapse visually into one trunk.
+    let d, sa, tb;
     if (bundle && bundle.waypoint) {
-      const qx = bundle.waypoint.x.toFixed(1), qy = bundle.waypoint.y.toFixed(1);
-      gg.innerHTML = `
-        <path class="link-hit" d="M${sc.x},${sc.y} Q${qx},${qy} ${tc.x},${tc.y}" fill="none" stroke="transparent" stroke-width="12"/>
-        <path class="link-main ${cfg.cls} ${bwCls}" d="M${sc.x},${sc.y} Q${qx},${qy} ${tc.x},${tc.y}"
-          fill="none" stroke="${stroke}" stroke-width="${lw}" marker-end="url(#${cfg.marker})" opacity="0.8"/>
-      `;
+      // Force h-v-h through the shared waypoint x so all bundle siblings overlap
+      sa = _edgeAnchor(src, tc.x, tc.y);
+      tb = _edgeAnchor(tgt, sc.x, sc.y);
+      const mx = bundle.waypoint.x.toFixed(1);
+      d = `M${sa.x},${sa.y} L${mx},${sa.y} L${mx},${tb.y} L${tb.x},${tb.y}`;
     } else {
-      gg.innerHTML = `
-        <line class="link-hit" x1="${sc.x}" y1="${sc.y}" x2="${tc.x}" y2="${tc.y}" stroke="transparent" stroke-width="12"/>
-        <line class="link-main ${cfg.cls} ${bwCls}" x1="${sc.x}" y1="${sc.y}" x2="${tc.x}" y2="${tc.y}"
-          stroke="${stroke}" stroke-width="${lw}" marker-end="url(#${cfg.marker})" opacity="0.8"/>
-      `;
+      const eps = _orthoEndpoints(src, tgt);
+      sa = eps.sa; tb = eps.tb;
+      d = _orthoPath(sa.x, sa.y, tb.x, tb.y, eps.mode);
     }
+    gg.innerHTML = `
+      <path class="link-hit" d="${d}" fill="none" stroke="transparent" stroke-width="14"/>
+      <path class="link-main ${cfg.cls} ${bwCls}" d="${d}"
+        fill="none" stroke="${stroke}" stroke-width="${lw}" stroke-linecap="round" stroke-linejoin="round"
+        marker-end="url(#${cfg.marker})" opacity="0.8"/>
+    `;
     gg.addEventListener('click', e => { e.stopPropagation(); showPwLinkPanel(lk.id); });
     layer.appendChild(gg);
     // Label in top layer
@@ -2216,7 +2393,7 @@ function renderPwLinksInLayer(layer, lblLayer) {
 // independently of zoom) + bold text — readable on both the dark map and
 // colored group rects without losing the cyber aesthetic.
 function _linkLabelSvg(lbx, lby, lbw, stroke, label) {
-  return `<rect x="${(lbx-2)}" y="${(lby-10)}" width="${lbw}" height="14" rx="3" fill="rgba(5,10,20,0.95)" stroke="${stroke}" stroke-width="0.8" vector-effect="non-scaling-stroke"/><text x="${lbx}" y="${lby}" fill="${stroke}" font-family="Share Tech Mono" font-size="11" font-weight="bold">${escXml(label)}</text>`;
+  return `<rect x="${(lbx-2)}" y="${(lby-10)}" width="${lbw}" height="14" rx="3" fill="rgba(5,10,20,0.95)" stroke="${stroke}" stroke-width="0.8" vector-effect="non-scaling-stroke"/><text x="${lbx}" y="${lby}" fill="${stroke}" font-family="JetBrains Mono" font-size="11" font-weight="bold">${escXml(label)}</text>`;
 }
 const LINK_LBL_CHAR_PX = 6.6; // estimated px-per-char at font-size 11
 
@@ -2248,66 +2425,61 @@ function buildLink(src, tgt, lk, idx=0, globalIdx=0, noLabel=false, bundle=null)
   const c1 = nodeCenter(src);
   const c2 = nodeCenter(tgt);
 
-  if (lk.link_type === 'tunnel') {
+  if (_TUNNEL_TYPES.has(lk.link_type)) {
     return buildTunnel(c1, c2, lk);
   }
   const cfg = lcfg(lk.link_type);
   const sel = (selectedEl?.type==='link' && selectedEl?.data.id===lk.id);
   const w = sel ? cfg.width+2 : cfg.width;
 
-  // Bundled link — route through the shared waypoint regardless of pair-index.
+  // Bundled link — share the bundle's midX so all siblings collapse into one trunk.
   if (bundle && bundle.waypoint) {
-    const qx = bundle.waypoint.x, qy = bundle.waypoint.y;
-    // Stagger label t along the tendril side so each label sits near its own target,
-    // not stacked at the waypoint with all its bundle siblings.
-    const n = bundle.count || 1;
-    const ordIdx = (bundle.order && bundle.order[lk.id] != null) ? bundle.order[lk.id] : 0;
-    const tL = n > 1 ? (0.68 + 0.22 * (ordIdx / (n - 1))) : 0.78;
-    const lbx = ((1-tL)*(1-tL)*c1.x + 2*(1-tL)*tL*qx + tL*tL*c2.x).toFixed(1);
-    const lby = ((1-tL)*(1-tL)*c1.y + 2*(1-tL)*tL*qy + tL*tL*c2.y - 4).toFixed(1);
+    const sa = _edgeAnchor(src, c2.x, c2.y);
+    const tb = _edgeAnchor(tgt, c1.x, c1.y);
+    const mx = bundle.waypoint.x.toFixed(1);
+    const d = `M${sa.x},${sa.y} L${mx},${sa.y} L${mx},${tb.y} L${tb.x},${tb.y}`;
+    const lbx = (Number(mx) + 6).toFixed(1);
+    const lby = ((sa.y + tb.y) / 2 - 4).toFixed(1);
     const lbwB = lk.label ? (lk.label.length * LINK_LBL_CHAR_PX + 4).toFixed(0) : 0;
     return `
-      <path class="link-hit" d="M${c1.x},${c1.y} Q${qx.toFixed(1)},${qy.toFixed(1)} ${c2.x},${c2.y}" fill="none" stroke="transparent" stroke-width="12"/>
-      <path class="link-main ${cfg.cls}" d="M${c1.x},${c1.y} Q${qx.toFixed(1)},${qy.toFixed(1)} ${c2.x},${c2.y}"
-        fill="none" stroke="${cfg.stroke}" stroke-width="${w}" marker-end="url(#${cfg.marker})" opacity="0.8"/>
+      <path class="link-hit" d="${d}" fill="none" stroke="transparent" stroke-width="14"/>
+      <path class="link-main ${cfg.cls}" d="${d}"
+        fill="none" stroke="${cfg.stroke}" stroke-width="${w}" stroke-linecap="round" stroke-linejoin="round"
+        marker-end="url(#${cfg.marker})" opacity="0.8"/>
       ${(!noLabel && lk.label) ? _linkLabelSvg(lbx, lby, lbwB, cfg.stroke, lk.label) : ''}
     `;
   }
 
-  if (idx === 0) {
-    // First (or only) link — always straight
-    const tArr = [0.30, 0.50, 0.70];
-    const tL   = tArr[globalIdx % 3];
-    const ldx  = c2.x - c1.x, ldy = c2.y - c1.y;
-    const llen = Math.sqrt(ldx*ldx + ldy*ldy) || 1;
-    const lnx  = -ldy/llen, lny = ldx/llen;
-    const lbx  = (c1.x + ldx*tL + lnx*10).toFixed(1);
-    const lby  = (c1.y + ldy*tL + lny*10 - 2).toFixed(1);
-    const lbw  = lk.label ? (lk.label.length * LINK_LBL_CHAR_PX + 4).toFixed(0) : 0;
-    return `
-      <line class="link-hit" x1="${c1.x}" y1="${c1.y}" x2="${c2.x}" y2="${c2.y}" stroke="transparent" stroke-width="12"/>
-      <line class="link-main ${cfg.cls}" x1="${c1.x}" y1="${c1.y}" x2="${c2.x}" y2="${c2.y}"
-        stroke="${cfg.stroke}" stroke-width="${w}" marker-end="url(#${cfg.marker})" opacity="0.8"/>
-      ${(!noLabel && lk.label) ? _linkLabelSvg(lbx, lby, lbw, cfg.stroke, lk.label) : ''}
-    `;
+  // Mode-aware endpoints (anchor edges aligned with elbow direction).
+  const { mode, sa, tb } = _orthoEndpoints(src, tgt);
+  const horizontalDogleg = (mode === 'h-v-h' || mode === 'h-v');
+  const offset = idx * 30;
+  let d;
+  if (mode === 'h-v-h') {
+    const mx = (((sa.x + tb.x) / 2) + offset).toFixed(1);
+    d = `M${sa.x},${sa.y} L${mx},${sa.y} L${mx},${tb.y} L${tb.x},${tb.y}`;
+  } else if (mode === 'v-h-v') {
+    const my = (((sa.y + tb.y) / 2) + offset).toFixed(1);
+    d = `M${sa.x},${sa.y} L${sa.x},${my} L${tb.x},${my} L${tb.x},${tb.y}`;
+  } else {
+    d = _orthoPath(sa.x, sa.y, tb.x, tb.y, mode);
   }
-
-  // Subsequent parallel links — curve away from the straight one, one side only
-  const dx = c2.x-c1.x, dy = c2.y-c1.y;
-  const len = Math.sqrt(dx*dx+dy*dy)||1;
-  const nx = -dy/len, ny = dx/len;
-  const off = idx * 50;
-  const qx = (c1.x+c2.x)/2 + nx*off;
-  const qy = (c1.y+c2.y)/2 + ny*off;
-  const tL = 0.65;
-  const lbx = ((1-tL)*(1-tL)*c1.x + 2*(1-tL)*tL*qx + tL*tL*c2.x + nx*12 + 4).toFixed(1);
-  const lby = ((1-tL)*(1-tL)*c1.y + 2*(1-tL)*tL*qy + tL*tL*c2.y + ny*12 - 4).toFixed(1);
-  const lbwP = lk.label ? (lk.label.length * LINK_LBL_CHAR_PX + 4).toFixed(0) : 0;
+  // Label sits on the mid-segment of the dogleg.
+  let lbx, lby;
+  if (horizontalDogleg) {
+    lbx = ((sa.x + tb.x) / 2 + offset + 6).toFixed(1);
+    lby = ((sa.y + tb.y) / 2 - 4).toFixed(1);
+  } else {
+    lbx = ((sa.x + tb.x) / 2 + 6).toFixed(1);
+    lby = ((sa.y + tb.y) / 2 + offset - 4).toFixed(1);
+  }
+  const lbw = lk.label ? (lk.label.length * LINK_LBL_CHAR_PX + 4).toFixed(0) : 0;
   return `
-    <path class="link-hit" d="M${c1.x},${c1.y} Q${qx.toFixed(1)},${qy.toFixed(1)} ${c2.x},${c2.y}" fill="none" stroke="transparent" stroke-width="12"/>
-    <path class="link-main ${cfg.cls}" d="M${c1.x},${c1.y} Q${qx.toFixed(1)},${qy.toFixed(1)} ${c2.x},${c2.y}"
-      fill="none" stroke="${cfg.stroke}" stroke-width="${w}" marker-end="url(#${cfg.marker})" opacity="0.8"/>
-    ${(!noLabel && lk.label) ? _linkLabelSvg(lbx, lby, lbwP, cfg.stroke, lk.label) : ''}
+    <path class="link-hit" d="${d}" fill="none" stroke="transparent" stroke-width="14"/>
+    <path class="link-main ${cfg.cls}" d="${d}"
+      fill="none" stroke="${cfg.stroke}" stroke-width="${w}" stroke-linecap="round" stroke-linejoin="round"
+      marker-end="url(#${cfg.marker})" opacity="0.8"/>
+    ${(!noLabel && lk.label) ? _linkLabelSvg(lbx, lby, lbw, cfg.stroke, lk.label) : ''}
   `;
 }
 
@@ -2345,7 +2517,7 @@ function _pickLabelPos(c1, c2, lbw, tPrefer, qx, qy) {
 }
 
 function buildLinkLabel(src, tgt, lk, idx, globalIdx, bundle=null) {
-  if (!lk.label || lk.link_type === 'tunnel') return '';
+  if (!lk.label || _TUNNEL_TYPES.has(lk.link_type)) return '';
   // Bundle with one shared label across all members → render once on the trunk segment.
   if (bundle && bundle.commonLabel != null) {
     if (lk.id !== bundle.trunkLabelLkId) return '';
@@ -2381,7 +2553,22 @@ function buildLinkLabel(src, tgt, lk, idx, globalIdx, bundle=null) {
   return _linkLabelSvg(pos.lbx, pos.lby, lbw.toFixed(0), cfg.stroke, lk.label);
 }
 
+// Tunnel-style link variants. `buildTunnel()` renders the twin-line +
+// ties + lock + label-box look; the variant picks colors and the label
+// shown in the box. Add a new variant here to introduce a new tunnel
+// type — the dropdowns + the _TUNNEL_TYPES set below pick it up
+// automatically.
+const TUNNEL_VARIANTS = {
+  // ZTNA = purple (Zero-Trust Network Access — overlay tunnels)
+  tunnel: { stroke: '#a855f7', accent: '#c084fc', label: 'ZTNA TUNNEL' },
+  ztna:   { stroke: '#a855f7', accent: '#c084fc', label: 'ZTNA TUNNEL' },
+  // IPSEC = orange (legacy site-to-site VPN — distinct from ZTNA)
+  ipsec:  { stroke: '#f59e0b', accent: '#fbbf24', label: 'IPSEC TUNNEL' },
+};
+const _TUNNEL_TYPES = new Set(Object.keys(TUNNEL_VARIANTS));
+
 function buildTunnel(p1, p2, lk) {
+  const v = TUNNEL_VARIANTS[lk.link_type] || TUNNEL_VARIANTS.tunnel;
   const dx=p2.x-p1.x, dy=p2.y-p1.y, len=Math.sqrt(dx*dx+dy*dy)||1;
   const nx=-dy/len*7, ny=dx/len*7;
   const mx=(p1.x+p2.x)/2, my=(p1.y+p2.y)/2;
@@ -2391,28 +2578,27 @@ function buildTunnel(p1, p2, lk) {
   for(let i=1;i<nties;i++){
     const t=i/nties;
     const tx=p1.x+dx*t, ty=p1.y+dy*t;
-    ties+=`<line x1="${(tx+nx).toFixed(1)}" y1="${(ty+ny).toFixed(1)}" x2="${(tx-nx).toFixed(1)}" y2="${(ty-ny).toFixed(1)}" stroke="#a855f7" stroke-width="1" opacity="0.4"/>`;
+    ties+=`<line x1="${(tx+nx).toFixed(1)}" y1="${(ty+ny).toFixed(1)}" x2="${(tx-nx).toFixed(1)}" y2="${(ty-ny).toFixed(1)}" stroke="${v.stroke}" stroke-width="1" opacity="0.4"/>`;
   }
   const ax1=(p2.x-ux*10+nx*0.9).toFixed(1), ay1=(p2.y-uy*10+ny*0.9).toFixed(1);
   const ax2=(p2.x-ux*10-nx*0.9).toFixed(1), ay2=(p2.y-uy*10-ny*0.9).toFixed(1);
-  const bx=(mx+ny*10+15).toFixed(1), by=(my-nx*10-20).toFixed(1);
+  // The mid-link floating "ZTNA TUNNEL / ENCRYPTED" + "IPSEC TUNNEL /
+  // ENCRYPTED" label boxes were removed — they stacked when multiple
+  // tunnels ran in parallel and obscured the topology. The mid-link lock
+  // icon stays as a tunnel-type indicator (color = variant), which is
+  // enough to read at a glance without taking ~90×34 px per link.
   return `
     <line class="link-hit" x1="${p1.x}" y1="${p1.y}" x2="${p2.x}" y2="${p2.y}" stroke="transparent" stroke-width="16"/>
-    <line x1="${p1.x}" y1="${p1.y}" x2="${p2.x}" y2="${p2.y}" stroke="#c084fc" stroke-width="14" opacity="0.05"/>
-    <line class="link-main link-tunnel"  x1="${(p1.x+nx).toFixed(1)}" y1="${(p1.y+ny).toFixed(1)}" x2="${(p2.x+nx).toFixed(1)}" y2="${(p2.y+ny).toFixed(1)}" stroke="#a855f7" stroke-width="1.5" opacity="0.7"/>
-    <line class="link-tunnel2" x1="${(p1.x-nx).toFixed(1)}" y1="${(p1.y-ny).toFixed(1)}" x2="${(p2.x-nx).toFixed(1)}" y2="${(p2.y-ny).toFixed(1)}" stroke="#a855f7" stroke-width="1.5" opacity="0.7"/>
+    <line x1="${p1.x}" y1="${p1.y}" x2="${p2.x}" y2="${p2.y}" stroke="${v.accent}" stroke-width="14" opacity="0.05"/>
+    <line class="link-main link-tunnel"  x1="${(p1.x+nx).toFixed(1)}" y1="${(p1.y+ny).toFixed(1)}" x2="${(p2.x+nx).toFixed(1)}" y2="${(p2.y+ny).toFixed(1)}" stroke="${v.stroke}" stroke-width="1.5" opacity="0.7"/>
+    <line class="link-tunnel2" x1="${(p1.x-nx).toFixed(1)}" y1="${(p1.y-ny).toFixed(1)}" x2="${(p2.x-nx).toFixed(1)}" y2="${(p2.y-ny).toFixed(1)}" stroke="${v.stroke}" stroke-width="1.5" opacity="0.7"/>
     ${ties}
-    <polygon points="${p2.x.toFixed(1)},${p2.y.toFixed(1)} ${ax1},${ay1} ${ax2},${ay2}" fill="#a855f7" opacity="0.85"/>
+    <polygon points="${p2.x.toFixed(1)},${p2.y.toFixed(1)} ${ax1},${ay1} ${ax2},${ay2}" fill="${v.stroke}" opacity="0.85"/>
     <g transform="translate(${(mx-20).toFixed(1)},${(my-13).toFixed(1)})">
-      <rect x="0" y="0" width="40" height="26" rx="3" fill="rgba(10,5,25,0.92)" stroke="#a855f7" stroke-width="1.5"/>
-      <path d="M11,0 Q11,-10 20,-10 Q29,-10 29,0" fill="none" stroke="#a855f7" stroke-width="2"/>
-      <circle cx="20" cy="13" r="4" fill="none" stroke="#c084fc" stroke-width="1.5"/>
-      <rect x="18" y="13" width="4" height="6" rx="1" fill="#c084fc" opacity="0.7"/>
-    </g>
-    <g transform="translate(${bx},${by})">
-      <rect x="0" y="0" width="90" height="34" rx="3" fill="rgba(10,5,25,0.85)" stroke="rgba(168,85,247,0.5)" stroke-width="1"/>
-      <text x="45" y="13" text-anchor="middle" fill="#c084fc" font-family="Orbitron" font-size="8" letter-spacing="1">ZTNA TUNNEL</text>
-      <text x="45" y="26" text-anchor="middle" fill="rgba(168,85,247,0.6)" font-family="Share Tech Mono" font-size="8">🔒 ENCRYPTED</text>
+      <rect x="0" y="0" width="40" height="26" rx="3" fill="rgba(10,5,25,0.92)" stroke="${v.stroke}" stroke-width="1.5"/>
+      <path d="M11,0 Q11,-10 20,-10 Q29,-10 29,0" fill="none" stroke="${v.stroke}" stroke-width="2"/>
+      <circle cx="20" cy="13" r="4" fill="none" stroke="${v.accent}" stroke-width="1.5"/>
+      <rect x="18" y="13" width="4" height="6" rx="1" fill="${v.accent}" opacity="0.7"/>
     </g>
   `;
 }
@@ -2568,7 +2754,7 @@ function vlanBadge(p, lx, y) {
       <rect x="${bx}" y="${by}" width="${BW}" height="13" rx="2"
         fill="rgba(${rgb},0.15)" stroke="${c}" stroke-width="0.8"/>
       <text x="${(bx + BW/2).toFixed(1)}" y="${by + 10}" text-anchor="middle"
-        fill="${c}" font-family="Share Tech Mono" font-size="10">V${escXml(v)}</text>
+        fill="${c}" font-family="JetBrains Mono" font-size="10">V${escXml(v)}</text>
     </g>`;
   }).join('');
 }
@@ -2622,7 +2808,7 @@ function renderCloud(node, p, sf) {
       <line x1="-13" y1="0" x2="13" y2="0" stroke="#00d4ff" stroke-width="0.8" opacity="0.5"/>
       <circle cx="0" cy="0" r="2.5" fill="#00d4ff" opacity="0.9"/>
     </g>
-    <text data-pw-name data-pw-origfill="#7dd3fc" x="113" y="96" text-anchor="middle" fill="${p.name_color||'#7dd3fc'}" font-family="Orbitron" font-size="12" font-weight="700" letter-spacing="2" filter="url(#glow-blue)">${escXml(_truncName(node.name, 117, 10))}</text>
+    <text data-pw-name data-pw-origfill="#7dd3fc" x="113" y="96" text-anchor="middle" fill="${p.name_color||'#7dd3fc'}" font-family="Inter" font-size="12" font-weight="700" letter-spacing="2" filter="url(#glow-blue)">${escXml(_truncName(node.name, 117, 10))}</text>
   </g>`;
 }
 
@@ -2637,9 +2823,9 @@ function renderFirewall(node, p, sf) {
     <rect x="0" y="0" width="155" height="${H}" rx="4" fill="url(#scanlines)"/>
     <path d="M16,12 L30,8 L44,12 L44,28 Q37,38 30,40 Q23,38 16,28 Z" fill="none" stroke="#ff3366" stroke-width="1.5"/>
     <path d="M23,22 L28,27 L38,17" fill="none" stroke="#ff6b6b" stroke-width="1.5"/>
-    <text data-pw-name data-pw-origfill="#fca5a5" x="52" y="24" fill="${p.name_color||'#fca5a5'}" font-family="Exo 2" font-size="13" font-weight="700">${escXml(_truncName(node.name, 95))}</text>
+    <text data-pw-name data-pw-origfill="#fca5a5" x="52" y="24" fill="${p.name_color||'#fca5a5'}" font-family="Inter" font-size="13" font-weight="700">${escXml(_truncName(node.name, 95))}</text>
     ${renderSubtitleAndIP(p, 52, 40, 50, 'rgba(255,255,255,0.45)', 'rgba(255,255,255,0.65)')}
-    ${statusText ? `<text x="52" y="66" fill="${statusColor}" font-family="Share Tech Mono" font-size="9">${statusText}</text>` : ''}
+    ${statusText ? `<text x="52" y="66" fill="${statusColor}" font-family="JetBrains Mono" font-size="9">${statusText}</text>` : ''}
     ${vlanBadge(p, 52, H - 19)}
     <rect x="1" y="1" width="153" height="2" rx="1" fill="rgba(255,51,102,0.3)"/>
   </g>`;
@@ -2657,7 +2843,7 @@ function renderWanSwitch(node, p, sf) {
       <rect x="21" y="4" width="5" height="16" rx="1" fill="#00d4ff"/>
       <rect x="28" y="8" width="5" height="12" rx="1" fill="#00d4ff" opacity="0.8"/>
     </g>
-    <text data-pw-name data-pw-origfill="#7dd3fc" x="55" y="23" fill="${p.name_color||'#7dd3fc'}" font-family="Exo 2" font-size="12" font-weight="600">${escXml(_truncName(node.name, 157))}</text>
+    <text data-pw-name data-pw-origfill="#7dd3fc" x="55" y="23" fill="${p.name_color||'#7dd3fc'}" font-family="Inter" font-size="12" font-weight="600">${escXml(_truncName(node.name, 157))}</text>
     ${renderSubtitleAndIP(p, 55, 38, 48, 'rgba(255,255,255,0.5)', 'rgba(255,255,255,0.65)')}
     <g transform="translate(8,${_vlanH(p) > 0 ? 52 : 44})">
       ${[0,11,22,33,44,55].map(x=>`<rect x="${x}" y="0" width="8" height="6" rx="1" fill="#00d4ff" opacity="${x<22?0.6:0.2}" class="led-blink"/>`).join('')}
@@ -2690,7 +2876,7 @@ function renderBBSwitch(node, p, sf) {
       <rect x="${xOffset}" y="0" width="${bw}" height="12" rx="2"
         fill="rgba(${hexToRgb(c)},0.15)" stroke="${c}" stroke-width="0.5"/>
       <text x="${xOffset + bw/2}" y="9" text-anchor="middle"
-        fill="${c}" font-family="Share Tech Mono" font-size="8">${escXml(label)}</text>
+        fill="${c}" font-family="JetBrains Mono" font-size="8">${escXml(label)}</text>
     `;
   }).join('');
 
@@ -2716,9 +2902,9 @@ function renderBBSwitch(node, p, sf) {
       `).join('')}
     </g>
 
-    <text data-pw-name data-pw-origfill="#6ee7b7" x="62" y="28" fill="${p.name_color||'#6ee7b7'}" font-family="Exo 2" font-size="14" font-weight="700">${escXml(_truncName(node.name, 230, 8.5))}</text>
+    <text data-pw-name data-pw-origfill="#6ee7b7" x="62" y="28" fill="${p.name_color||'#6ee7b7'}" font-family="Inter" font-size="14" font-weight="700">${escXml(_truncName(node.name, 230, 8.5))}</text>
 
-    ${bbStatusText ? `<text x="${W - 8}" y="16" text-anchor="end" fill="${bbStatusColor}" font-family="Share Tech Mono" font-size="9">${bbStatusText}</text>` : ''}
+    ${bbStatusText ? `<text x="${W - 8}" y="16" text-anchor="end" fill="${bbStatusColor}" font-family="JetBrains Mono" font-size="9">${bbStatusText}</text>` : ''}
 
     ${renderSubtitleAndIP(p, 62, 44, 57, 'rgba(255,255,255,0.5)', 'rgba(255,255,255,0.65)')}
 
@@ -2754,11 +2940,11 @@ function renderSwitch(node, p, sf) {
         fill="${i===3?'#ffd700':'#00ff9d'}" class="led-blink" opacity="${i%2===0?1:0.5}"/>`).join('')}
     </g>
 
-    <text data-pw-name data-pw-origfill="#6ee7b7" x="50" y="${nameY}" fill="${p.name_color||'#6ee7b7'}" font-family="Exo 2" font-size="11.5" font-weight="600">
+    <text data-pw-name data-pw-origfill="#6ee7b7" x="50" y="${nameY}" fill="${p.name_color||'#6ee7b7'}" font-family="Inter" font-size="11.5" font-weight="600">
       ${escXml(_truncName(node.name, w - 58, 6.5))}
     </text>
 
-    ${swStatusText ? `<text x="${w - 6}" y="13" text-anchor="end" fill="${swStatusColor}" font-family="Share Tech Mono" font-size="8">${swStatusText}</text>` : ''}
+    ${swStatusText ? `<text x="${w - 6}" y="13" text-anchor="end" fill="${swStatusColor}" font-family="JetBrains Mono" font-size="8">${swStatusText}</text>` : ''}
 
     ${renderSubtitleAndIP(p, 50, subY, ipY, 'rgba(255,255,255,0.45)', 'rgba(255,255,255,0.65)')}
 
@@ -2776,7 +2962,7 @@ function renderConnector(node, p, sf) {
     <polygon points="28,10 44,26 28,42 12,26" fill="none" stroke="#ffd700" stroke-width="1.5"/>
     <polygon points="28,16 38,26 28,36 18,26" fill="rgba(255,215,0,0.15)" stroke="#ffd700" stroke-width="1"/>
     <circle cx="28" cy="26" r="3" fill="#ffd700"/>
-    <text data-pw-name data-pw-origfill="#fde68a" x="52" y="22" fill="${p.name_color||'#fde68a'}" font-family="Exo 2" font-size="12" font-weight="700">${escXml(_truncName(node.name, 105))}</text>
+    <text data-pw-name data-pw-origfill="#fde68a" x="52" y="22" fill="${p.name_color||'#fde68a'}" font-family="Inter" font-size="12" font-weight="700">${escXml(_truncName(node.name, 105))}</text>
     ${renderSubtitleAndIP(p, 52, 37, 51, '#ffd700', 'rgba(255,255,255,0.6)')}
     ${vlanBadge(p, 52, H - 19)}
     <rect x="1" y="1" width="163" height="2" rx="1" fill="rgba(255,215,0,0.3)"/>
@@ -2794,7 +2980,7 @@ function renderAP(node, p, sf) {
       <path d="M13,26 Q17,18 21,26" fill="none" stroke="#a855f7" stroke-width="2"/>
       <circle cx="17" cy="28" r="2.5" fill="#a855f7"/>
     </g>
-    <text data-pw-name data-pw-origfill="#d8b4fe" x="52" y="24" fill="${p.name_color||'#d8b4fe'}" font-family="Exo 2" font-size="12" font-weight="600">${escXml(_truncName(node.name, 110))}</text>
+    <text data-pw-name data-pw-origfill="#d8b4fe" x="52" y="24" fill="${p.name_color||'#d8b4fe'}" font-family="Inter" font-size="12" font-weight="600">${escXml(_truncName(node.name, 110))}</text>
     ${renderSubtitleAndIP(p, 52, 40, 52, 'rgba(255,255,255,0.45)', 'rgba(255,255,255,0.65)')}
     ${vlanBadge(p, 52, H - 19)}
     <rect x="1" y="1" width="168" height="2" rx="1" fill="rgba(168,85,247,0.3)"/>
@@ -2880,20 +3066,41 @@ function renderInfoBox(node, p, sf) {
   // Title sits at top with a fatter font; lines flow at 18px row height.
   const titleCharPx = 8.5;
   const titleAvail  = Math.max(40, w - 18);
+  // Notes: rendered as a small block below the colored lines. Multi-line
+  // (each \n-separated row gets its own SVG <text>). A faint divider sets
+  // the section apart from the colored lines above.
+  const notesText = (p.notes || '').toString().trim();
+  const noteRows  = notesText ? notesText.split('\n') : [];
+  const linesBottomY = 30 + lines.length * 18;  // y just below the last line
+  let notesSvg = '';
+  if (noteRows.length) {
+    const dividerY = linesBottomY + 6;
+    const headerY  = dividerY + 14;
+    let body = '';
+    noteRows.forEach((row, i) => {
+      const yy = headerY + 4 + (i + 1) * 14;
+      body += `<text x="10" y="${yy}" fill="rgba(255,255,255,0.75)" font-family="JetBrains Mono" font-size="11">${escXml(row)}</text>`;
+    });
+    notesSvg = `
+      <line x1="8" y1="${dividerY}" x2="${w - 8}" y2="${dividerY}" stroke="rgba(255,107,107,0.25)" stroke-width="1" stroke-dasharray="2,3"/>
+      <text x="10" y="${headerY + 4}" fill="rgba(255,107,107,0.7)" font-family="Inter" font-size="9" letter-spacing="1">📝 NOTES</text>
+      ${body}`;
+  }
   return `<g ${sf}>
     <rect x="0" y="0" width="${w}" height="${h}" rx="4"
       fill="rgba(40,8,12,0.85)" stroke="rgba(255,51,102,0.3)"
       stroke-width="1" stroke-dasharray="4,3"/>
-    <text data-pw-name data-pw-origfill="#ff6b6b" x="10" y="20" fill="#ff6b6b" font-family="Orbitron" font-size="12" letter-spacing="1">${escXml(_truncName(node.name, titleAvail, titleCharPx))}</text>
+    <text data-pw-name data-pw-origfill="#ff6b6b" x="10" y="20" fill="#ff6b6b" font-family="Inter" font-size="12" letter-spacing="1">${escXml(_truncName(node.name, titleAvail, titleCharPx))}</text>
     ${lines.map((l,i) => {
       const color = (l && l.color) ? String(l.color) : 'rgba(255,255,255,0.6)';
       const text  = (l && l.text)  ? String(l.text)  : '';
       const rowY  = 30 + i*18;
       return `
         <rect x="6" y="${rowY}" width="3" height="13" rx="1" fill="${escXml(color)}"/>
-        <text x="14" y="${rowY + 11}" fill="${escXml(color)}" font-family="Share Tech Mono" font-size="12">${escXml(text)}</text>
+        <text x="14" y="${rowY + 11}" fill="${escXml(color)}" font-family="JetBrains Mono" font-size="12">${escXml(text)}</text>
       `;
     }).join('')}
+    ${notesSvg}
     <rect data-info-resize="1" x="${w - 12}" y="${h - 12}" width="12" height="12" rx="2"
       fill="rgba(255,107,107,0.7)" stroke="rgba(255,107,107,0.9)" stroke-width="0.7"
       style="cursor:nwse-resize"/>
@@ -2904,7 +3111,7 @@ function renderGeneric(node, p, sf) {
   const H = 60 + _vlanH(p);
   return `<g ${sf}>
     <rect x="0" y="0" width="160" height="${H}" rx="4" fill="rgba(10,20,35,0.92)" stroke="#00d4ff" stroke-width="1.5"/>
-    <text data-pw-name data-pw-origfill="#93c5fd" x="80" y="28" text-anchor="middle" fill="${p.name_color||'#93c5fd'}" font-family="Exo 2" font-size="12" font-weight="600">${escXml(_truncName(node.name, 160))}</text>
+    <text data-pw-name data-pw-origfill="#93c5fd" x="80" y="28" text-anchor="middle" fill="${p.name_color||'#93c5fd'}" font-family="Inter" font-size="12" font-weight="600">${escXml(_truncName(node.name, 160))}</text>
 	${p.subtitle ? svgTextLine(80, 45, p.subtitle, (p.subtitle_color||'rgba(255,255,255,0.4)'), 9) : ''}
 	${(!p.subtitle && p.ip) ? svgTextLine(80, 45, p.ip, (p.ip_color||'rgba(255,255,255,0.4)'), 9) : ''}
 	${(!p.subtitle && !p.ip) ? svgTextLine(80, 45, node.type, 'rgba(255,255,255,0.35)', 9) : ''}
@@ -2924,7 +3131,7 @@ function renderRouter(node, p, sf) {
       <line x1="15" y1="2" x2="15" y2="28" stroke="#00d4ff" stroke-width="0.7" opacity="0.5"/>
       <polygon points="28,12 34,15 28,18" fill="#00d4ff"/>
     </g>
-    <text data-pw-name data-pw-origfill="#7dd3fc" x="52" y="24" fill="${p.name_color||'#7dd3fc'}" font-family="Exo 2" font-size="12" font-weight="600">${escXml(_truncName(node.name, 100))}</text>
+    <text data-pw-name data-pw-origfill="#7dd3fc" x="52" y="24" fill="${p.name_color||'#7dd3fc'}" font-family="Inter" font-size="12" font-weight="600">${escXml(_truncName(node.name, 100))}</text>
     ${renderSubtitleAndIP(p, 52, 40, 52, 'rgba(255,255,255,0.45)', 'rgba(255,255,255,0.65)')}
     ${vlanBadge(p, 52, H - 19)}
     <rect x="1" y="1" width="158" height="2" rx="1" fill="rgba(0,212,255,0.2)"/>
@@ -2942,7 +3149,7 @@ function renderVM(node, p, sf) {
       <rect x="6" y="2" width="16" height="12" rx="2" fill="rgba(45,212,191,0.07)" stroke="#2dd4bf" stroke-width="1" opacity="0.4"/>
       <circle cx="14" cy="23" r="2" fill="#2dd4bf" opacity="0.8"/>
     </g>
-    <text data-pw-name data-pw-origfill="#99f6e4" x="52" y="24" fill="${p.name_color||'#99f6e4'}" font-family="Exo 2" font-size="12" font-weight="600">${escXml(_truncName(node.name, 100))}</text>
+    <text data-pw-name data-pw-origfill="#99f6e4" x="52" y="24" fill="${p.name_color||'#99f6e4'}" font-family="Inter" font-size="12" font-weight="600">${escXml(_truncName(node.name, 100))}</text>
     ${renderSubtitleAndIP(p, 52, 40, 52, 'rgba(255,255,255,0.45)', 'rgba(255,255,255,0.65)')}
     ${vlanBadge(p, 52, H - 19)}
     <rect x="1" y="1" width="158" height="2" rx="1" fill="rgba(45,212,191,0.2)"/>
@@ -2964,7 +3171,7 @@ function renderAppliance(node, p, sf) {
         return `<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="#fb923c" stroke-width="1.5" opacity="0.7"/>`;
       }).join('')}
     </g>
-    <text data-pw-name data-pw-origfill="#fed7aa" x="52" y="24" fill="${p.name_color||'#fed7aa'}" font-family="Exo 2" font-size="12" font-weight="600">${escXml(_truncName(node.name, 100))}</text>
+    <text data-pw-name data-pw-origfill="#fed7aa" x="52" y="24" fill="${p.name_color||'#fed7aa'}" font-family="Inter" font-size="12" font-weight="600">${escXml(_truncName(node.name, 100))}</text>
     ${renderSubtitleAndIP(p, 52, 40, 52, 'rgba(255,255,255,0.45)', 'rgba(255,255,255,0.65)')}
     ${vlanBadge(p, 52, H - 19)}
     <rect x="1" y="1" width="158" height="2" rx="1" fill="rgba(251,146,60,0.2)"/>
@@ -2983,7 +3190,7 @@ function renderStorage(node, p, sf) {
       <rect x="2" y="20" width="26" height="8" rx="3" fill="rgba(245,158,11,0.15)" stroke="#f59e0b" stroke-width="1.2"/>
       <circle cx="24" cy="14" r="2" fill="#f59e0b" class="led-blink"/>
     </g>
-    <text data-pw-name data-pw-origfill="#fcd34d" x="52" y="24" fill="${p.name_color||'#fcd34d'}" font-family="Exo 2" font-size="12" font-weight="600">${escXml(_truncName(node.name, 100))}</text>
+    <text data-pw-name data-pw-origfill="#fcd34d" x="52" y="24" fill="${p.name_color||'#fcd34d'}" font-family="Inter" font-size="12" font-weight="600">${escXml(_truncName(node.name, 100))}</text>
     ${renderSubtitleAndIP(p, 52, 40, 52, 'rgba(255,255,255,0.45)', 'rgba(255,255,255,0.65)')}
     ${vlanBadge(p, 52, H - 19)}
     <rect x="1" y="1" width="158" height="2" rx="1" fill="rgba(245,158,11,0.2)"/>
@@ -3002,7 +3209,7 @@ function renderPhone(node, p, sf) {
       <path d="M20,12 Q24,8 28,12" fill="none" stroke="#14b8a6" stroke-width="1.2" opacity="0.7"/>
       <circle cx="24" cy="14" r="1.5" fill="#14b8a6"/>
     </g>
-    <text data-pw-name data-pw-origfill="#5eead4" x="52" y="24" fill="${p.name_color||'#5eead4'}" font-family="Exo 2" font-size="12" font-weight="600">${escXml(_truncName(node.name, 100))}</text>
+    <text data-pw-name data-pw-origfill="#5eead4" x="52" y="24" fill="${p.name_color||'#5eead4'}" font-family="Inter" font-size="12" font-weight="600">${escXml(_truncName(node.name, 100))}</text>
     ${renderSubtitleAndIP(p, 52, 40, 52, 'rgba(255,255,255,0.45)', 'rgba(255,255,255,0.65)')}
     ${vlanBadge(p, 52, H - 19)}
     <rect x="1" y="1" width="158" height="2" rx="1" fill="rgba(20,184,166,0.2)"/>
@@ -3021,7 +3228,7 @@ function renderCamera(node, p, sf) {
       <circle cx="11" cy="14" r="2" fill="#818cf8" opacity="0.8"/>
       <polygon points="22,10 30,6 30,22 22,18" fill="rgba(129,140,248,0.2)" stroke="#818cf8" stroke-width="1"/>
     </g>
-    <text data-pw-name data-pw-origfill="#c7d2fe" x="52" y="24" fill="${p.name_color||'#c7d2fe'}" font-family="Exo 2" font-size="12" font-weight="600">${escXml(_truncName(node.name, 100))}</text>
+    <text data-pw-name data-pw-origfill="#c7d2fe" x="52" y="24" fill="${p.name_color||'#c7d2fe'}" font-family="Inter" font-size="12" font-weight="600">${escXml(_truncName(node.name, 100))}</text>
     ${renderSubtitleAndIP(p, 52, 40, 52, 'rgba(255,255,255,0.45)', 'rgba(255,255,255,0.65)')}
     ${vlanBadge(p, 52, H - 19)}
     <rect x="1" y="1" width="158" height="2" rx="1" fill="rgba(129,140,248,0.2)"/>
@@ -3041,7 +3248,7 @@ function renderPrinter(node, p, sf) {
       <rect x="6" y="-4" width="16" height="6" rx="1" fill="rgba(148,163,184,0.08)" stroke="#94a3b8" stroke-width="0.8"/>
       <circle cx="23" cy="17" r="1.5" fill="#94a3b8" class="led-blink"/>
     </g>
-    <text data-pw-name data-pw-origfill="#cbd5e1" x="52" y="24" fill="${p.name_color||'#cbd5e1'}" font-family="Exo 2" font-size="12" font-weight="600">${escXml(_truncName(node.name, 100))}</text>
+    <text data-pw-name data-pw-origfill="#cbd5e1" x="52" y="24" fill="${p.name_color||'#cbd5e1'}" font-family="Inter" font-size="12" font-weight="600">${escXml(_truncName(node.name, 100))}</text>
     ${renderSubtitleAndIP(p, 52, 40, 52, 'rgba(255,255,255,0.45)', 'rgba(255,255,255,0.65)')}
     ${vlanBadge(p, 52, H - 19)}
     <rect x="1" y="1" width="158" height="2" rx="1" fill="rgba(148,163,184,0.2)"/>
@@ -3064,7 +3271,7 @@ function renderLoadBalancer(node, p, sf) {
       <polygon points="26,12 32,14 26,16" fill="#ec4899"/>
       <polygon points="26,20 32,22 26,24" fill="#ec4899"/>
     </g>
-    <text data-pw-name data-pw-origfill="#f9a8d4" x="52" y="24" fill="${p.name_color||'#f9a8d4'}" font-family="Exo 2" font-size="12" font-weight="600">${escXml(_truncName(node.name, 100))}</text>
+    <text data-pw-name data-pw-origfill="#f9a8d4" x="52" y="24" fill="${p.name_color||'#f9a8d4'}" font-family="Inter" font-size="12" font-weight="600">${escXml(_truncName(node.name, 100))}</text>
     ${renderSubtitleAndIP(p, 52, 40, 52, 'rgba(255,255,255,0.45)', 'rgba(255,255,255,0.65)')}
     ${vlanBadge(p, 52, H - 19)}
     <rect x="1" y="1" width="158" height="2" rx="1" fill="rgba(236,72,153,0.2)"/>
@@ -3086,7 +3293,7 @@ function renderHypervisor(node, p, sf) {
       <circle cx="23" cy="15.5" r="1.5" fill="#3b82f6" class="led-blink" opacity="0.7"/>
       <circle cx="23" cy="24.5" r="1.5" fill="#ffd700" class="led-blink" opacity="0.5"/>
     </g>
-    <text data-pw-name data-pw-origfill="#93c5fd" x="52" y="24" fill="${p.name_color||'#93c5fd'}" font-family="Exo 2" font-size="12" font-weight="600">${escXml(_truncName(node.name, 100))}</text>
+    <text data-pw-name data-pw-origfill="#93c5fd" x="52" y="24" fill="${p.name_color||'#93c5fd'}" font-family="Inter" font-size="12" font-weight="600">${escXml(_truncName(node.name, 100))}</text>
     ${renderSubtitleAndIP(p, 52, 40, 52, 'rgba(255,255,255,0.45)', 'rgba(255,255,255,0.65)')}
     ${vlanBadge(p, 52, H - 19)}
     <rect x="1" y="1" width="158" height="2" rx="1" fill="rgba(59,130,246,0.2)"/>
@@ -3105,7 +3312,7 @@ function renderUPS(node, p, sf) {
       <path d="M18,10 L13,18 L17,18 L12,26" fill="none" stroke="#84cc16" stroke-width="1.8" stroke-linecap="round"/>
       <circle cx="22" cy="4" r="1.5" fill="#84cc16" class="led-blink"/>
     </g>
-    <text data-pw-name data-pw-origfill="#bef264" x="52" y="24" fill="${p.name_color||'#bef264'}" font-family="Exo 2" font-size="12" font-weight="600">${escXml(_truncName(node.name, 100))}</text>
+    <text data-pw-name data-pw-origfill="#bef264" x="52" y="24" fill="${p.name_color||'#bef264'}" font-family="Inter" font-size="12" font-weight="600">${escXml(_truncName(node.name, 100))}</text>
     ${renderSubtitleAndIP(p, 52, 40, 52, 'rgba(255,255,255,0.45)', 'rgba(255,255,255,0.65)')}
     ${vlanBadge(p, 52, H - 19)}
     <rect x="1" y="1" width="158" height="2" rx="1" fill="rgba(132,204,22,0.2)"/>
@@ -3126,7 +3333,7 @@ function renderContainer(node, p, sf) {
       <path d="M8,11 L15,14.5 L22,11" fill="none" stroke="#38bdf8" stroke-width="0.6" stroke-dasharray="2,2" opacity="0.6"/>
       <path d="M8,16 L15,19.5 L22,16" fill="none" stroke="#38bdf8" stroke-width="0.6" stroke-dasharray="2,2" opacity="0.4"/>
     </g>
-    <text data-pw-name data-pw-origfill="#7dd3fc" x="52" y="24" fill="${p.name_color||'#7dd3fc'}" font-family="Exo 2" font-size="12" font-weight="600">${escXml(_truncName(node.name, 100))}</text>
+    <text data-pw-name data-pw-origfill="#7dd3fc" x="52" y="24" fill="${p.name_color||'#7dd3fc'}" font-family="Inter" font-size="12" font-weight="600">${escXml(_truncName(node.name, 100))}</text>
     ${renderSubtitleAndIP(p, 52, 40, 52, 'rgba(255,255,255,0.45)', 'rgba(255,255,255,0.65)')}
     ${vlanBadge(p, 52, H - 19)}
     <rect x="1" y="1" width="158" height="2" rx="1" fill="rgba(56,189,248,0.2)"/>
@@ -3147,7 +3354,7 @@ function renderIPMI(node, p, sf) {
       ${[10,15,20].map(x=>`<line x1="${x}" y1="0" x2="${x}" y2="6" stroke="#ef4444" stroke-width="1.2" opacity="0.6"/>`).join('')}
       ${[10,15,20].map(x=>`<line x1="${x}" y1="24" x2="${x}" y2="30" stroke="#ef4444" stroke-width="1.2" opacity="0.6"/>`).join('')}
     </g>
-    <text data-pw-name data-pw-origfill="#fca5a5" x="52" y="24" fill="${p.name_color||'#fca5a5'}" font-family="Exo 2" font-size="12" font-weight="600">${escXml(_truncName(node.name, 100))}</text>
+    <text data-pw-name data-pw-origfill="#fca5a5" x="52" y="24" fill="${p.name_color||'#fca5a5'}" font-family="Inter" font-size="12" font-weight="600">${escXml(_truncName(node.name, 100))}</text>
     ${renderSubtitleAndIP(p, 52, 40, 52, 'rgba(255,255,255,0.45)', 'rgba(255,255,255,0.65)')}
     ${vlanBadge(p, 52, H - 19)}
     <rect x="1" y="1" width="158" height="2" rx="1" fill="rgba(239,68,68,0.2)"/>
@@ -3384,19 +3591,19 @@ function showNodePanel(node) {
   document.getElementById('panel-title').textContent = node.name.toUpperCase();
   document.getElementById('panel-icon').textContent = '◉';
   document.getElementById('panel-body').innerHTML = `
-    <div class="field-group"><div class="field-label">TYPE</div><span style="color:var(--accent);font-family:Share Tech Mono,monospace;font-size:11px;">${escXml(node.type)}</span></div>
-    <div class="field-group"><div class="field-label">POSITION</div><span style="color:var(--pt-sub);font-family:Share Tech Mono,monospace;font-size:10px;">x:${Math.round(node.x)} y:${Math.round(node.y)}</span></div>
-    ${p.ip ? `<div class="field-group"><div class="field-label">IP ADDRESS</div><span style="color:${escXml(p.ip_color||'var(--accent2)')};font-family:Share Tech Mono,monospace;font-size:11px;">${escXml(p.ip)}</span></div>` : ''}
-    ${p.subtitle ? `<div class="field-group"><div class="field-label">SUBTITLE</div><span style="color:${escXml(p.subtitle_color||'var(--pt-sub)')};font-family:Share Tech Mono,monospace;font-size:10px;">${escXml(p.subtitle)}</span></div>` : ''}
+    <div class="field-group"><div class="field-label">TYPE</div><span style="color:var(--accent);font-family:'JetBrains Mono',monospace;font-size:11px;">${escXml(node.type)}</span></div>
+    <div class="field-group"><div class="field-label">POSITION</div><span style="color:var(--pt-sub);font-family:'JetBrains Mono',monospace;font-size:10px;">x:${Math.round(node.x)} y:${Math.round(node.y)}</span></div>
+    ${p.ip ? `<div class="field-group"><div class="field-label">IP ADDRESS</div><span style="color:${escXml(p.ip_color||'var(--accent2)')};font-family:'JetBrains Mono',monospace;font-size:11px;">${escXml(p.ip)}</span></div>` : ''}
+    ${p.subtitle ? `<div class="field-group"><div class="field-label">SUBTITLE</div><span style="color:${escXml(p.subtitle_color||'var(--pt-sub)')};font-family:'JetBrains Mono',monospace;font-size:10px;">${escXml(p.subtitle)}</span></div>` : ''}
     <div class="field-group"><div class="field-label">CONNECTED LINKS</div>
       ${links.filter(l=>l.source_id===node.id||l.target_id===node.id).map(l=>{
         const other = nodeMap[l.source_id===node.id ? l.target_id : l.source_id];
         const cfg = lcfg(l.link_type);
         return `<div style="display:flex;align-items:center;gap:6px;margin-bottom:4px;">
           <div style="width:16px;height:2px;background:${cfg.stroke};"></div>
-          <span style="font-family:Share Tech Mono,monospace;font-size:9px;color:var(--pt-sub);">${escXml(other?.name||'?')}</span>
+          <span style="font-family:\'JetBrains Mono\',monospace;font-size:9px;color:var(--pt-sub);">${escXml(other?.name||'?')}</span>
         </div>`;
-      }).join('') || '<span style="color:var(--pt-dim);font-family:Share Tech Mono,monospace;font-size:10px;">None</span>'}
+      }).join('') || `<span style="color:var(--pt-dim);font-family:'JetBrains Mono',monospace;font-size:10px;">None</span>`}
     </div>
     <div class="field-group">
       <div class="field-label">NOTES</div>
@@ -3407,7 +3614,7 @@ function showNodePanel(node) {
     <button class="btn btn-primary" style="flex:1" onclick="openEditNode(${node.id})">✎ EDIT</button>
     <button class="btn btn-danger" style="flex:1" onclick="deleteNode(${node.id})">✕ DELETE</button>
 
-    <div style="width:100%;text-align:center;font-family:Share Tech Mono,monospace;font-size:9px;color:rgba(0,212,255,0.35);letter-spacing:1px;padding-top:6px;">ALT+DRAG → LINK</div>
+    <div style="width:100%;text-align:center;font-family:'JetBrains Mono',monospace;font-size:9px;color:rgba(0,212,255,0.35);letter-spacing:1px;padding-top:6px;">ALT+DRAG → LINK</div>
   `;
 }
 
@@ -3418,6 +3625,10 @@ async function saveNodeNotes(nodeId, text) {
   node.properties = newProps;
   try {
     await api('PUT', `/api/nodes/${nodeId}`, { name: node.name, type: node.type, x: node.x, y: node.y, properties: newProps });
+    // Info-box renders notes inline on the canvas, so a re-render is needed
+    // for the notes to appear/update without a full reload. Other node types
+    // don't surface notes on the canvas — render() is cheap, just call it.
+    if (node.type === 'info-box') render();
   } catch(e) { toast('⚠ Failed to save notes'); }
 }
 
@@ -3428,10 +3639,10 @@ function showLinkPanel(lk) {
   document.getElementById('panel-title').textContent = 'LINK';
   document.getElementById('panel-icon').textContent = '⟷';
   document.getElementById('panel-body').innerHTML = `
-    <div class="field-group"><div class="field-label">TYPE</div><span style="color:${cfg.stroke};font-family:Share Tech Mono,monospace;font-size:11px;">${lk.link_type.toUpperCase()}</span></div>
-    <div class="field-group"><div class="field-label">FROM</div><span style="color:var(--accent);font-family:Share Tech Mono,monospace;font-size:11px;">${src?.name||'?'}</span></div>
-    <div class="field-group"><div class="field-label">TO</div><span style="color:var(--accent);font-family:Share Tech Mono,monospace;font-size:11px;">${tgt?.name||'?'}</span></div>
-    ${lk.label ? `<div class="field-group"><div class="field-label">LABEL</div><span style="color:rgba(255,255,255,0.6);font-family:Share Tech Mono,monospace;font-size:11px;">${escXml(lk.label)}</span></div>` : ''}
+    <div class="field-group"><div class="field-label">TYPE</div><span style="color:${cfg.stroke};font-family:'JetBrains Mono',monospace;font-size:11px;">${lk.link_type.toUpperCase()}</span></div>
+    <div class="field-group"><div class="field-label">FROM</div><span style="color:var(--accent);font-family:\'JetBrains Mono\',monospace;font-size:11px;">${src?.name||'?'}</span></div>
+    <div class="field-group"><div class="field-label">TO</div><span style="color:var(--accent);font-family:\'JetBrains Mono\',monospace;font-size:11px;">${tgt?.name||'?'}</span></div>
+    ${lk.label ? `<div class="field-group"><div class="field-label">LABEL</div><span style="color:rgba(255,255,255,0.6);font-family:'JetBrains Mono',monospace;font-size:11px;">${escXml(lk.label)}</span></div>` : ''}
   `;
   document.getElementById('panel-actions').innerHTML = `
     <button class="btn btn-primary" style="flex:1" onclick="openEditLink(${lk.id})">✎ EDIT</button>
@@ -3451,7 +3662,7 @@ function _tabMenu(e, pg) {
   ];
   items.forEach(item => {
     const row = document.createElement('div');
-    row.style.cssText = `padding:7px 14px;cursor:pointer;font-size:11px;font-family:'Share Tech Mono',monospace;letter-spacing:.5px;color:${item.danger ? '#ff5555' : 'rgba(0,212,255,0.8)'};display:flex;align-items:center;gap:8px;`;
+    row.style.cssText = `padding:7px 14px;cursor:pointer;font-size:11px;font-family:'JetBrains Mono',monospace;letter-spacing:.5px;color:${item.danger ? '#ff5555' : 'rgba(0,212,255,0.8)'};display:flex;align-items:center;gap:8px;`;
     row.innerHTML = `<span>${item.icon}</span><span>${item.label}</span>`;
     row.onmouseenter = () => row.style.background = 'rgba(0,212,255,0.07)';
     row.onmouseleave = () => row.style.background = '';
@@ -3558,6 +3769,7 @@ function openAddNode() {
   document.getElementById('node-color').value = '#00d4ff';
   setInfoEditorVisible(document.getElementById('node-type').value);
   clearInfoLines(); // reset
+  clearInfoNotes();
   if (document.getElementById('node-type').value === 'info-box') {
     loadInfoLines([], { blankTemplate: true });
   }
@@ -3589,8 +3801,13 @@ function openEditNode(id) {
   document.getElementById('node-color-enabled').checked = !!_nc;
   document.getElementById('node-color').value = _nc || '#00d4ff';
   setInfoEditorVisible(node.type);
-  if (node.type === 'info-box') loadInfoLines(node.properties?.lines || []);
-  else clearInfoLines();
+  if (node.type === 'info-box') {
+    loadInfoLines(node.properties?.lines || []);
+    loadInfoNotes(node.properties?.notes || '');
+  } else {
+    clearInfoLines();
+    clearInfoNotes();
+  }
   openModal('modal-node');
 }
 
@@ -3611,6 +3828,7 @@ async function saveNode() {
   const nodeColor = nodeColorEnabled ? document.getElementById('node-color').value : null;
 
   const infoLines = (type === 'info-box') ? collectInfoLinesFromUI() : null;
+  const infoNotes = (type === 'info-box') ? collectInfoNotesFromUI() : null;
   const fwStatus = (type === 'firewall' || type === 'switch' || type === 'bb-switch')
     ? (document.getElementById('node-fw-status')?.value || '')
     : null;
@@ -3646,6 +3864,11 @@ async function saveNode() {
         delete nextProps.subtitle_color;
         delete nextProps.vlan;
         nextProps.lines = infoLines || [];
+        // Notes — keep alongside lines so the info-box renderer can show them.
+        // Empty string trims the key so the SVG doesn't render an empty section.
+        const _n = (infoNotes || '').trim();
+        if (_n) nextProps.notes = _n;
+        else    delete nextProps.notes;
       }
 
       const before_n = { ...existing, properties: { ...(existing.properties || {}) } };
@@ -3670,6 +3893,8 @@ async function saveNode() {
         if (fwStatus !== null) applyField(props, 'status', fwStatus);
       } else {
         props.lines = infoLines || [];
+        const _n = (infoNotes || '').trim();
+        if (_n) props.notes = _n;
       }
       const newNX = 200 + Math.random() * 400, newNY = 200 + Math.random() * 300;
       const newN = await api('POST', '/api/nodes', { name, type, x:newNX, y:newNY, properties:props, page_id:currentPageId });
@@ -3702,7 +3927,7 @@ function buildVlanRow(vid, color) {
   row.dataset.vid = vid;
   row.style.cssText = 'display:grid;grid-template-columns:80px 48px 1fr 32px;gap:10px;align-items:center;margin-bottom:8px;';
   row.innerHTML = `
-    <span style="font-family:Share Tech Mono,monospace;font-size:11px;font-weight:700;color:${escXml(color)};"
+    <span style="font-family:'JetBrains Mono',monospace;font-size:11px;font-weight:700;color:${escXml(color)};"
       class="vlan-row-label">VLAN ${escXml(String(vid))}</span>
     <input type="color" class="field-color vlan-color-inp" value="${escXml(toHexColor(color,'#00d4ff'))}"
       style="width:48px;height:34px;" />
@@ -3792,7 +4017,7 @@ function renderVlanChips() {
   wrap.innerHTML = ids.map(v => {
     const c = VLAN_COLORS[v] || '#00d4ff';
     const rgb = hexToRgb(c);
-    return `<span style="display:inline-flex;align-items:center;gap:3px;padding:1px 6px;border-radius:3px;background:rgba(${rgb},0.15);border:1px solid ${c};font-family:'Share Tech Mono',monospace;font-size:9px;color:${c};">V${escXml(v)}<span onclick="removeVlanChip('${escXml(v)}')" style="cursor:pointer;opacity:0.6;font-size:11px;line-height:1;margin-left:1px;">×</span></span>`;
+    return `<span style="display:inline-flex;align-items:center;gap:3px;padding:1px 6px;border-radius:3px;background:rgba(${rgb},0.15);border:1px solid ${c};font-family:'JetBrains Mono',monospace;font-size:9px;color:${c};">V${escXml(v)}<span onclick="removeVlanChip('${escXml(v)}')" style="cursor:pointer;opacity:0.6;font-size:11px;line-height:1;margin-left:1px;">×</span></span>`;
   }).join('');
 }
 function addVlanChip(raw) {
@@ -3816,7 +4041,7 @@ function vlanDropdownFilter(q) {
   if (!matches.length) { dd.style.display = 'none'; return; }
   dd.innerHTML = matches.map(v => {
     const c = VLAN_COLORS[v] || '#00d4ff';
-    return `<div onclick="addVlanChip('${v}')" style="padding:5px 8px;cursor:pointer;font-family:'Share Tech Mono',monospace;font-size:10px;color:${c};border-bottom:1px solid rgba(0,212,255,0.08);" onmouseenter="this.style.background='rgba(0,212,255,0.08)'" onmouseleave="this.style.background=''">VLAN${v}</div>`;
+    return `<div onclick="addVlanChip('${v}')" style="padding:5px 8px;cursor:pointer;font-family:'JetBrains Mono',monospace;font-size:10px;color:${c};border-bottom:1px solid rgba(0,212,255,0.08);" onmouseenter="this.style.background='rgba(0,212,255,0.08)'" onmouseleave="this.style.background=''">VLAN${v}</div>`;
   }).join('');
   dd.style.display = 'block';
 }
@@ -3923,7 +4148,7 @@ function svgTextLine(x, y, text, fill, size = 9, weight = 'normal', cls = '') {
     .replaceAll('&','&amp;')
     .replaceAll('<','&lt;')
     .replaceAll('>','&gt;');
-  return `<text x="${x}" y="${y}" fill="${fill}" font-family="Share Tech Mono" font-size="${size}" font-weight="${weight}"${cls ? ` class="${cls}"` : ''}>${safe}</text>`;
+  return `<text x="${x}" y="${y}" fill="${fill}" font-family="JetBrains Mono" font-size="${size}" font-weight="${weight}"${cls ? ` class="${cls}"` : ''}>${safe}</text>`;
 }
 
 function escXml(s) {
@@ -3958,7 +4183,7 @@ function renderOutsideLabel(node, p, cx, baseH, opts = {}) {
   // VLAN badge sits below the last text line
   const yBadge = (line3Text ? yLine3 : line2Text ? yLine2 : yName) + 8;
 
-  // Truncate name to fit within node width — Exo 2 bold 13px ≈ 7.5px/char
+  // Truncate name to fit within node width — Inter bold 13px ≈ 7.5px/char
   const nodeW    = opts.nodeW || (cx * 2);
   const maxChars = Math.max(8, Math.floor(nodeW / 7.5));
   const rawName  = node.name || '';
@@ -3967,18 +4192,18 @@ function renderOutsideLabel(node, p, cx, baseH, opts = {}) {
   const origFill = opts.nameFill || '#93c5fd';
   const svgContent = `
     <text data-pw-name data-pw-origfill="${origFill}" x="${cx}" y="${yName}" text-anchor="middle"
-      fill="${nameFill}" font-family="Exo 2" font-size="${nameSize}"
+      fill="${nameFill}" font-family="Inter" font-size="${nameSize}"
       font-weight="700"${glow ? ` filter="${glow}"` : ''}>${escXml(dispName)}</text>
 
     ${line2Text ? `
       <text${line2IsIP ? ' data-pw-ip' : ''} x="${cx}" y="${yLine2}" text-anchor="middle"
-        fill="${line2Color}" font-family="Share Tech Mono"
+        fill="${line2Color}" font-family="JetBrains Mono"
         font-size="${line2Size}"${line2IsIP ? ' font-weight="700" filter="url(#glow-blue)"' : ' opacity="0.85"'}>${escXml(line2Text)}</text>
     ` : ''}
 
     ${line3Text ? `
       <text data-pw-ip x="${cx}" y="${yLine3}" text-anchor="middle"
-        fill="${p.ip_color || '#00d4ff'}" font-family="Share Tech Mono"
+        fill="${p.ip_color || '#00d4ff'}" font-family="JetBrains Mono"
         font-size="${line2Size}" font-weight="700" filter="url(#glow-blue)">${escXml(line3Text)}</text>
     ` : ''}
 
@@ -4047,7 +4272,8 @@ function setInfoEditorVisible(type) {
     sub.style.display = '';
     vlan.style.display = '';
     if (fwStatus) fwStatus.style.display = (type === 'firewall' || type === 'switch' || type === 'bb-switch') ? '' : 'none';
-	clearInfoLines();
+    clearInfoLines();
+    clearInfoNotes();
   }
 }
 
@@ -4102,6 +4328,24 @@ function collectInfoLinesFromUI() {
   return out;
 }
 
+// ── Info-box notes (v1.0+) ──────────────────────────────────────────
+// Notes live in `properties.notes` and are also editable from the side
+// panel (where they appear for every node type). For info-box nodes we
+// surface them inline in the editor modal too, AND render them inside
+// the info-box on the canvas — they were previously invisible.
+function loadInfoNotes(text) {
+  const ta = document.getElementById('info-notes-ta');
+  if (ta) ta.value = String(text || '');
+}
+function clearInfoNotes() {
+  const ta = document.getElementById('info-notes-ta');
+  if (ta) ta.value = '';
+}
+function collectInfoNotesFromUI() {
+  const ta = document.getElementById('info-notes-ta');
+  return ta ? ta.value : '';
+}
+
 function hexToRgb(hex) {
   const r = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
   return r ? `${parseInt(r[1],16)},${parseInt(r[2],16)},${parseInt(r[3],16)}` : '0,212,255';
@@ -4120,7 +4364,7 @@ function renderSubtitleAndIP(p, x, ySubtitle, yIP, subtitleFill, ipFill) {
     out += svgTextLine(x, ySubtitle, sub, subColor, 9);
 
   if (ip)
-    out += `<text data-pw-ip x="${x}" y="${sub ? yIP : ySubtitle}" fill="${p.ip_color || '#00d4ff'}" font-family="Share Tech Mono" font-size="9" font-weight="700" filter="url(#glow-blue)">${String(ip).replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;')}</text>`;
+    out += `<text data-pw-ip x="${x}" y="${sub ? yIP : ySubtitle}" fill="${p.ip_color || '#00d4ff'}" font-family="JetBrains Mono" font-size="9" font-weight="700" filter="url(#glow-blue)">${String(ip).replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;')}</text>`;
 
   return out;
 }
@@ -4146,14 +4390,23 @@ window.addEventListener('keydown', e => {
     closeModal('modal-node'); closeModal('modal-link'); closeModal('modal-group');
     multiSelect.clear(); deselect();
   }
+  // Skip canvas shortcuts when the user is typing in a form control. The
+  // earlier guard only covered <input>, so Ctrl+A inside a <textarea> (e.g.
+  // the Notes editor in the Info Box modal) would hijack "select all text"
+  // into "select all nodes". Same applied to Ctrl+Z/Y and Delete/Backspace.
+  const t = e.target;
+  const tag = t && t.tagName;
+  const inField = tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT'
+                  || (t && t.isContentEditable);
+
   if (e.ctrlKey && e.key === '0') { e.preventDefault(); vp={scale:1,tx:0,ty:0}; applyViewport(); }
-  if (e.ctrlKey && e.key === 'a' && e.target.tagName !== 'INPUT') {
+  if (e.ctrlKey && e.key === 'a' && !inField) {
     e.preventDefault(); nodes.forEach(n => multiSelect.add(n.id));
     renderNodes(); showMultiPanel();
   }
-  if (e.ctrlKey && e.key === 'z' && !e.shiftKey && e.target.tagName !== 'INPUT') { e.preventDefault(); doUndo(); }
-  if (e.ctrlKey && (e.key === 'y' || (e.key === 'z' && e.shiftKey)) && e.target.tagName !== 'INPUT') { e.preventDefault(); doRedo(); }
-  if ((e.key === 'Delete' || e.key === 'Backspace') && e.target.tagName !== 'INPUT') {
+  if (e.ctrlKey && e.key === 'z' && !e.shiftKey && !inField) { e.preventDefault(); doUndo(); }
+  if (e.ctrlKey && (e.key === 'y' || (e.key === 'z' && e.shiftKey)) && !inField) { e.preventDefault(); doRedo(); }
+  if ((e.key === 'Delete' || e.key === 'Backspace') && !inField) {
     if (multiSelect.size > 0) { deleteSelectedNodes(); return; }
     if (selectedEl?.type === 'node') deleteNode(selectedEl.data.id);
     if (selectedEl?.type === 'link') deleteLink(selectedEl.data.id);
@@ -4325,11 +4578,11 @@ function _pwLinkModal(src, tgt, onSave) {
   ov.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:9999;display:flex;align-items:center;justify-content:center;';
   ov.innerHTML = `<div style="background:var(--panel);border:1px solid var(--panel-border);border-radius:10px;padding:24px 28px;max-width:340px;width:90%;box-shadow:0 8px 32px rgba(0,0,0,.5);">
     <div style="font-size:13px;color:var(--pt);margin-bottom:16px;font-weight:600;letter-spacing:1px;">NEW LINK</div>
-    <div style="font-size:11px;color:var(--accent);font-family:'Share Tech Mono',monospace;margin-bottom:14px;">${escXml(src.name)} → ${escXml(tgt.name)}</div>
+    <div style="font-size:11px;color:var(--accent);font-family:'JetBrains Mono',monospace;margin-bottom:14px;">${escXml(src.name)} → ${escXml(tgt.name)}</div>
     <div style="margin-bottom:12px;">
       <div style="font-size:10px;color:var(--pt-dim);letter-spacing:1px;margin-bottom:5px;">LINK TYPE</div>
       <select id="_pwlm_type" class="field-select">
-        ${['trunk','access','internet','ztna','ha_cluster'].map(t=>`<option value="${t}">${t}</option>`).join('')}
+        ${['trunk','access','internet','ztna','ipsec','ha_cluster'].map(t=>`<option value="${t}">${t}</option>`).join('')}
       </select>
     </div>
     <div style="margin-bottom:18px;">
@@ -4404,7 +4657,7 @@ function openBulkLinkModal() {
   ov.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:9999;display:flex;align-items:center;justify-content:center;';
   ov.innerHTML = `<div style="background:var(--panel);border:1px solid var(--panel-border);border-radius:10px;padding:24px 28px;max-width:400px;width:90%;box-shadow:0 8px 32px rgba(0,0,0,.5);">
     <div style="font-size:13px;color:var(--pt);margin-bottom:6px;font-weight:600;letter-spacing:1px;">BULK LINK</div>
-    <div style="font-size:11px;color:var(--accent);font-family:'Share Tech Mono',monospace;margin-bottom:14px;">${selectedDids.length} devices → select target</div>
+    <div style="font-size:11px;color:var(--accent);font-family:'JetBrains Mono',monospace;margin-bottom:14px;">${selectedDids.length} devices → select target</div>
     <div style="margin-bottom:12px;">
       <div style="font-size:10px;color:var(--pt-dim);letter-spacing:1px;margin-bottom:5px;">TARGET DEVICE</div>
       <input id="_blm_search" type="text" placeholder="Search devices…" class="field-input" style="margin-bottom:4px;"/>
@@ -4415,14 +4668,14 @@ function openBulkLinkModal() {
     <div style="margin-bottom:12px;">
       <div style="font-size:10px;color:var(--pt-dim);letter-spacing:1px;margin-bottom:5px;">LINK TYPE</div>
       <select id="_blm_type" class="field-select">
-        ${['access','trunk','internet','ztna','ha_cluster'].map(t => `<option value="${t}">${t}</option>`).join('')}
+        ${['access','trunk','internet','ztna','ipsec','ha_cluster'].map(t => `<option value="${t}">${t}</option>`).join('')}
       </select>
     </div>
     <div style="margin-bottom:18px;">
       <div style="font-size:10px;color:var(--pt-dim);letter-spacing:1px;margin-bottom:5px;">LABEL (optional)</div>
       <input id="_blm_label" type="text" placeholder="e.g. IPMI, Mgmt…" class="field-input"/>
     </div>
-    <div id="_blm_status" style="font-size:10px;color:var(--pt-dimmer);margin-bottom:10px;font-family:'Share Tech Mono',monospace;min-height:14px;"></div>
+    <div id="_blm_status" style="font-size:10px;color:var(--pt-dimmer);margin-bottom:10px;font-family:'JetBrains Mono',monospace;min-height:14px;"></div>
     <div style="display:flex;gap:10px;justify-content:flex-end;">
       <button id="_blm_no" style="padding:7px 18px;border-radius:6px;border:1px solid var(--panel-border);background:transparent;color:var(--pt-sub);cursor:pointer;font-size:12px;">Cancel</button>
       <button id="_blm_yes" disabled style="padding:7px 18px;border-radius:6px;border:none;background:var(--accent);color:#000;cursor:pointer;font-weight:600;font-size:12px;">ADD LINKS</button>
@@ -4488,11 +4741,11 @@ function bulkLinkSelectedTo(tgtDid) {
   ov.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:9999;display:flex;align-items:center;justify-content:center;';
   ov.innerHTML = `<div style="background:var(--panel);border:1px solid var(--panel-border);border-radius:10px;padding:24px 28px;max-width:340px;width:90%;box-shadow:0 8px 32px rgba(0,0,0,.5);">
     <div style="font-size:13px;color:var(--pt);margin-bottom:6px;font-weight:600;letter-spacing:1px;">BULK LINK</div>
-    <div style="font-size:11px;color:var(--accent);font-family:'Share Tech Mono',monospace;margin-bottom:14px;">${selectedDids.length} devices → ${escXml(tgtName)}</div>
+    <div style="font-size:11px;color:var(--accent);font-family:'JetBrains Mono',monospace;margin-bottom:14px;">${selectedDids.length} devices → ${escXml(tgtName)}</div>
     <div style="margin-bottom:12px;">
       <div style="font-size:10px;color:var(--pt-dim);letter-spacing:1px;margin-bottom:5px;">LINK TYPE</div>
       <select id="_blm2_type" class="field-select">
-        ${['access','trunk','internet','ztna','ha_cluster'].map(t => `<option value="${t}">${t}</option>`).join('')}
+        ${['access','trunk','internet','ztna','ipsec','ha_cluster'].map(t => `<option value="${t}">${t}</option>`).join('')}
       </select>
     </div>
     <div style="margin-bottom:18px;">
@@ -4651,7 +4904,7 @@ function renderSites() {
     lbl.setAttribute('y', s.y + 20);
     lbl.setAttribute('fill', s.color);
     lbl.setAttribute('font-size', '14');
-    lbl.setAttribute('font-family', "'Orbitron',monospace");
+    lbl.setAttribute('font-family', "\'Inter\',sans-serif");
     lbl.setAttribute('font-weight', '800');
     lbl.setAttribute('letter-spacing', '1.5');
     lbl.textContent = s.name.toUpperCase();
@@ -4664,7 +4917,7 @@ function renderSites() {
     cnt.setAttribute('text-anchor', 'end');
     cnt.setAttribute('fill', s.color + 'cc');
     cnt.setAttribute('font-size', '11');
-    cnt.setAttribute('font-family', "'Share Tech Mono',monospace");
+    cnt.setAttribute('font-family', "\'JetBrains Mono\',monospace");
     cnt.textContent = `${s.device_count} device${s.device_count === 1 ? '' : 's'}`;
     gg.appendChild(cnt);
 
@@ -4692,7 +4945,7 @@ function renderGroups() {
     const lbl = document.createElementNS('http://www.w3.org/2000/svg','text');
     lbl.setAttribute('fill', g.color);
     lbl.setAttribute('font-size','14');
-    lbl.setAttribute('font-family',"'Orbitron',monospace");
+    lbl.setAttribute('font-family',"\'Inter\',sans-serif");
     lbl.setAttribute('font-weight','900');
     lbl.setAttribute('letter-spacing','2');
     lbl.setAttribute('filter','url(#glow-group)');
@@ -4850,9 +5103,9 @@ function showGroupPanel(g) {
   // Escape key for safe embedding inside a JS string in an HTML attribute
   const jsGkey = gkey.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
   document.getElementById('panel-body').innerHTML = `
-    <div class="field-group"><div class="field-label">NAME</div><span style="color:var(--accent);font-family:'Share Tech Mono',monospace;font-size:11px;">${escXml(g.name)}</span></div>
-    <div class="field-group"><div class="field-label">COLOR</div><span style="color:${escXml(curColor)};font-family:'Share Tech Mono',monospace;font-size:11px;">&#9632; ${escXml(curColor)}</span></div>
-    <div class="field-group"><div class="field-label">SIZE</div><span style="color:var(--pt-sub);font-family:'Share Tech Mono',monospace;font-size:10px;">${Math.round(g.w)} × ${Math.round(g.h)}</span></div>
+    <div class="field-group"><div class="field-label">NAME</div><span style="color:var(--accent);font-family:'JetBrains Mono',monospace;font-size:11px;">${escXml(g.name)}</span></div>
+    <div class="field-group"><div class="field-label">COLOR</div><span style="color:${escXml(curColor)};font-family:'JetBrains Mono',monospace;font-size:11px;">&#9632; ${escXml(curColor)}</span></div>
+    <div class="field-group"><div class="field-label">SIZE</div><span style="color:var(--pt-sub);font-family:'JetBrains Mono',monospace;font-size:10px;">${Math.round(g.w)} × ${Math.round(g.h)}</span></div>
     ${isPwGroup ? `
     <div class="field-group" style="margin-top:12px">
       <div class="field-label">COLOR OVERRIDE</div>
@@ -4862,7 +5115,7 @@ function showGroupPanel(g) {
                style="width:36px;height:24px;cursor:pointer;border:none;background:none;padding:0"/>
         ${pwGroupOverrides[gkey]?.color
           ? `<button class="btn" style="font-size:10px;padding:2px 8px" onclick="resetPwGroupColor('${jsGkey}')">Reset</button>`
-          : `<span style="color:var(--pt-dimmer);font-size:10px;font-family:'Share Tech Mono',monospace">auto</span>`}
+          : `<span style="color:var(--pt-dimmer);font-size:10px;font-family:'JetBrains Mono',monospace">auto</span>`}
       </div>
     </div>` : ''}
   `;
@@ -4922,6 +5175,34 @@ function resetPwLayout() {
   toast('Layout reset to auto');
 }
 
+// Re-layout from scratch using the tier-based algorithm: gateway/FW groups
+// anchor the top of each site, switches mid, endpoint groups (VMs, IPMI,
+// servers) at the bottom. WAN/Internet sites anchor the top of the canvas.
+// Confirmation-gated because it wipes all manual drag positions.
+function autoArrangePwLayout() {
+  const nGroupOvr = Object.keys(pwGroupOverrides || {}).length;
+  const nNodeOvr  = Object.keys(pwOverrides || {}).length;
+  const total = nGroupOvr + nNodeOvr;
+  const msg = total === 0
+    ? `Re-layout all sites and groups by topology tier?`
+    : `Auto-Arrange will reset <b>${total}</b> manual position${total === 1 ? '' : 's'} ` +
+      `(${nGroupOvr} group${nGroupOvr === 1 ? '' : 's'}, ${nNodeOvr} device${nNodeOvr === 1 ? '' : 's'}) ` +
+      `and re-layout everything by topology tier.<br><br>` +
+      `<span style="font-size:11px;color:var(--text3,#888)">` +
+      `Gateway/firewall groups anchor the top of each site, switches in the ` +
+      `middle, endpoint groups at the bottom. WAN/Internet sites move to the ` +
+      `top of the canvas. Links become orthogonal elbows.</span>`;
+  _confirm(
+    msg,
+    () => {
+      resetPwLayout();
+      toast('Auto-Arrange applied — sites and groups re-tiered');
+    },
+    'Auto-Arrange',
+    false
+  );
+}
+
 // Wipe every manually-drawn pwLink (VLAN trunks, VPN tunnels, etc.). Useful
 // when validating auto-link inference — manual links suppress matching
 // auto-links, so removing them surfaces what the auto-link engine actually
@@ -4979,11 +5260,11 @@ function showPwLinkPanel(lkId) {
   document.getElementById('panel-title').textContent = 'PW LINK';
   document.getElementById('panel-icon').textContent = '⟷';
   document.getElementById('panel-body').innerHTML = `
-    <div class="field-group"><div class="field-label">FROM</div><span style="color:var(--accent);font-family:'Share Tech Mono',monospace;font-size:11px;">${escXml(_pwDevName(lk.src_did))}</span></div>
-    <div class="field-group"><div class="field-label">TO</div><span style="color:var(--accent);font-family:'Share Tech Mono',monospace;font-size:11px;">${escXml(_pwDevName(lk.tgt_did))}</span></div>
+    <div class="field-group"><div class="field-label">FROM</div><span style="color:var(--accent);font-family:'JetBrains Mono',monospace;font-size:11px;">${escXml(_pwDevName(lk.src_did))}</span></div>
+    <div class="field-group"><div class="field-label">TO</div><span style="color:var(--accent);font-family:'JetBrains Mono',monospace;font-size:11px;">${escXml(_pwDevName(lk.tgt_did))}</span></div>
     <div class="field-group"><div class="field-label">TYPE</div>
       <select onchange="setPwLinkType('${lkId}',this.value)" class="field-select">
-        ${['trunk','access','internet','ztna','ha_cluster'].map(t=>`<option value="${t}"${lk.link_type===t?' selected':''}>${t}</option>`).join('')}
+        ${['trunk','access','internet','ztna','ipsec','ha_cluster'].map(t=>`<option value="${t}"${lk.link_type===t?' selected':''}>${t}</option>`).join('')}
       </select>
     </div>
     <div class="field-group"><div class="field-label">LABEL</div>
@@ -5147,11 +5428,14 @@ async function _inlineFontsForExport() {
   // Inline self-hosted fonts into the exported SVG/PNG so labels render
   // correctly when the file is opened outside the app. Fetched from /fonts/
   // — no external CDN dependency, works fully offline.
+  // Inline a small set of the most-used weights — the PNG export only
+  // needs labels readable, not the full type system.
   const FONTS = [
-    { family: 'Orbitron',        weight: 400, file: 'orbitron-v35-latin-regular.woff2'        },
-    { family: 'Orbitron',        weight: 700, file: 'orbitron-v35-latin-700.woff2'            },
-    { family: 'Orbitron',        weight: 900, file: 'orbitron-v35-latin-900.woff2'            },
-    { family: 'Share Tech Mono', weight: 400, file: 'share-tech-mono-v16-latin-regular.woff2' },
+    { family: 'Inter',         weight: 400, file: 'inter-v20-latin-regular.woff2'        },
+    { family: 'Inter',         weight: 600, file: 'inter-v20-latin-600.woff2'            },
+    { family: 'Inter',         weight: 700, file: 'inter-v20-latin-700.woff2'            },
+    { family: 'Inter',         weight: 900, file: 'inter-v20-latin-900.woff2'            },
+    { family: 'JetBrains Mono', weight: 400, file: 'jetbrains-mono-v24-latin-regular.woff2' },
   ];
   const parts = [];
   for (const f of FONTS) {
@@ -5300,7 +5584,7 @@ async function importPwLayout(file) {
     const nGroups = Object.keys(data.pwGroupOverrides).length;
     const nLinks  = data.pwLinks.length;
     _confirm(
-      `Import layout?<br><br><span style="font-family:Share Tech Mono,monospace;font-size:11px;color:rgba(0,212,255,0.7)">${nNodes} node overrides · ${nGroups} groups · ${nLinks} links</span><br><br>This will replace the current PingWatch layout.`,
+      `Import layout?<br><br><span style="font-family:'JetBrains Mono',monospace;font-size:11px;color:rgba(0,212,255,0.7)">${nNodes} node overrides · ${nGroups} groups · ${nLinks} links</span><br><br>This will replace the current PingWatch layout.`,
       () => {
         pwOverrides      = data.pwOverrides;
         pwGroupOverrides = data.pwGroupOverrides;
@@ -5337,12 +5621,12 @@ function showMultiPanel() {
       const dot = `<span style="color:${c};font-size:9px">●</span>`;
       return `<div style="display:flex;align-items:center;gap:5px;padding:2px 0;border-bottom:1px solid rgba(255,255,255,0.04)">
         ${dot}
-        <span style="font-family:'Share Tech Mono',monospace;font-size:9px;color:rgba(255,255,255,0.75);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escXml(d.name)}</span>
-        <span style="font-family:'Share Tech Mono',monospace;font-size:8px;color:rgba(255,255,255,0.35)">${escXml(d.host)}</span>
+        <span style="font-family:'JetBrains Mono',monospace;font-size:9px;color:rgba(255,255,255,0.75);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escXml(d.name)}</span>
+        <span style="font-family:'JetBrains Mono',monospace;font-size:8px;color:rgba(255,255,255,0.35)">${escXml(d.host)}</span>
       </div>`;
     }).join('');
     const moreRow = selDevs.length > 12
-      ? `<div style="font-size:9px;color:var(--pt-dimmer);font-family:'Share Tech Mono',monospace;padding-top:3px">+${selDevs.length - 12} more…</div>`
+      ? `<div style="font-size:9px;color:var(--pt-dimmer);font-family:'JetBrains Mono',monospace;padding-top:3px">+${selDevs.length - 12} more…</div>`
       : '';
 
     const _typeOpts = [
@@ -5361,9 +5645,9 @@ function showMultiPanel() {
       <div class="panel-section">
         <div class="panel-section-title">SELECTION — ${selDevs.length} DEVICES</div>
         <div style="display:flex;gap:10px;margin-bottom:8px">
-          <span style="font-size:9px;font-family:'Share Tech Mono',monospace;color:#00ff9d">▲ ${upCount} UP</span>
-          ${downCount ? `<span style="font-size:9px;font-family:'Share Tech Mono',monospace;color:#ff3333">▼ ${downCount} DOWN</span>` : ''}
-          ${unkCount  ? `<span style="font-size:9px;font-family:'Share Tech Mono',monospace;color:#888">? ${unkCount}</span>` : ''}
+          <span style="font-size:9px;font-family:'JetBrains Mono',monospace;color:#00ff9d">▲ ${upCount} UP</span>
+          ${downCount ? `<span style="font-size:9px;font-family:'JetBrains Mono',monospace;color:#ff3333">▼ ${downCount} DOWN</span>` : ''}
+          ${unkCount  ? `<span style="font-size:9px;font-family:'JetBrains Mono',monospace;color:#888">? ${unkCount}</span>` : ''}
         </div>
         <div style="max-height:160px;overflow-y:auto;">${devRows}${moreRow}</div>
       </div>
@@ -5665,7 +5949,7 @@ function showDashboardPanel() {
           <span class="dash-bar-count">${c}</span>
         </div>`).join('')}
     </div>` : ''}
-    ${!nodes.length ? '<div style="color:rgba(255,255,255,0.18);font-family:Share Tech Mono,monospace;font-size:10px;text-align:center;padding:16px 0;letter-spacing:1px;">RIGHT-CLICK TO ADD DEVICES</div>' : ''}
+    ${!nodes.length ? '<div style="color:rgba(255,255,255,0.18);font-family:\'JetBrains Mono\',monospace;font-size:10px;text-align:center;padding:16px 0;letter-spacing:1px;">RIGHT-CLICK TO ADD DEVICES</div>' : ''}
   `;
   document.getElementById('panel-actions').innerHTML = '';
 }
@@ -5824,7 +6108,7 @@ function initMainBg() {
     drawHexGrid(W, H, t);
 
     // Data streams
-    ctx.font = '10px Share Tech Mono';
+    ctx.font = '10px JetBrains Mono';
     const sC = BG.stream, sH = BG.streamHot;
     streams.forEach(s => {
       s.y += s.speed;
@@ -5954,8 +6238,9 @@ loadPages().then(async () => {
   const pageIds = pages.map(p => String(p.id));
   if (saved && saved !== 'pw' && pageIds.includes(saved)) {
     await switchPage(parseInt(saved));
-  } else {
-    await switchToPingWatchPage();
+  } else if (pages.length) {
+    // PingWatch Live tab is gone — always open the first manual page.
+    await switchPage(pages[0].id);
   }
 }).then(() => {
   const wrap = document.getElementById('canvas-wrap');
@@ -5997,14 +6282,17 @@ document.addEventListener('fullscreenchange', () => {
   }
 });
 
-// Reload pages when PingWatch parent signals tab switch
+// Reload pages when parent signals tab switch
 window.addEventListener('message', e => {
   if (e.origin !== window.location.origin) return;
   if (e.data && e.data.type === 'pw_reload_pages') {
     loadPages().then(() => {
-      if (isPingWatchPage) switchToPingWatchPage();
-      else if (!pages.find(p => p.id === currentPageId)) switchToPingWatchPage();
-      else renderPageBar();
+      if (!pages.find(p => p.id === currentPageId) && pages.length) {
+        // Selected page was deleted on another tab — switch to first available.
+        switchPage(pages[0].id);
+      } else {
+        renderPageBar();
+      }
     });
   }
 });

@@ -578,6 +578,32 @@ class Sensor:
         }
 
 
+def _coerce_parent_ports(raw) -> dict:
+    """Return parent_device_ports in canonical list-of-pairs shape regardless
+    of whether the in-memory value uses the legacy single-dict form."""
+    if not isinstance(raw, dict):
+        return {}
+    out = {}
+    for pid, val in raw.items():
+        if not isinstance(pid, str) or not pid:
+            continue
+        if isinstance(val, list):
+            pairs = [p for p in val if isinstance(p, dict)]
+        elif isinstance(val, dict):
+            pairs = [val]
+        else:
+            continue
+        clean = []
+        for p in pairs:
+            l = p.get("lport", "") if isinstance(p.get("lport", ""), str) else ""
+            r = p.get("rport", "") if isinstance(p.get("rport", ""), str) else ""
+            if l or r:
+                clean.append({"lport": l, "rport": r})
+        if clean:
+            out[pid] = clean
+    return out
+
+
 class Device:
     def __init__(self, device_id, name, host, group="Default Group", site=""):
         self.device_id   = device_id
@@ -615,6 +641,16 @@ class Device:
         self.snmp_v3_priv_proto_default = ""   # DES | AES | AES-192 | AES-256
         self.snmp_v3_priv_pass_default  = ""   # Fernet ciphertext
         self.snmp_v3_context_default    = ""
+        # Live Map parent linking (v1.0+) — JSON-persisted list of device IDs
+        # this device hangs off. Empty list = orphan / root. Multi-parent
+        # supports dual-NIC and dual-homed devices. Group-level fallback lives
+        # in topo_settings('pw_group_parents').
+        self.parent_device_ids = []
+        # Per-parent port wiring (v1.x+) — {pid: {"lport": str, "rport": str}}.
+        # Keys only ever reference device ids (never "group:<name>"); group
+        # parents don't carry port info. Walker code on parent_device_ids is
+        # unaffected — read this map only when surfacing wiring details.
+        self.parent_device_ports = {}
         # Cached status string; invalidated (set to None) whenever a sensor's
         # alive / _threshold_state / running / alerts_muted changes, or when
         # a sensor is added/removed. Recomputed on next read.
@@ -674,6 +710,14 @@ class Device:
             # Origin breadcrumb (Auto-Discovery). 0/"" for manually-added devices.
             "discovered_at":         float(getattr(self, "discovered_at", 0) or 0),
             "discovered_from_cidr":  getattr(self, "discovered_from_cidr", "") or "",
+            # Live Map parent linking — list of device IDs this device hangs off.
+            "parent_device_ids":     list(getattr(self, "parent_device_ids", []) or []),
+            # Per-parent port wiring (Live Map link info). Canonical shape is
+            # {pid: [{lport, rport}, ...]} — a list to support LACP / multiple
+            # physical links between the same device pair. Coerce here so even
+            # if something writes the legacy single-dict shape to the field
+            # directly, the API output stays uniform.
+            "parent_device_ports":   _coerce_parent_ports(getattr(self, "parent_device_ports", {})),
         }
 
 

@@ -48,6 +48,13 @@ function _sseFlush(){
   }
   if(typeof _dwOnDeviceUpdate==='function'&&Object.keys(_sseBatch.devStatuses).length)
     _dwOnDeviceUpdate();
+  // Notify the Live Map iframe (if loaded) so it can refresh in place.
+  try {
+    const _lmf=document.getElementById('livemap-frame');
+    if(_lmf && _lmf.contentWindow && (Object.keys(_sseBatch.sensors).length || Object.keys(_sseBatch.devStatuses).length)) {
+      _lmf.contentWindow.postMessage({type:'lm_update'}, window.location.origin);
+    }
+  } catch(e) {}
   _sseBatch.sensors={};
   _sseBatch.devStatuses={};
 }
@@ -396,7 +403,7 @@ function _show2faPrompt(challengeId, username, rememberHoursMax){
     codeField.placeholder='6-digit code or recovery code';
     codeField.autocomplete='one-time-code';
     codeField.maxLength=20;
-    codeField.style.cssText='width:100%;padding:10px;margin-top:8px;background:var(--surface-inset,#0e141a);color:var(--text);border:1px solid var(--border);border-radius:6px;font-family:monospace;letter-spacing:2px;text-align:center;';
+    codeField.style.cssText='width:100%;padding:10px;margin-top:8px;background:var(--surface-inset,#0e141a);color:var(--text);border:1px solid var(--border);border-radius:6px;font-family:monospace;letter-spacing:0.5px;text-align:center;';
     if(passField&&passField.parentNode){passField.parentNode.insertBefore(codeField, passField.nextSibling);}
   }
   codeField.style.display='block';
@@ -500,7 +507,7 @@ function _showRadiusChallengePrompt(challengeId, username, prompt){
     respField.placeholder='Enter response';
     respField.autocomplete='one-time-code';
     respField.maxLength=64;
-    respField.style.cssText='width:100%;padding:10px;margin-top:8px;background:var(--surface-inset,#0e141a);color:var(--text);border:1px solid var(--border);border-radius:6px;font-family:monospace;letter-spacing:2px;text-align:center;';
+    respField.style.cssText='width:100%;padding:10px;margin-top:8px;background:var(--surface-inset,#0e141a);color:var(--text);border:1px solid var(--border);border-radius:6px;font-family:monospace;letter-spacing:0.5px;text-align:center;';
     if(promptEl&&promptEl.parentNode){promptEl.parentNode.insertBefore(respField, promptEl.nextSibling);}
   }
   respField.style.display='block';
@@ -605,7 +612,7 @@ function _openCmdPalette(){
     <div class="pw-cmd-box" onclick="event.stopPropagation()">
       <div class="pw-cmd-input-row">
         <span class="pw-cmd-input-ico">${typeof icon==='function'?icon('search',14):''}</span>
-        <input id="pw-cmd-inp" type="text" placeholder="Search devices, sensors, IPs…  (Esc to close)"
+        <input id="pw-cmd-inp" type="text" placeholder="Search devices, sensors, IPs, hostnames…  (Esc to close)"
                autocomplete="off" spellcheck="false">
         <span class="pw-cmd-input-kbd">Esc</span>
       </div>
@@ -632,6 +639,11 @@ function _closeCmdPalette(){
   _cmdResults = [];
   _cmdSelIdx = 0;
 }
+
+// Token bumps on each keystroke so a slow /api/ipam/search response from a
+// previous query can't overwrite the current results when it finally lands.
+let _cmdIpFetchToken = 0;
+let _cmdIpFetchTimer = null;
 
 function _cmdPaletteSearch(){
   const inp = document.getElementById('pw-cmd-inp');
@@ -666,6 +678,41 @@ function _cmdPaletteSearch(){
   _cmdResults = out.slice(0, 40);
   _cmdSelIdx = 0;
   _cmdPaletteRender();
+
+  // IPAM allocations live in the DB, not in S — fetch async so the palette
+  // stays responsive. Debounce 180ms to skip mid-typing churn. Race-guarded:
+  // a stale response will see its token mismatch and bail without re-rendering.
+  if (_cmdIpFetchTimer) clearTimeout(_cmdIpFetchTimer);
+  if (!q) return;
+  const myToken = ++_cmdIpFetchToken;
+  _cmdIpFetchTimer = setTimeout(async () => {
+    try {
+      const r = await fetch('/api/ipam/search?q=' + encodeURIComponent(q));
+      if (!r.ok) return;
+      if (myToken !== _cmdIpFetchToken) return;  // user kept typing — drop stale
+      const j = await r.json();
+      const ips = (j.results || []).slice(0, 20).map(row => ({
+        kind: 'ip',
+        ip: row.ip,
+        name: row.name || '',
+        dns_name: row.dns_name || '',
+        device_id: row.device_id || '',
+        ip_kind: row.kind || '',   // gateway/reserved/discovered/stale/…
+        subnet_id:   row.subnet_id,
+        subnet_cidr: row.subnet_cidr,
+        subnet_name: row.subnet_name || '',
+      }));
+      if (myToken !== _cmdIpFetchToken) return;
+      // Keep devices on top — they're the most common target and shouldn't
+      // shift when the async IP fetch lands. Order: devices, IPs, sensors.
+      const sync = _cmdResults.filter(r => r.kind !== 'ip');
+      const devs = sync.filter(r => r.kind === 'device');
+      const sens = sync.filter(r => r.kind === 'sensor');
+      _cmdResults = devs.concat(ips).concat(sens).slice(0, 60);
+      _cmdSelIdx = 0;
+      _cmdPaletteRender();
+    } catch { /* network blip — keep the sync results we already rendered */ }
+  }, 180);
 }
 
 function _cmdPaletteRender(){
@@ -676,6 +723,7 @@ function _cmdPaletteRender(){
     return;
   }
   const devs = _cmdResults.filter(r => r.kind==='device');
+  const ips  = _cmdResults.filter(r => r.kind==='ip');
   const sens = _cmdResults.filter(r => r.kind==='sensor');
   let html = '';
   if (devs.length) {
@@ -686,6 +734,30 @@ function _cmdPaletteRender(){
         <span class="pw-cmd-dot ${r.status}"></span>
         <span class="pw-cmd-name">${esc(r.name)}</span>
         <span class="pw-cmd-meta">${esc(r.host)}${r.vendor?' · '+esc(r.vendor):''}</span>
+      </div>`;
+    });
+  }
+  if (ips.length) {
+    html += '<div class="pw-cmd-section">IPs</div>';
+    ips.forEach(r => {
+      const idx = _cmdResults.indexOf(r);
+      // Right-side meta: subnet CIDR + optional subnet label so the user can
+      // tell which network the hit lives in. Hostname (or dns_name) goes in
+      // the main slot — useful when matching by hostname rather than IP.
+      const subLabel = r.subnet_name ? r.subnet_cidr + ' · ' + r.subnet_name : r.subnet_cidr;
+      const nameSlot = r.name || r.dns_name || (r.ip_kind === 'discovered' ? 'no hostname' : '—');
+      // Map allocation kind → an existing status colour so the dot stays
+      // visually consistent with the rest of the palette.
+      const dotCls = r.device_id ? 'up'
+                   : r.ip_kind === 'stale'      ? 'warn'
+                   : r.ip_kind === 'discovered' ? 'up'
+                   : r.ip_kind === 'gateway'    ? 'up'
+                   : r.ip_kind === 'conflict'   ? 'down'
+                   : 'unknown';
+      html += `<div class="pw-cmd-row${idx===_cmdSelIdx?' sel':''}" data-idx="${idx}" onclick="_cmdPickIdx(${idx})">
+        <span class="pw-cmd-dot ${dotCls}"></span>
+        <span class="pw-cmd-name"><span class="pw-cmd-ip">${esc(r.ip)}</span> ${esc(nameSlot)}</span>
+        <span class="pw-cmd-meta">${esc(subLabel)}</span>
       </div>`;
     });
   }
@@ -726,7 +798,25 @@ function _cmdPickIdx(idx){
   const r = _cmdResults[idx];
   if (!r) return;
   _closeCmdPalette();
-  // Switch to Devices tab so the user lands somewhere coherent
+  if (r.kind === 'ip') {
+    // Navigate to IPAM → select the right subnet → focus the matching row.
+    // _ipamOnSubnetChange is async (fetches allocations); the focus has to
+    // wait for it to land, hence the .then(). All three globals live in
+    // ipam.js, present whenever the IPAM tab has been rendered at least once.
+    if (typeof switchMainTab === 'function') switchMainTab('ipam');
+    setTimeout(() => {
+      if (typeof _ipamOnSubnetChange === 'function' && r.subnet_id) {
+        const p = _ipamOnSubnetChange(r.subnet_id);
+        const focus = () => {
+          if (typeof _ipamFocusIp === 'function') _ipamFocusIp(r.ip);
+        };
+        if (p && typeof p.then === 'function') p.then(focus, focus);
+        else                                   setTimeout(focus, 100);
+      }
+    }, 50);
+    return;
+  }
+  // Default: switch to Devices tab so the user lands somewhere coherent
   if (typeof switchMainTab === 'function') switchMainTab('devices');
   // Open the device's detail window
   if (typeof openDevWin === 'function' && r.did) {
@@ -1696,6 +1786,37 @@ async function _refreshFlapList(){
   }catch(_){}
 }
 
+// ── Rail expand/collapse ────────────────────────────────────────
+// Toggles a label column next to each rail icon. Persisted to localStorage
+// so the user's preference survives reloads.
+function _railToggle(){
+  const rail = document.getElementById('rail');
+  const layout = document.getElementById('layout');
+  if (!rail) return;
+  const expand = !rail.classList.contains('expanded');
+  rail.classList.toggle('expanded', expand);
+  // Mirror the class on #layout for the grid-column override (fallback for
+  // browsers that don't support :has()).
+  if (layout) layout.classList.toggle('rail-expanded', expand);
+  try { localStorage.setItem('pw_rail_expanded', expand ? '1' : '0'); } catch(_) {}
+  const btn = document.getElementById('railToggle');
+  if (btn) btn.title = expand ? 'Collapse sidebar' : 'Expand sidebar';
+}
+(function _railRestore(){
+  try {
+    if (localStorage.getItem('pw_rail_expanded') === '1') {
+      document.addEventListener('DOMContentLoaded', function(){
+        const rail = document.getElementById('rail');
+        const layout = document.getElementById('layout');
+        if (rail)   rail.classList.add('expanded');
+        if (layout) layout.classList.add('rail-expanded');
+        const btn = document.getElementById('railToggle');
+        if (btn) btn.title = 'Collapse sidebar';
+      });
+    }
+  } catch(_) {}
+})();
+
 function switchMainTab(tab){
   activeMainTab=tab;
   try{localStorage.setItem('pw_tab',tab);}catch(e){}
@@ -1704,6 +1825,7 @@ function switchMainTab(tab){
   document.getElementById('tabEvents').classList.toggle('active',tab==='events');
   { const _ab=document.getElementById('tabAlerting'); if(_ab) _ab.classList.toggle('active',tab==='alerting'); }
   document.getElementById('tabMap').classList.toggle('active',tab==='map');
+  { const _lm=document.getElementById('tabLiveMap'); if(_lm) _lm.classList.toggle('active',tab==='livemap'); }
   document.getElementById('tabBackups').classList.toggle('active',tab==='backups');
   document.getElementById('tabIpam').classList.toggle('active',tab==='ipam');
   { const _rb=document.getElementById('tabReports'); if(_rb) _rb.classList.toggle('active',tab==='reports'); }
@@ -1711,6 +1833,7 @@ function switchMainTab(tab){
   const dashboardView=document.getElementById('dashboardView');
   const eventsView   =document.getElementById('eventsView');
   const mapView      =document.getElementById('mapView');
+  const liveMapView  =document.getElementById('liveMapView');
   const backupsView  =document.getElementById('backupsView');
   const ipamView     =document.getElementById('ipamView');
   const reportsView  =document.getElementById('reportsView');
@@ -1721,6 +1844,7 @@ function switchMainTab(tab){
   dashboardView.style.display='none';
   eventsView.style.display   ='none';
   mapView.style.display      ='none';
+  if(liveMapView) liveMapView.style.display='none';
   backupsView.style.display  ='none';
   ipamView.style.display     ='none';
   if(reportsView)  reportsView.style.display ='none';
@@ -1733,12 +1857,19 @@ function switchMainTab(tab){
   if(_devPg) _devPg.style.display='none';
   // Cancel any in-flight IPAM DNS poll when leaving the IPAM tab
   if(typeof _ipamCancelDnsInterval==='function') _ipamCancelDnsInterval();
-  const _mf=document.getElementById('map-frame');
+  const _mf =document.getElementById('map-frame');
+  const _lmf=document.getElementById('livemap-frame');
   // Pause/resume outer background canvas on Map tab (iframe covers it anyway)
-  const _isMap = tab === 'map';
-  window._bgMapActive = _isMap;
-  document.getElementById('netbg').style.visibility = _isMap ? 'hidden' : '';
-  if (!_isMap) window._bgResume?.();
+  const _isMap     = tab === 'map';
+  const _isLiveMap = tab === 'livemap';
+  window._bgMapActive = _isMap || _isLiveMap;
+  document.getElementById('netbg').style.visibility = (_isMap || _isLiveMap) ? 'hidden' : '';
+  if (!_isMap && !_isLiveMap) window._bgResume?.();
+  // Sync theme to the livemap iframe on every tab switch (cheap, idempotent)
+  try {
+    const _th = localStorage.getItem('pw_theme') || 'dark';
+    _lmf?.contentWindow?.postMessage({type:'theme',value:_th},window.location.origin);
+  } catch(e){}
   if(tab==='dashboard'){
     dashboardView.style.display='flex';
     emptyMain.style.display='none';
@@ -1763,6 +1894,13 @@ function switchMainTab(tab){
       type:'ntm_resume',
       devices:Object.values(S.devices).map(d=>({did:d.did||d.device_id,status:d.status}))
     },window.location.origin);
+  } else if(tab==='livemap'){
+    emptyMain.style.display='none';
+    dpanels.style.display='none';
+    if(liveMapView) liveMapView.style.display='flex';
+    if(_lmf&&!_lmf.src&&_lmf.dataset.src) _lmf.src=_lmf.dataset.src;
+    else if(_lmf&&_lmf.contentWindow) _lmf.contentWindow.postMessage({type:'lm_refresh'},window.location.origin);
+    _mf?.contentWindow?.postMessage({type:'ntm_pause'},window.location.origin);
   } else if(tab==='backups'){
     backupsView.style.display='flex';
     emptyMain.style.display='none';
@@ -1824,6 +1962,28 @@ async function _refreshDevices(){
       });
       renderDp(dev);
     });
+    // Surface known sites that have no devices yet (sites added via Live Map
+    // but not yet assigned). They render as empty collapsible sections so the
+    // user can see at a glance which sites exist before assigning devices.
+    let hasSiteSections = false;
+    try {
+      const sd = await (await fetch('/api/sites')).json();
+      (sd.sites||[]).forEach(name=>{
+        if (typeof ensureSiteSection==='function') ensureSiteSection(name);
+      });
+      hasSiteSections = (sd.sites||[]).length > 0;
+      if (typeof refreshSiteCounts==='function') refreshSiteCounts();
+    } catch(_) {}
+    // The initial splash/dpanels toggle in switchMainTab() only looked at
+    // devices, so a fresh install that has sites but no devices stayed on
+    // the radar splash even though we just appended empty site sections.
+    // Re-evaluate once sites have been merged.
+    if (hasSiteSections && !Object.keys(S.devices).length) {
+      const em = document.getElementById('emptyMain');
+      const dp = document.getElementById('dpanels');
+      if (em) em.style.display = 'none';
+      if (dp) dp.style.display = '';
+    }
     updatePills();
   }catch(e){}
 }

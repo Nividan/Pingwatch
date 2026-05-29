@@ -116,6 +116,154 @@ def _maybe_resize_executor():
         log.info(f"Executor auto-resized to {_mw} workers ({_count} sensors)")
 
 
+_MAX_PARENT_IDS = 8
+_MAX_CYCLE_HOPS = 32
+
+# SNMPv3 whitelists — single source of truth for server-side validation.
+# Empty string is accepted in every set so that an inherited / cleared value
+# round-trips correctly. Mirror of the frontend dropdown options in
+# frontend/forms-utils.js (_SNMP_V3_LEVELS / _SNMP_V3_AUTH_PROTOS /
+# _SNMP_V3_PRIV_PROTOS). Adding a new protocol means updating both sides.
+_V3_LEVELS = frozenset({"", "noAuthNoPriv", "authNoPriv", "authPriv"})
+_V3_AUTH   = frozenset({"", "MD5", "SHA", "SHA-224", "SHA-256", "SHA-384", "SHA-512"})
+_V3_PRIV   = frozenset({"", "DES", "AES", "AES-192", "AES-256"})
+_MAX_PORT_LEN = 32  # Switch interface names are short — Gi1/0/24, Te0/0/1, ether1, etc.
+
+
+def _normalize_parent_ports(raw, allowed_pids) -> "tuple[bool, dict, str]":
+    """Validate `parent_device_ports`: {pid: [{"lport": str, "rport": str}, ...]}.
+
+    A pid may have multiple port pairs (LACP — same device pair connected over
+    multiple physical interfaces). The output shape is always a list of pairs
+    per pid; the legacy single-object shape `{pid: {lport, rport}}` is accepted
+    on input and wrapped, so older clients keep working.
+
+    Entries whose pid isn't in `allowed_pids` are silently dropped (e.g. user
+    removed the parent but a stale port entry lingered). Empty/all-blank port
+    pairs are dropped too. A pid whose list ends up empty is omitted entirely.
+
+    Returns (ok, cleaned, error). Empty/missing input is valid.
+    """
+    if raw is None:
+        return True, {}, ""
+    if not isinstance(raw, dict):
+        return False, {}, "parent_device_ports must be an object"
+    cleaned: dict = {}
+    for pid, val in raw.items():
+        if not isinstance(pid, str) or not pid:
+            continue
+        if pid not in allowed_pids:
+            continue  # drop ports for parents the user no longer has
+        # Accept both shapes: a single {lport,rport} dict OR a list of dicts.
+        entries = val if isinstance(val, list) else [val]
+        out_pairs = []
+        for entry in entries:
+            if not isinstance(entry, dict):
+                return False, {}, "parent_device_ports entries must be objects"
+            lport = entry.get("lport", "")
+            rport = entry.get("rport", "")
+            if not isinstance(lport, str) or not isinstance(rport, str):
+                return False, {}, "lport/rport must be strings"
+            lport = lport.strip()[:_MAX_PORT_LEN]
+            rport = rport.strip()[:_MAX_PORT_LEN]
+            if not lport and not rport:
+                continue  # nothing worth persisting for this pair
+            out_pairs.append({"lport": lport, "rport": rport})
+        if out_pairs:
+            cleaned[pid] = out_pairs
+    return True, cleaned, ""
+
+
+def _normalize_parent_ids(raw) -> "tuple[bool, list[str], str]":
+    """Validate + dedup a parent_device_ids input.
+
+    Each ref is either a device id (e.g. "d1") or a group reference of the
+    form "group:<group_name>". Group refs let a child point at an entire
+    cluster (e.g. a VM hanging off "the ESXi cluster" rather than 10 hosts).
+
+    Returns (ok, cleaned, error). Empty list is valid.
+    """
+    if raw is None:
+        return True, [], ""
+    if not isinstance(raw, list):
+        return False, [], "parent_device_ids must be a list"
+    if len(raw) > _MAX_PARENT_IDS:
+        return False, [], f"too many parents (max {_MAX_PARENT_IDS})"
+    seen = set()
+    cleaned = []
+    for p in raw:
+        if not isinstance(p, str):
+            return False, [], "parent ids must be strings"
+        p = p.strip()
+        if not p:
+            continue
+        if p.startswith("group:"):
+            gname = p[6:].strip()
+            if not gname:
+                return False, [], "group reference missing group name"
+            if len(gname) > 80:
+                return False, [], "group name too long"
+            p = "group:" + gname
+        else:
+            if len(p) > 64:
+                return False, [], "parent id too long"
+        if p in seen:
+            continue
+        seen.add(p)
+        cleaned.append(p)
+    return True, cleaned, ""
+
+
+def _detect_parent_cycle(STATE, did: str, new_parents: list) -> bool:
+    """Return True if assigning new_parents to did would create a cycle.
+
+    Walks up from each candidate parent by BFS. Group refs ("group:<name>")
+    expand to every device currently in that group — touching any of them
+    detects a cycle. Short-circuits at _MAX_CYCLE_HOPS to bound the worst
+    case if the graph is already corrupted.
+    """
+    if not new_parents:
+        return False
+    visited = set()
+    queue = list(new_parents)
+    hops = 0
+    while queue and hops < _MAX_CYCLE_HOPS:
+        nxt = []
+        for ref in queue:
+            if ref == did:
+                return True
+            if ref in visited:
+                continue
+            visited.add(ref)
+            if ref.startswith("group:"):
+                gname = ref[6:]
+                # Walk every device currently in this group.
+                for d in STATE.devices.values():
+                    if (d.group or "").strip() == gname:
+                        if d.device_id == did:
+                            return True
+                        nxt.extend(getattr(d, "parent_device_ids", []) or [])
+            else:
+                parent_dev = STATE.devices.get(ref)
+                if not parent_dev:
+                    continue
+                nxt.extend(getattr(parent_dev, "parent_device_ids", []) or [])
+        queue = nxt
+        hops += 1
+    return False
+
+
+def _filter_known_parents(STATE, refs: list, exclude_did: str = "") -> list:
+    """Drop unknown device refs; keep group refs (group may have no devices yet)."""
+    out = []
+    for p in refs:
+        if p.startswith("group:"):
+            out.append(p)
+        elif p in STATE.devices and p != exclude_did:
+            out.append(p)
+    return out
+
+
 def handle(h, method, path, body):
     """Return True if this module handled the request, False otherwise."""
     STATE = app_state.STATE  # always current reference
@@ -309,10 +457,6 @@ def handle(h, method, path, body):
         if vmware_password_default:
             from db.backups import encrypt_pw
             vmware_password_default = encrypt_pw(vmware_password_default)
-        # SNMPv3 device defaults — same validation whitelists as probes.py
-        _V3_LEVELS = {"", "noAuthNoPriv", "authNoPriv", "authPriv"}
-        _V3_AUTH   = {"", "MD5", "SHA", "SHA-224", "SHA-256", "SHA-384", "SHA-512"}
-        _V3_PRIV   = {"", "DES", "AES", "AES-192", "AES-256"}
         snmp_v3_user_default       = body.get("snmp_v3_user_default", "").strip()
         snmp_v3_level_default      = body.get("snmp_v3_level_default", "").strip()
         if snmp_v3_level_default not in _V3_LEVELS: snmp_v3_level_default = ""
@@ -327,6 +471,18 @@ def handle(h, method, path, body):
             from db.backups import encrypt_pw
             _v3_auth_pw_default = encrypt_pw(_v3_auth_pw_default) if _v3_auth_pw_default else ""
             _v3_priv_pw_default = encrypt_pw(_v3_priv_pw_default) if _v3_priv_pw_default else ""
+        # Optional parent linkage on create — validated against existing devices.
+        # New device's own did is not yet known here, so self-parent isn't possible.
+        parent_ok, parent_ids_clean, parent_err = _normalize_parent_ids(body.get("parent_device_ids"))
+        if not parent_ok:
+            h._json(400, {"error": parent_err}); return True
+        # Per-parent port wiring (Live Map link info). Validated against the
+        # *cleaned* parent list so stale pids in the map don't leak through.
+        pports_ok, parent_ports_clean, pports_err = _normalize_parent_ports(
+            body.get("parent_device_ports"), set(parent_ids_clean)
+        )
+        if not pports_ok:
+            h._json(400, {"error": pports_err}); return True
         did = STATE.add_device(name, host, group, site=site)
         with STATE._lock:
             if did in STATE.devices:
@@ -344,6 +500,16 @@ def handle(h, method, path, body):
                     STATE.devices[did].snmp_v3_auth_pass_default = _v3_auth_pw_default
                 if _v3_priv_pw_default:
                     STATE.devices[did].snmp_v3_priv_pass_default = _v3_priv_pw_default
+                # Drop unknown parent ids (e.g. user pasted a stale id); keep group refs.
+                _filtered_parents = _filter_known_parents(
+                    STATE, parent_ids_clean, exclude_did=did
+                )
+                STATE.devices[did].parent_device_ids = _filtered_parents
+                # Re-filter port map against the post-filter pid set so entries
+                # for dropped parents don't survive.
+                STATE.devices[did].parent_device_ports = {
+                    k: v for k, v in parent_ports_clean.items() if k in _filtered_parents
+                }
         _db_enqueue(lambda: db_save(STATE))
         _db_enqueue(_maybe_resize_executor)
         _did, _name, _host = did, name, host
@@ -494,10 +660,6 @@ def handle(h, method, path, body):
                     from db.backups import encrypt_pw
                     dev.vmware_password_default = encrypt_pw(_vpw)
                 # empty string = keep existing (don't clear)
-            # SNMPv3 device defaults
-            _V3_LEVELS = {"", "noAuthNoPriv", "authNoPriv", "authPriv"}
-            _V3_AUTH   = {"", "MD5", "SHA", "SHA-224", "SHA-256", "SHA-384", "SHA-512"}
-            _V3_PRIV   = {"", "DES", "AES", "AES-192", "AES-256"}
             if "snmp_v3_user_default" in body:
                 dev.snmp_v3_user_default = str(body["snmp_v3_user_default"]).strip()
             if "snmp_v3_level_default" in body:
@@ -548,6 +710,34 @@ def handle(h, method, path, body):
                     if _sip not in cleaned:
                         cleaned.append(_sip)
                 dev.secondary_ips = cleaned
+            if "parent_device_ids" in body:
+                ok, cleaned_parents, perr = _normalize_parent_ids(body["parent_device_ids"])
+                if not ok:
+                    h._json(400, {"error": perr}); return True
+                if did in cleaned_parents:
+                    h._json(400, {"error": "device cannot be its own parent"}); return True
+                # Drop unknown device refs (silently — they may have been deleted);
+                # keep group refs even if the group is empty (forward-compatible).
+                cleaned_parents = _filter_known_parents(STATE, cleaned_parents, exclude_did=did)
+                if _detect_parent_cycle(STATE, did, cleaned_parents):
+                    h._json(400, {"error": "parent assignment would create a cycle"}); return True
+                dev.parent_device_ids = cleaned_parents
+                # Keep the port map in sync with the new parent list — entries
+                # for removed parents drop out automatically.
+                dev.parent_device_ports = {
+                    k: v for k, v in (getattr(dev, "parent_device_ports", {}) or {}).items()
+                    if k in cleaned_parents
+                }
+            if "parent_device_ports" in body:
+                # Port edits without a corresponding parent list edit. Validate
+                # against the current (possibly just-updated above) parent set.
+                _allowed = set(getattr(dev, "parent_device_ids", []) or [])
+                pp_ok, pp_clean, pp_err = _normalize_parent_ports(
+                    body["parent_device_ports"], _allowed
+                )
+                if not pp_ok:
+                    h._json(400, {"error": pp_err}); return True
+                dev.parent_device_ports = pp_clean
             _dev_edit_name = dev.name
             _new_host = dev.host
             _new_name = dev.name
@@ -788,9 +978,6 @@ def handle(h, method, path, body):
             kwargs["radius_password"] = encrypt_pw(body["radius_password"])
         # SNMPv3: validate enum fields, encrypt passphrases.  Empty field in
         # body = keep existing (placeholder-submit pattern from UI).
-        _V3_LEVELS = {"", "noAuthNoPriv", "authNoPriv", "authPriv"}
-        _V3_AUTH   = {"", "MD5", "SHA", "SHA-224", "SHA-256", "SHA-384", "SHA-512"}
-        _V3_PRIV   = {"", "DES", "AES", "AES-192", "AES-256"}
         if "snmp_v3_level" in kwargs and kwargs["snmp_v3_level"] not in _V3_LEVELS:
             h._json(400, {"error": "invalid snmp_v3_level"}); return True
         if "snmp_v3_auth_proto" in kwargs and kwargs["snmp_v3_auth_proto"] not in _V3_AUTH:
@@ -1011,9 +1198,6 @@ def handle(h, method, path, body):
                 radius_pw_v = encrypt_pw(radius_pw_v)
         # SNMPv3 fields — per-sensor override of device defaults.  Blank
         # fields inherit from the device at probe time (see Sensor._resolve_snmp_v3_creds).
-        _V3_LEVELS = {"", "noAuthNoPriv", "authNoPriv", "authPriv"}
-        _V3_AUTH   = {"", "MD5", "SHA", "SHA-224", "SHA-256", "SHA-384", "SHA-512"}
-        _V3_PRIV   = {"", "DES", "AES", "AES-192", "AES-256"}
         v3_user   = (body.get("snmp_v3_user") or "").strip()
         v3_level  = (body.get("snmp_v3_level") or "").strip()
         if v3_level not in _V3_LEVELS:

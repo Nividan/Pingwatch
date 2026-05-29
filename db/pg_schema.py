@@ -110,6 +110,26 @@ def pg_create_main_schema(cur):
         except Exception:
             pass
 
+    # Bearer-token auth for scripts / CI / Terraform. token_hash is SHA-256
+    # of the plaintext token (plaintext never stored). scope gates HTTP
+    # method: 'read' = GET/HEAD/OPTIONS only, 'full' = any.
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS api_tokens (
+            id           SERIAL PRIMARY KEY,
+            token_hash   TEXT NOT NULL UNIQUE,
+            name         TEXT NOT NULL,
+            username     TEXT NOT NULL,
+            scope        TEXT NOT NULL CHECK (scope IN ('read','full')),
+            created_at   DOUBLE PRECISION NOT NULL,
+            expires_at   DOUBLE PRECISION,
+            last_used_at DOUBLE PRECISION,
+            revoked_at   DOUBLE PRECISION
+        )""")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_api_tokens_user "
+                "ON api_tokens(username)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_api_tokens_hash "
+                "ON api_tokens(token_hash)")
+
     cur.execute("""
         CREATE TABLE IF NOT EXISTS devices (
             did                      TEXT PRIMARY KEY,
@@ -127,7 +147,9 @@ def pg_create_main_schema(cur):
             secondary_ips            TEXT DEFAULT '[]',
             external_id              TEXT DEFAULT NULL,
             discovered_at            DOUBLE PRECISION DEFAULT 0,
-            discovered_from_cidr     TEXT DEFAULT ''
+            discovered_from_cidr     TEXT DEFAULT '',
+            parent_device_ids        TEXT DEFAULT '[]',
+            parent_device_ports      TEXT DEFAULT '{}'
         )""")
     # Bulk-import external_id — idempotent add for pre-existing installs.
     cur.execute("""
@@ -142,10 +164,29 @@ def pg_create_main_schema(cur):
     """)
     # Site grouping (v1.0+) — Site → Group → Device hierarchy.
     cur.execute("ALTER TABLE devices ADD COLUMN IF NOT EXISTS site TEXT DEFAULT ''")
+    # Parent device linking (v1.0+, Live Map tree) — JSON array of device IDs.
+    cur.execute("ALTER TABLE devices ADD COLUMN IF NOT EXISTS parent_device_ids TEXT DEFAULT '[]'")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_devices_parent_ids ON devices(parent_device_ids)")
+    # Per-parent port wiring (v1.x+, Live Map link info) — JSON dict keyed by
+    # parent device id → {"lport": "<local>", "rport": "<remote>"}.
+    cur.execute("ALTER TABLE devices ADD COLUMN IF NOT EXISTS parent_device_ports TEXT DEFAULT '{}'")
     # Partial unique index — NULL external_ids don't collide.
     cur.execute("""
         CREATE UNIQUE INDEX IF NOT EXISTS idx_devices_external_id
             ON devices(external_id) WHERE external_id IS NOT NULL
+    """)
+
+    # Sites metadata sidecar (v1.0+, Live Map NOC console).
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS sites (
+            name         TEXT PRIMARY KEY,
+            kind         TEXT NOT NULL DEFAULT 'lab',
+            pinned       INTEGER NOT NULL DEFAULT 0,
+            display_name TEXT NOT NULL DEFAULT '',
+            sort_order   INTEGER NOT NULL DEFAULT 0,
+            created_ts   BIGINT NOT NULL DEFAULT 0,
+            updated_ts   BIGINT NOT NULL DEFAULT 0
+        )
     """)
 
     cur.execute("""
@@ -275,6 +316,11 @@ def pg_create_main_schema(cur):
         ("ipam_subnets", "dns_server",              "TEXT DEFAULT ''"),
         # IPAM VLAN tagging (v1.0+) — see db/core.py for rationale
         ("ipam_subnets", "vlan",                    "INTEGER DEFAULT 0"),
+        # Auto-host-scan (v1.x+) — periodically sweep subnet for alive IPs
+        # and populate ip_allocations with kind='discovered', WITHOUT creating
+        # monitored devices. Independent of auto_discover: enable on networks
+        # where you want visibility but no monitoring side-effects.
+        ("ipam_subnets", "auto_host_scan",          "INTEGER DEFAULT 0"),
     ]
     for _tbl, _col, _typedef in _migrations:
         try:
@@ -421,7 +467,8 @@ def pg_create_main_schema(cur):
             auto_discover       INTEGER DEFAULT 0,
             first_scan_approved INTEGER DEFAULT 0,
             last_auto_scan_ts   TIMESTAMP DEFAULT NULL,
-            dns_server          TEXT DEFAULT ''
+            dns_server          TEXT DEFAULT '',
+            auto_host_scan      INTEGER DEFAULT 0
         )""")
     cur.execute("ALTER TABLE ipam_subnets ADD COLUMN IF NOT EXISTS site TEXT DEFAULT ''")
     cur.execute(

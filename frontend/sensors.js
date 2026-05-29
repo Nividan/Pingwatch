@@ -864,7 +864,8 @@ async function delDev(did){
   delete S.devices[did];
   Object.keys(S.sensors).filter(k=>k.startsWith(did+'/')).forEach(k=>{delete S.sensors[k];delete S.charts[k];delete S.logs[k];});
   delete S._devSensors[did];
-  pruneEmptyGroups();
+  // Don't prune empty groups/sites — the user explicitly created them and
+  // expects them to persist until they pick "Delete Group" from the menu.
   refreshGroupCounts();
   updatePills();
   if(!Object.keys(S.devices).length){

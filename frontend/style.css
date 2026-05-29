@@ -1,9 +1,13 @@
 /* ── Self-hosted fonts (air-gapped safe — no external CDN) ── */
-@font-face{font-family:'Exo 2';font-style:normal;font-weight:300;font-display:swap;src:url('/fonts/exo-2-v26-latin-300.woff2') format('woff2')}
-@font-face{font-family:'Exo 2';font-style:normal;font-weight:400;font-display:swap;src:url('/fonts/exo-2-v26-latin-regular.woff2') format('woff2')}
-@font-face{font-family:'Exo 2';font-style:normal;font-weight:500;font-display:swap;src:url('/fonts/exo-2-v26-latin-500.woff2') format('woff2')}
-@font-face{font-family:'Exo 2';font-style:normal;font-weight:600;font-display:swap;src:url('/fonts/exo-2-v26-latin-600.woff2') format('woff2')}
-@font-face{font-family:'Exo 2';font-style:normal;font-weight:700;font-display:swap;src:url('/fonts/exo-2-v26-latin-700.woff2') format('woff2')}
+/* Self-hosted fonts — air-gapped install must work without CDN access.
+   Inter covers UI sans (300–900); JetBrains Mono covers code/IPs/hashes. */
+@font-face{font-family:'Inter';font-style:normal;font-weight:300;font-display:swap;src:url('/fonts/inter-v20-latin-300.woff2') format('woff2')}
+@font-face{font-family:'Inter';font-style:normal;font-weight:400;font-display:swap;src:url('/fonts/inter-v20-latin-regular.woff2') format('woff2')}
+@font-face{font-family:'Inter';font-style:normal;font-weight:500;font-display:swap;src:url('/fonts/inter-v20-latin-500.woff2') format('woff2')}
+@font-face{font-family:'Inter';font-style:normal;font-weight:600;font-display:swap;src:url('/fonts/inter-v20-latin-600.woff2') format('woff2')}
+@font-face{font-family:'Inter';font-style:normal;font-weight:700;font-display:swap;src:url('/fonts/inter-v20-latin-700.woff2') format('woff2')}
+@font-face{font-family:'Inter';font-style:normal;font-weight:800;font-display:swap;src:url('/fonts/inter-v20-latin-800.woff2') format('woff2')}
+@font-face{font-family:'Inter';font-style:normal;font-weight:900;font-display:swap;src:url('/fonts/inter-v20-latin-900.woff2') format('woff2')}
 @font-face{font-family:'JetBrains Mono';font-style:normal;font-weight:300;font-display:swap;src:url('/fonts/jetbrains-mono-v24-latin-300.woff2') format('woff2')}
 @font-face{font-family:'JetBrains Mono';font-style:normal;font-weight:400;font-display:swap;src:url('/fonts/jetbrains-mono-v24-latin-regular.woff2') format('woff2')}
 @font-face{font-family:'JetBrains Mono';font-style:normal;font-weight:500;font-display:swap;src:url('/fonts/jetbrains-mono-v24-latin-500.woff2') format('woff2')}
@@ -65,7 +69,7 @@
   --surface-inset-soft:   var(--inset-soft);
   --surface-inset-strong: rgba(0,0,0,.28);
   /* Type families (kept as-is — fonts already self-hosted) */
-  --font-sans: 'Exo 2', system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+  --font-sans: 'Inter', system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
   --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   /* Radii (additive — used by new Phase 2+ components) */
   --r-xs: 3px;
@@ -199,7 +203,7 @@ body{
     radial-gradient(ellipse 80% 60% at 20% 20%, var(--body-grad-1) 0%, transparent 60%),
     radial-gradient(ellipse 70% 50% at 80% 80%, var(--body-grad-2) 0%, transparent 55%),
     var(--bg);
-  color:var(--text);font-family:'Exo 2',sans-serif;font-size:13px;line-height:1.4;
+  color:var(--text);font-family:'Inter',sans-serif;font-size:13px;line-height:1.4;
   -webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale
 }
 ::-webkit-scrollbar{width:5px;height:5px}
@@ -298,7 +302,7 @@ body{
 .evt-name{font-size:14px;font-weight:600;color:var(--text);flex:1;
           overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .evt-time{font-size:12px;color:var(--text2);font-family:'JetBrains Mono',monospace;flex-shrink:0}
-.evt-detail{font-size:12px;color:var(--text2);font-family:'Exo 2',sans-serif;
+.evt-detail{font-size:12px;color:var(--text2);font-family:'Inter',sans-serif;
             overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding-left:16px}
 .evt-host{font-size:12px;font-weight:500;color:var(--text2);padding-left:16px;margin-top:0}
 
@@ -1182,7 +1186,7 @@ body.pw-select-mode .grp-sel-cb{display:inline-flex;}
 }
 .dw-log-empty{
   padding:32px;text-align:center;color:var(--text3);font-size:12px;
-  font-family:'Exo 2',sans-serif;
+  font-family:'Inter',sans-serif;
 }
 .dw-ll{
   display:flex;gap:8px;padding:3px 16px;line-height:1.6;
@@ -1238,13 +1242,13 @@ body.pw-select-mode .grp-sel-cb{display:inline-flex;}
   line-height:1;letter-spacing:-1px;
 }
 .ht-ping{
-  font-size:48px;font-weight:900;
+  font-size:48px;font-weight:900;letter-spacing:-0.5px;
   background:linear-gradient(135deg,#60a5fa 0%,#2f81f7 50%,#38bdf8 100%);
   -webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;
   filter:drop-shadow(0 0 24px rgba(47,129,247,.5));
 }
 .ht-watch{
-  font-size:48px;font-weight:200;color:var(--text2);
+  font-size:48px;font-weight:200;letter-spacing:-0.5px;color:var(--text2);
 }
 .hero-sub{
   font-size:13px;color:var(--text3);letter-spacing:.5px;text-transform:uppercase;
@@ -1434,7 +1438,7 @@ body.pw-select-mode .grp-sel-cb{display:inline-flex;}
 .uc-tabs{display:flex;gap:0;margin-bottom:16px;border-bottom:1px solid var(--border)}
 .uc-tab{background:none;border:none;padding:8px 16px;font-size:12px;font-weight:500;
   color:var(--text3);cursor:pointer;border-bottom:2px solid transparent;
-  transition:color .15s,border-color .15s;font-family:'Exo 2',sans-serif}
+  transition:color .15s,border-color .15s;font-family:'Inter',sans-serif}
 .uc-tab:hover{color:var(--text2)}
 .uc-tab.active{color:var(--accent);border-bottom-color:var(--accent)}
 .uc-file-label{font-size:11px;color:var(--text3);margin-top:4px}
@@ -1445,7 +1449,7 @@ body.pw-select-mode .grp-sel-cb{display:inline-flex;}
 .fh{font-size:10px;color:var(--text3);margin-top:3px}
 input[type=text],input[type=number],input[type=password],input[type=email],input[type=time],textarea,select{
   width:100%;background:var(--bg);border:1px solid var(--border);
-  border-radius:4px;color:var(--text);font-family:'Exo 2',sans-serif;font-size:13px;
+  border-radius:4px;color:var(--text);font-family:'Inter',sans-serif;font-size:13px;
   padding:8px 12px;outline:none;transition:border-color .15s,box-shadow .15s;
   box-sizing:border-box;
 }
@@ -1463,6 +1467,65 @@ select{cursor:pointer;appearance:none;
 }
 .stpo:hover{border-color:var(--border2);background:var(--bg3)}
 .stpo.sel{border-color:var(--accent);background:rgba(59,130,246,.1)}
+
+/* Edit Group modal — compact 2-col layout (replaces .alrt-section cards) */
+.meg-body{display:flex;flex-direction:column;gap:10px}
+.meg-row2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.meg-sec{display:flex;flex-direction:column;gap:5px;min-width:0}
+.meg-h{font-size:11px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:.5px}
+.meg-sec .fh{font-size:10px;line-height:1.4;margin-top:2px}
+.meg-mute{display:flex;align-items:center;gap:8px;cursor:pointer;user-select:none;
+  height:32px;padding:0 6px;background:var(--bg);border:1px solid var(--border);border-radius:4px}
+
+/* Chip multi-select input (Edit Group → Parent Devices, Edit Device → Parents) */
+.pw-chip-input{
+  min-height:32px;padding:5px 6px;margin-bottom:6px;
+  background:var(--bg);border:1px solid var(--border);border-radius:4px;
+  display:flex;flex-wrap:wrap;gap:5px;align-items:center;
+}
+.pw-chip{
+  display:inline-flex;align-items:center;gap:4px;
+  background:rgba(47,129,247,.12);border:1px solid rgba(47,129,247,.3);
+  color:var(--text);padding:2px 4px 2px 10px;border-radius:11px;
+  font-size:12px;line-height:1.4;
+}
+.pw-chip-x{
+  background:none;border:none;color:var(--text2);cursor:pointer;
+  font-size:14px;padding:0 4px;line-height:1;
+  border-radius:50%;
+}
+.pw-chip-x:hover{background:rgba(248,81,73,.18);color:var(--down)}
+.pw-chip-empty{color:var(--text3);font-size:11px;font-style:italic;padding:2px 4px}
+
+/* Group-ref chip variant — visually distinct so the user can tell at a glance
+   that a parent ref points at a whole group rather than a single device. */
+.pw-chip-group{
+  background:rgba(255,191,0,.10);
+  border-color:rgba(255,191,0,.35);
+}
+.pw-chip-group .pw-chip-x:hover{background:rgba(255,191,0,.22);color:var(--gold)}
+.pw-chip-badge{
+  display:inline-block;
+  font-family:'JetBrains Mono',monospace;font-size:8px;
+  letter-spacing:.5px;color:var(--gold);
+  padding:1px 4px;background:rgba(255,191,0,.18);
+  border-radius:2px;margin-right:5px;line-height:1.4;
+}
+/* Inline port chip — parent name + local↔remote port boxes in one row.
+   Each port input is intentionally narrow (switch interface names are short:
+   Gi0/24, Te1/1, ether1). The whole chip wraps onto a new line if the
+   parent name is long, keeping the row scannable. */
+.pw-chip-link{padding-left:8px;padding-right:4px}
+.pw-chip-link .pw-chip-label{margin-right:4px;font-weight:500}
+.pw-chip-port{
+  width:64px;padding:1px 5px;font-size:11px;line-height:1.4;
+  background:var(--bg);border:1px solid var(--border);
+  color:var(--text);border-radius:3px;outline:none;
+  font-family:'JetBrains Mono',monospace;
+}
+.pw-chip-port:focus{border-color:var(--accent);background:var(--bg2)}
+.pw-chip-port::placeholder{color:var(--text3);font-style:italic}
+.pw-chip-port-sep{color:var(--text3);font-size:11px;margin:0 2px}
 .stpo-ico{font-size:20px;margin-bottom:3px}
 .stpo-nm{font-size:11px;font-weight:600;color:var(--text2)}
 .stpo-ds{font-size:9px;color:var(--text3);margin-top:2px}
@@ -1900,7 +1963,7 @@ canvas.dm-hist-canvas{width:100%;height:240px;display:block;border-radius:6px;ba
 }
 .login-input{
   width:100%;background:var(--bg);border:1px solid var(--border2);
-  border-radius:6px;color:var(--text);font-family:'Exo 2',sans-serif;font-size:14px;
+  border-radius:6px;color:var(--text);font-family:'Inter',sans-serif;font-size:14px;
   padding:10px 14px;outline:none;transition:border-color .15s,box-shadow .15s;
 }
 .login-input:focus{
@@ -2025,20 +2088,20 @@ canvas.dm-hist-canvas{width:100%;height:240px;display:block;border-radius:6px;ba
 }
 @keyframes pwCmdRise { from { transform:translateY(-8px); opacity:0 } to { transform:none; opacity:1 } }
 .pw-cmd-input-row{
-  display:flex;align-items:center;gap:10px;
-  padding:12px 14px;border-bottom:1px solid var(--border);
+  display:flex;align-items:center;gap:12px;
+  padding:14px 18px;border-bottom:1px solid var(--border);
 }
 .pw-cmd-input-ico{ color:var(--text3);display:inline-flex; }
 #pw-cmd-inp{
   flex:1;min-width:0;
   background:transparent;border:none;outline:none;
-  color:var(--text);font-family:inherit;font-size:14px;
+  color:var(--text);font-family:inherit;font-size:16px;
 }
 #pw-cmd-inp::placeholder{ color:var(--text3); }
 .pw-cmd-input-kbd{
-  font-family:var(--font-mono);font-size:9.5px;color:var(--text3);
+  font-family:var(--font-mono);font-size:11px;color:var(--text3);
   border:1px solid var(--border);border-radius:3px;
-  padding:1px 6px;background:var(--bg);
+  padding:2px 7px;background:var(--bg);
 }
 .pw-cmd-results{
   flex:1;overflow-y:auto;
@@ -2047,18 +2110,18 @@ canvas.dm-hist-canvas{width:100%;height:240px;display:block;border-radius:6px;ba
 }
 .pw-cmd-empty{
   padding:30px 14px;text-align:center;
-  color:var(--text3);font-size:12px;
+  color:var(--text3);font-size:13px;
 }
 .pw-cmd-section{
-  font-size:9px;text-transform:uppercase;letter-spacing:.8px;
+  font-size:11px;text-transform:uppercase;letter-spacing:1px;
   color:var(--text3);font-weight:600;
-  padding:8px 14px 4px;
+  padding:10px 18px 4px;
 }
 .pw-cmd-row{
-  display:flex;align-items:center;gap:10px;
-  padding:8px 14px;cursor:pointer;
+  display:flex;align-items:center;gap:12px;
+  padding:10px 18px;cursor:pointer;
   border-left:2px solid transparent;
-  font-size:12px;
+  font-size:14px;
   transition:background var(--dur-fast) var(--ease);
 }
 .pw-cmd-row:hover{ background:var(--card-soft); }
@@ -2067,37 +2130,43 @@ canvas.dm-hist-canvas{width:100%;height:240px;display:block;border-radius:6px;ba
   border-left-color:var(--accent);
 }
 .pw-cmd-dot{
-  width:8px;height:8px;border-radius:50%;
+  width:9px;height:9px;border-radius:50%;
   background:var(--pause);flex-shrink:0;
 }
 .pw-cmd-dot.up   { background:var(--up);   box-shadow:0 0 5px var(--up-glow); }
 .pw-cmd-dot.warn { background:var(--warn); box-shadow:0 0 5px var(--warn-glow); }
 .pw-cmd-dot.down { background:var(--down); box-shadow:0 0 5px var(--down-glow); }
 .pw-cmd-stype{
-  font-family:var(--font-mono);font-size:9px;
+  font-family:var(--font-mono);font-size:10px;
   text-transform:uppercase;letter-spacing:.4px;
   background:var(--bg3);color:var(--text2);
-  padding:1px 6px;border-radius:3px;flex-shrink:0;
+  padding:2px 7px;border-radius:3px;flex-shrink:0;
+}
+/* IP token in palette rows — same monospace + accent treatment as the IPAM
+   grid so users instantly recognise the literal IP they searched for. */
+.pw-cmd-ip{
+  font-family:var(--font-mono);font-size:14px;
+  color:var(--accent);margin-right:6px;
 }
 .pw-cmd-name{
   font-weight:500;color:var(--text);
   overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
-  flex-shrink:0;max-width:42%;
+  flex-shrink:0;max-width:48%;
 }
 .pw-cmd-meta{
-  font-family:var(--font-mono);font-size:11px;color:var(--text3);
+  font-family:var(--font-mono);font-size:12.5px;color:var(--text3);
   overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
   flex:1;min-width:0;
 }
 .pw-cmd-foot{
   display:flex;gap:14px;
-  padding:8px 14px;
+  padding:10px 18px;
   border-top:1px solid var(--border);
   background:var(--card-soft);
-  font-size:10px;color:var(--text3);
+  font-size:11.5px;color:var(--text3);
 }
 .pw-cmd-foot kbd{
-  font-family:var(--font-mono);font-size:9px;
+  font-family:var(--font-mono);font-size:10.5px;
   border:1px solid var(--border);border-radius:3px;
   padding:0 4px;margin-right:3px;
   background:var(--bg);color:var(--text2);
@@ -2437,6 +2506,9 @@ canvas.dm-hist-canvas{width:100%;height:240px;display:block;border-radius:6px;ba
 .ipam-leg.gw  { background:var(--up); }
 .ipam-leg.rsv { background:var(--warn); }
 .ipam-leg.cfl { background:var(--down); }
+/* Stale = previously discovered but didn't respond in the last scan. Dim,
+   desaturated so it reads as "was here, isn't now" rather than a status. */
+.ipam-leg.stale{ background:var(--text3); opacity:.55; }
 
 .ipam-heatmap{
   display:grid;
@@ -2467,6 +2539,7 @@ canvas.dm-hist-canvas{width:100%;height:240px;display:block;border-radius:6px;ba
 .ipam-hm-cell.gw  { background:var(--up); }
 .ipam-hm-cell.rsv { background:var(--warn); }
 .ipam-hm-cell.cfl { background:var(--down); }
+.ipam-hm-cell.stale{ background:var(--text3); opacity:.55; }
 
 /* Inline edit cell — name input + kind picker */
 .ipam-edit-row{
@@ -2502,6 +2575,10 @@ canvas.dm-hist-canvas{width:100%;height:240px;display:block;border-radius:6px;ba
 .ipam-kbadge.gw  { color:var(--up);   background:var(--up-bg);   border-color:color-mix(in srgb, var(--up) 40%, var(--border)); }
 .ipam-kbadge.rsv { color:var(--warn); background:var(--warn-bg); border-color:color-mix(in srgb, var(--warn) 40%, var(--border)); }
 .ipam-kbadge.cfl { color:var(--down); background:var(--down-bg); border-color:color-mix(in srgb, var(--down) 40%, var(--border)); }
+.ipam-kbadge.stale { color:var(--text3); background:transparent; border-color:var(--border2); }
+/* Discovered = scan saw the IP alive, may have no hostname yet. Same colour
+   family as the accent so it groups visually with manual "Used" entries. */
+.ipam-kbadge.disc { color:var(--accent); background:color-mix(in srgb, var(--accent) 12%, transparent); border-color:color-mix(in srgb, var(--accent) 40%, var(--border)); }
 
 /* ── Log viewer (top-level Logs tab) ──────────────────────────────────── */
 #logsView{flex:1;display:none;flex-direction:column;overflow:hidden;}
@@ -3147,14 +3224,26 @@ canvas.dm-hist-canvas{width:100%;height:240px;display:block;border-radius:6px;ba
 .bk-cnt-full{color:var(--up);}
 
 /* ── Backup group section headers ───────────────────────────────── */
-.bk-grp-hdr tr{cursor:pointer;background:var(--bg3);user-select:none;}
-.bk-grp-hdr tr:hover{background:var(--bg4);}
-.bk-grp-hdr td{padding:7px 14px;font-size:11px;font-weight:700;letter-spacing:1px;
+/* Selectors match both the original `<tbody class="bk-grp-hdr"><tr>` shape
+   (enabled/disabled section dividers) and the per-site `<tr class="bk-grp-hdr">`
+   shape used for the nested site sub-headers introduced in v1.0. */
+.bk-grp-hdr tr,
+tr.bk-grp-hdr{cursor:pointer;background:var(--bg3);user-select:none;}
+.bk-grp-hdr tr:hover,
+tr.bk-grp-hdr:hover{background:var(--bg4);}
+.bk-grp-hdr td,
+tr.bk-grp-hdr td{padding:7px 14px;font-size:11px;font-weight:700;letter-spacing:1px;
   text-transform:uppercase;color:var(--text2);border-bottom:1px solid var(--border);}
+/* Site sub-header: slightly less weight + indent so it reads as subordinate
+   to the section divider above it. */
+tr.bk-site-hdr td{background:var(--bg2);padding-left:32px;font-weight:600;
+  text-transform:none;letter-spacing:0.4px;color:var(--text2);}
+tr.bk-site-hdr:hover td{background:var(--bg3);}
 .bk-grp-arr{display:inline-block;margin-right:8px;font-size:10px;
   transition:transform .2s;color:var(--text3);}
 .bk-grp-arr.open{transform:rotate(90deg);}
 .bk-grp-title{margin-right:8px;}
+.bk-site-title{font-family:'JetBrains Mono',monospace;color:var(--text);}
 .bk-grp-cnt{background:var(--bg4);border-radius:20px;padding:1px 8px;
   font-size:10px;font-weight:600;color:var(--text3);}
 tbody.bk-grp-collapsed{display:none;}
@@ -3352,7 +3441,7 @@ label.toggle input:checked + .tsl:before{transform:translateX(18px);background:#
 
 /* Filter bar */
 .evt-filters{display:flex;flex-wrap:nowrap;overflow-x:auto;align-items:center;gap:6px;padding:8px 24px;border-bottom:1px solid var(--border);background:rgba(0,0,0,.15);flex-shrink:0;}
-.evt-filters select,.evt-filters input[type="datetime-local"]{flex:0 0 auto;background:var(--bg3);border:1px solid var(--border);color:var(--text);border-radius:5px;padding:4px 26px 4px 8px;font-size:12px;font-family:'Exo 2',sans-serif;cursor:pointer;outline:none;max-width:148px;appearance:none;-webkit-appearance:none;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%23888'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 8px center;}
+.evt-filters select,.evt-filters input[type="datetime-local"]{flex:0 0 auto;background:var(--bg3);border:1px solid var(--border);color:var(--text);border-radius:5px;padding:4px 26px 4px 8px;font-size:12px;font-family:'Inter',sans-serif;cursor:pointer;outline:none;max-width:148px;appearance:none;-webkit-appearance:none;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%23888'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 8px center;}
 .evt-filters select:focus,.evt-filters input:focus{border-color:var(--accent);}
 .evt-search{flex:1 1 160px;min-width:120px;background:var(--bg3);border:1px solid var(--border);color:var(--text);border-radius:5px;padding:4px 10px;font-size:12px;outline:none;}
 .evt-search:focus{border-color:var(--accent);}
@@ -4058,7 +4147,7 @@ label.toggle input:checked + .tsl:before{transform:translateX(18px);background:#
   font-weight:500;}
 .diag-probe-inputs input,.diag-probe-inputs select{
   width:auto;background:var(--bg3);border:1px solid var(--border2);color:var(--text);
-  font-family:'Exo 2',sans-serif;font-size:13px;padding:6px 10px;border-radius:4px;
+  font-family:'Inter',sans-serif;font-size:13px;padding:6px 10px;border-radius:4px;
   outline:none;transition:border-color .15s,box-shadow .15s;box-sizing:border-box;
   min-width:260px;text-transform:none;letter-spacing:normal;}
 .diag-probe-inputs input:focus,.diag-probe-inputs select:focus{
@@ -4212,7 +4301,13 @@ label.toggle input:checked + .tsl:before{transform:translateX(18px);background:#
   display:grid;
   grid-template-columns:var(--rail-w) minmax(0, 1fr);
   min-width:0;overflow:hidden;
+  transition:grid-template-columns var(--dur) var(--ease);
 }
+/* When the rail is expanded, widen the grid column so main reflows
+   into the remaining space (push, not overlay). The `.rail-expanded`
+   class is set by JS for browsers without :has() support. */
+#layout.rail-expanded,
+#layout:has(> .rail.expanded){ grid-template-columns:180px minmax(0, 1fr); }
 #main{
   display:flex;flex-direction:column;
   min-width:0;min-height:0;overflow:hidden;
@@ -4228,6 +4323,14 @@ label.toggle input:checked + .tsl:before{transform:translateX(18px);background:#
   gap:2px;
   align-items:center;
   position:relative;z-index:10;
+  /* Width comes from the grid column in #layout — :has(.rail.expanded)
+     switches the column from --rail-w to 180px so main content reflows. */
+  width:100%;min-width:0;
+  overflow:hidden;
+}
+.rail.expanded{
+  align-items:stretch;
+  padding-left:8px;padding-right:8px;
 }
 .rail-btn{
   width:40px;height:40px;
@@ -4236,8 +4339,32 @@ label.toggle input:checked + .tsl:before{transform:translateX(18px);background:#
   color:var(--text3);
   background:transparent;border:none;
   position:relative;cursor:pointer;
-  transition:color var(--dur) var(--ease), background var(--dur) var(--ease);
+  transition:color var(--dur) var(--ease), background var(--dur) var(--ease), width var(--dur) var(--ease);
 }
+.rail.expanded .rail-btn{
+  width:100%;height:36px;
+  grid-template-columns:24px 1fr;
+  justify-items:start;
+  padding:0 10px;
+  gap:10px;
+}
+.rail-label{
+  display:none;
+  font-size:var(--fs-sm);
+  color:inherit;
+  white-space:nowrap;
+  overflow:hidden;text-overflow:ellipsis;
+  font-weight:500;
+  letter-spacing:0.2px;
+}
+.rail.expanded .rail-label{ display:block; }
+/* Tooltips only make sense in collapsed mode */
+.rail.expanded .rail-tip{ display:none; }
+
+/* Expand/collapse toggle button at the top of the rail */
+.rail-toggle{ color:var(--text2); margin-bottom:2px; }
+.rail-toggle:hover{ color:var(--accent); }
+.rail.expanded .rail-toggle .rail-ico svg{ transform:rotate(180deg); transition:transform var(--dur) var(--ease); }
 .rail-btn:hover{ color:var(--text); background:var(--card-soft); }
 .rail-btn.active{
   color:var(--accent);
@@ -4321,6 +4448,16 @@ label.toggle input:checked + .tsl:before{transform:translateX(18px);background:#
 .pagehead-r{ display:flex;align-items:center;gap:var(--sp-2);flex-shrink:0;flex-wrap:wrap;justify-content:flex-end; }
 @media (max-width:880px){
   .pagehead{ flex-direction:column;align-items:stretch; }
+}
+/* Vertical separator between toolbar button groups. Used in the IPAM
+   pagehead to split "always available" actions (Add / Import) from the
+   actions that act on the currently-selected subnet. */
+.ipam-tb-divider{
+  display:inline-block;
+  width:1px;height:20px;
+  background:var(--border);
+  margin:0 4px;
+  align-self:center;
 }
 
 /* ── Buttons (new vocabulary — coexists with legacy .btn-sm/.btn-p) ── */
@@ -5062,3 +5199,352 @@ label.toggle input:checked + .tsl:before{transform:translateX(18px);background:#
   display:flex;align-items:center;justify-content:space-between;gap:10px;
   padding:10px 14px;border-top:1px solid var(--border);background:var(--card-soft);
 }
+
+/* ───────────────────────────────────────────────────────────────
+   Add Widget modal redesign — search + chips + sections + popout
+   Spec: design/handoff_add_widget_modal/README.md
+   .mw-* prefix; uses existing CSS vars (--accent, --accent2, etc.)
+   ─────────────────────────────────────────────────────────────── */
+.mw-mo {
+  display: flex; align-items: flex-start; justify-content: center;
+  padding-top: 5vh;
+}
+.mw-stage {
+  position: relative;
+  display: flex; align-items: flex-start; gap: 20px;
+}
+.mw-modal {
+  width: 600px; height: 740px; max-height: 90vh;
+  background: rgba(8,14,26,0.98);
+  border: 1px solid rgba(0,212,255,0.22);
+  border-radius: 6px;
+  box-shadow: 0 0 40px rgba(0,212,255,0.18), 0 0 80px rgba(0,0,0,0.4);
+  display: flex; flex-direction: column;
+  overflow: hidden;
+  color: #e2e8f0;
+}
+.mw-head {
+  display: flex; align-items: center; gap: 12px;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--border);
+  background: linear-gradient(180deg, rgba(0,212,255,0.04), rgba(0,0,0,0));
+}
+.mw-title {
+  font-family: 'Inter', sans-serif; font-size: 14px; font-weight: 900;
+  letter-spacing: 1.5px; color: var(--accent);
+}
+.mw-sub {
+  font-family: 'JetBrains Mono', monospace; font-size: 10px;
+  letter-spacing: 1.5px; color: rgba(255,255,255,0.4);
+  margin-left: 4px;
+}
+.mw-x {
+  margin-left: auto;
+  width: 28px; height: 28px; border-radius: 3px;
+  background: rgba(0,0,0,0.4); border: 1px solid rgba(255,255,255,0.1);
+  display: flex; align-items: center; justify-content: center;
+  color: rgba(255,255,255,0.5);
+  font-family: 'JetBrains Mono', monospace; font-size: 14px;
+  cursor: pointer; transition: all .15s;
+}
+.mw-x:hover { color: #fff; border-color: rgba(255,255,255,0.3); }
+
+/* Search */
+.mw-search-wrap { padding: 12px 18px 8px; display: flex; align-items: center; gap: 10px; }
+.mw-search {
+  flex: 1; display: flex; align-items: center; gap: 10px;
+  padding: 8px 12px;
+  background: rgba(0,0,0,0.5);
+  border: 1px solid rgba(0,212,255,0.2);
+  border-radius: 3px;
+}
+.mw-search:focus-within { border-color: var(--accent); }
+.mw-search-icon { color: var(--accent); font-family: 'JetBrains Mono', monospace; font-size: 14px; }
+.mw-search input {
+  flex: 1; background: none; border: none; outline: none;
+  font-family: 'JetBrains Mono', monospace; font-size: 12px;
+  color: #e2e8f0; letter-spacing: 0.5px;
+}
+.mw-search input::placeholder { color: rgba(255,255,255,0.3); }
+.mw-clear { cursor: pointer; color: rgba(255,255,255,0.4); font-family: 'JetBrains Mono', monospace; font-size: 11px; }
+.mw-clear:hover { color: var(--accent); }
+.mw-kbd {
+  font-family: 'JetBrains Mono', monospace; font-size: 9px;
+  padding: 2px 6px;
+  border: 1px solid rgba(255,255,255,0.15);
+  color: rgba(255,255,255,0.4); border-radius: 2px;
+}
+
+/* Category chips */
+.mw-chips { display: flex; gap: 6px; flex-wrap: wrap; padding: 4px 18px 12px; }
+.mw-chip {
+  font-family: 'JetBrains Mono', monospace; font-size: 9px;
+  letter-spacing: 1.5px; padding: 5px 10px;
+  border: 1px solid rgba(0,212,255,0.2);
+  background: rgba(0,0,0,0.3);
+  color: rgba(255,255,255,0.55);
+  border-radius: 2px; cursor: pointer; transition: all .15s;
+  display: inline-flex; align-items: center; gap: 5px;
+  user-select: none;
+}
+.mw-chip:hover { color: var(--accent); border-color: rgba(0,212,255,0.4); }
+.mw-chip-dot { width: 6px; height: 6px; border-radius: 50%; }
+.mw-chip-count {
+  font-size: 8px; opacity: 0.55;
+  padding: 0 4px;
+  border-left: 1px solid currentColor; margin-left: 2px;
+}
+
+/* Body (scrolling section) */
+.mw-body { flex: 1; overflow-y: auto; padding: 4px 18px 16px; min-height: 0; }
+.mw-body::-webkit-scrollbar { width: 4px; }
+.mw-body::-webkit-scrollbar-thumb { background: rgba(0,212,255,0.2); border-radius: 2px; }
+
+/* Section header */
+.mw-section { margin-top: 14px; }
+.mw-section:first-child { margin-top: 4px; }
+.mw-section-head {
+  display: flex; align-items: baseline; gap: 8px;
+  margin-bottom: 8px; padding-bottom: 5px;
+  border-bottom: 1px dashed rgba(0,212,255,0.12);
+}
+.mw-section-icon { font-family: 'JetBrains Mono', monospace; font-size: 11px; }
+.mw-section-label { font-family: 'Inter', sans-serif; font-size: 10px; font-weight: 700; letter-spacing: 1px; }
+.mw-section-count { font-family: 'JetBrains Mono', monospace; font-size: 9px; color: rgba(255,255,255,0.35); letter-spacing: 1px; }
+.mw-section-line { flex: 1; height: 1px; background: linear-gradient(90deg, currentColor, transparent); opacity: 0.18; margin-bottom: 2px; }
+
+/* Tile grid */
+.mw-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.mw-tile {
+  position: relative;
+  padding: 12px 10px 10px;
+  background: rgba(0,0,0,0.35);
+  border: 1px solid rgba(0,212,255,0.15);
+  border-radius: 3px;
+  cursor: pointer;
+  transition: all .15s;
+  display: flex; flex-direction: column; gap: 6px;
+  overflow: hidden;
+}
+.mw-tile::before {
+  content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 2px;
+  background: currentColor; opacity: 0.4;
+}
+.mw-tile:hover {
+  background: rgba(0,212,255,0.04);
+  border-color: rgba(0,212,255,0.45);
+  transform: translateY(-1px);
+}
+.mw-tile.hov {
+  background: rgba(0,212,255,0.08);
+  border-color: var(--accent);
+  box-shadow: 0 0 12px rgba(0,212,255,0.18);
+}
+.mw-tile-icon {
+  width: 24px; height: 24px;
+  display: flex; align-items: center; justify-content: center;
+  color: currentColor;
+}
+.mw-tile-icon svg { width: 20px; height: 20px; display: block; }
+.mw-tile-name { font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #e2e8f0; font-weight: 500; letter-spacing: 0.5px; }
+.mw-tile-desc { font-family: 'JetBrains Mono', monospace; font-size: 9px; color: rgba(255,255,255,0.4); letter-spacing: 0.2px; line-height: 1.45; }
+.mw-tile-cat  {
+  position: absolute; top: 8px; right: 8px;
+  font-family: 'JetBrains Mono', monospace; font-size: 8px; letter-spacing: 1px;
+  padding: 1px 5px; border: 1px solid currentColor; border-radius: 1px; opacity: 0.65;
+}
+.mw-tile-new  {
+  position: absolute; top: 8px; right: 8px;
+  font-family: 'JetBrains Mono', monospace; font-size: 8px; letter-spacing: 1px;
+  padding: 1px 5px; background: var(--accent2); color: #000; border-radius: 1px;
+}
+
+/* Empty state */
+.mw-empty {
+  padding: 40px 20px; text-align: center;
+  font-family: 'JetBrains Mono', monospace; font-size: 12px;
+  color: rgba(255,255,255,0.35); letter-spacing: 1px; line-height: 1.8;
+}
+.mw-empty span { font-size: 9px; color: rgba(255,255,255,0.2); }
+
+/* Footer */
+.mw-foot {
+  padding: 10px 18px;
+  border-top: 1px solid var(--border);
+  display: flex; align-items: center; gap: 10px;
+  background: rgba(0,0,0,0.3);
+}
+.mw-foot-info {
+  font-family: 'JetBrains Mono', monospace; font-size: 9px;
+  color: rgba(255,255,255,0.35); letter-spacing: 1px;
+  flex: 1;
+}
+.mw-foot-info b { color: rgba(0,212,255,0.7); font-weight: normal; }
+.mw-btn {
+  font-family: 'Inter', sans-serif; font-size: 10px;
+  letter-spacing: 0.5px; padding: 7px 14px;
+  border: 1px solid; border-radius: 2px;
+  background: rgba(0,0,0,0.3); cursor: pointer;
+  transition: all .15s;
+}
+.mw-btn-primary { color: var(--accent2); border-color: var(--accent2); background: rgba(0,255,157,0.1); }
+.mw-btn-primary:hover { box-shadow: 0 0 12px rgba(0,255,157,0.3); }
+.mw-btn-ghost { color: rgba(255,255,255,0.4); border-color: rgba(255,255,255,0.15); }
+
+/* Popout (right of the modal) */
+.mw-popout-wrap {
+  position: relative;
+  width: 300px;
+  align-self: flex-start;
+}
+.mw-popout {
+  width: 100%;
+  padding: 14px;
+  background: rgba(8,14,26,0.98);
+  border: 1px solid var(--accent);
+  border-radius: 4px;
+  box-shadow: 0 0 30px rgba(0,212,255,0.25), 0 8px 24px rgba(0,0,0,0.5);
+}
+.mw-popout-empty {
+  padding: 40px 20px; text-align: center;
+  font-family: 'JetBrains Mono', monospace; font-size: 11px;
+  color: rgba(255,255,255,0.3);
+  border: 1px dashed rgba(0,212,255,0.15);
+  border-radius: 4px; background: rgba(0,0,0,0.3);
+  line-height: 1.8;
+}
+.mw-po-head {
+  display: flex; align-items: center; gap: 8px;
+  padding-bottom: 8px; margin-bottom: 10px;
+  border-bottom: 1px dashed rgba(0,212,255,0.2);
+}
+.mw-po-icon {
+  width: 28px; height: 28px;
+  display: flex; align-items: center; justify-content: center;
+  border: 1px solid currentColor; border-radius: 3px;
+  background: rgba(0,212,255,0.05);
+}
+.mw-po-icon svg { width: 18px; height: 18px; }
+.mw-po-title { font-family: 'Inter', sans-serif; font-size: 11px; font-weight: 900; letter-spacing: 0.5px; color: #e2e8f0; }
+.mw-po-cat   { font-family: 'JetBrains Mono', monospace; font-size: 8px; letter-spacing: 1.5px; margin-top: 2px; }
+.mw-po-preview {
+  height: 130px;
+  background: rgba(0,0,0,0.4);
+  border: 1px solid rgba(0,212,255,0.15);
+  border-radius: 2px;
+  padding: 8px; margin-bottom: 10px;
+  position: relative; overflow: hidden;
+}
+.mw-po-preview-label {
+  position: absolute; top: 4px; left: 6px;
+  font-family: 'JetBrains Mono', monospace; font-size: 8px;
+  letter-spacing: 1px; color: rgba(255,255,255,0.3);
+}
+.mw-po-desc { font-family: 'JetBrains Mono', monospace; font-size: 10px; color: rgba(255,255,255,0.6); line-height: 1.55; margin-bottom: 10px; }
+.mw-po-meta { display: flex; gap: 8px; flex-wrap: wrap; font-family: 'JetBrains Mono', monospace; font-size: 9px; margin-bottom: 12px; }
+.mw-po-meta-i {
+  padding: 2px 6px;
+  border: 1px solid rgba(255,255,255,0.15);
+  color: rgba(255,255,255,0.5);
+  border-radius: 1px; letter-spacing: 0.5px;
+}
+.mw-po-add {
+  width: 100%; padding: 8px;
+  background: var(--accent2); color: #000;
+  border: none; border-radius: 2px;
+  font-family: 'Inter', sans-serif; font-size: 11px; font-weight: 900;
+  letter-spacing: 1px; cursor: pointer;
+  transition: all .15s;
+}
+.mw-po-add:hover { box-shadow: 0 0 14px rgba(0,255,157,0.5); }
+
+/* Toast — slides above the popout when a widget is added */
+.mw-toast {
+  position: absolute; top: -52px; left: 0; right: 0;
+  padding: 10px 14px;
+  background: rgba(0,255,157,0.12);
+  border: 1px solid var(--accent2);
+  border-radius: 3px;
+  color: var(--accent2);
+  font-family: 'JetBrains Mono', monospace; font-size: 11px;
+  letter-spacing: 1px; text-align: center;
+  box-shadow: 0 0 16px rgba(0,255,157,0.3);
+  animation: mwSlideIn .25s ease-out;
+  z-index: 11;
+}
+@keyframes mwSlideIn {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* Mini-preview helpers (used by _DW_PREVIEW) */
+.mp { position: relative; width: 100%; height: 100%; }
+.mp-sparkline { width: 100%; height: 100%; }
+.mp-dots {
+  display: grid; gap: 3px; padding: 4px;
+  grid-template-columns: repeat(8, 1fr);
+  align-content: center; height: 100%;
+}
+.mp-dots > div { aspect-ratio: 1; border-radius: 1px; }
+.mp-pills { display: flex; flex-direction: column; gap: 4px; padding: 4px; }
+.mp-pill {
+  display: flex; align-items: center; gap: 6px;
+  padding: 3px 6px;
+  background: rgba(0,0,0,0.3);
+  border-left: 2px solid;
+  font-family: 'JetBrains Mono', monospace; font-size: 9px;
+}
+.mp-pill-dot { width: 5px; height: 5px; border-radius: 50%; flex-shrink: 0; }
+.mp-pill-name { color: #e2e8f0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mp-pill-val  { color: rgba(255,255,255,0.5); }
+.mp-gauge { width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; }
+.mp-bars { display: flex; flex-direction: column; gap: 5px; padding: 4px 6px; height: 100%; justify-content: center; }
+.mp-bar-row {
+  display: grid; grid-template-columns: 50px 1fr 36px;
+  align-items: center; gap: 6px;
+  font-family: 'JetBrains Mono', monospace; font-size: 9px;
+}
+.mp-bar-name { color: rgba(255,255,255,0.55); }
+.mp-bar-track { height: 5px; background: rgba(0,212,255,0.1); border-radius: 1px; overflow: hidden; }
+.mp-bar-fill { height: 100%; }
+.mp-bar-val  { color: rgba(255,255,255,0.6); text-align: right; }
+.mp-heat {
+  display: grid; gap: 2px; padding: 4px;
+  grid-template-columns: repeat(10, 1fr);
+  height: 100%; align-content: stretch;
+}
+.mp-heat > div { border-radius: 1px; }
+
+/* Light-theme overrides — the modal hard-codes dark backgrounds; flip them
+   here so the modal stays legible on a light canvas. */
+:root[data-theme="light"] .mw-modal { background: rgba(255,255,255,0.98); color: #1c2934; }
+:root[data-theme="light"] .mw-head { background: linear-gradient(180deg, rgba(2,136,168,0.06), rgba(255,255,255,0)); }
+:root[data-theme="light"] .mw-x { background: rgba(0,0,0,0.05); color: rgba(0,0,0,0.5); border-color: rgba(0,0,0,0.1); }
+:root[data-theme="light"] .mw-x:hover { color: #000; border-color: rgba(0,0,0,0.3); }
+:root[data-theme="light"] .mw-search { background: rgba(0,0,0,0.04); border-color: rgba(2,136,168,0.25); }
+:root[data-theme="light"] .mw-search input { color: #1c2934; }
+:root[data-theme="light"] .mw-search input::placeholder { color: rgba(28,41,52,0.4); }
+:root[data-theme="light"] .mw-kbd { color: rgba(28,41,52,0.5); border-color: rgba(28,41,52,0.2); }
+:root[data-theme="light"] .mw-chip { background: rgba(0,0,0,0.03); color: rgba(28,41,52,0.65); border-color: rgba(2,136,168,0.25); }
+:root[data-theme="light"] .mw-chip-count { opacity: 0.6; }
+:root[data-theme="light"] .mw-section-head { border-bottom-color: rgba(2,136,168,0.18); }
+:root[data-theme="light"] .mw-section-count { color: rgba(28,41,52,0.4); }
+:root[data-theme="light"] .mw-tile { background: rgba(0,0,0,0.02); border-color: rgba(2,136,168,0.18); }
+:root[data-theme="light"] .mw-tile:hover { background: rgba(2,136,168,0.06); }
+:root[data-theme="light"] .mw-tile.hov  { background: rgba(2,136,168,0.1); border-color: var(--accent); }
+:root[data-theme="light"] .mw-tile-name { color: #1c2934; }
+:root[data-theme="light"] .mw-tile-desc { color: rgba(28,41,52,0.55); }
+:root[data-theme="light"] .mw-foot { background: rgba(0,0,0,0.02); }
+:root[data-theme="light"] .mw-foot-info { color: rgba(28,41,52,0.55); }
+:root[data-theme="light"] .mw-btn { background: rgba(0,0,0,0.02); }
+:root[data-theme="light"] .mw-btn-ghost { color: rgba(28,41,52,0.6); border-color: rgba(28,41,52,0.2); }
+:root[data-theme="light"] .mw-popout { background: rgba(255,255,255,0.98); }
+:root[data-theme="light"] .mw-popout-empty { background: rgba(0,0,0,0.02); color: rgba(28,41,52,0.5); }
+:root[data-theme="light"] .mw-po-title { color: #1c2934; }
+:root[data-theme="light"] .mw-po-desc  { color: rgba(28,41,52,0.7); }
+:root[data-theme="light"] .mw-po-preview { background: rgba(0,0,0,0.03); border-color: rgba(2,136,168,0.18); }
+:root[data-theme="light"] .mw-po-meta-i  { color: rgba(28,41,52,0.6); border-color: rgba(28,41,52,0.15); }
+:root[data-theme="light"] .mp-pill { background: rgba(0,0,0,0.03); }
+:root[data-theme="light"] .mp-pill-name { color: #1c2934; }
+:root[data-theme="light"] .mp-bar-name, :root[data-theme="light"] .mp-bar-val { color: rgba(28,41,52,0.65); }
+:root[data-theme="light"] .mp-bar-track { background: rgba(2,136,168,0.12); }

@@ -51,7 +51,9 @@ Browser / Desktop GUI
         │   ├── smtp_alert.py          ← SMTP helper and email rendering
         │   ├── syslog_client.py       ← RFC 5424 syslog forwarding
         │   ├── license_checker.py     ← Periodic license expiration checker (6-hour autosave hook)
-        │   └── network_map.py         ← NTM topology data layer
+        │   ├── network_map.py         ← Topology Design (manual editor) data layer
+        │   ├── site_rollup.py         ← Live Map per-site + NOC rollup (sites, devices, alerts, off-site)
+        │   └── site_tree.py           ← Live Map tier inference (firewall / switch / hypervisor / VM / IPMI)
         │
         ├── backup/               ← Config backup engine
         │   ├── engine.py         ← SSH / Telnet backup engine
@@ -134,7 +136,9 @@ pingwatch/
 │   ├── smtp_alert.py            ← SMTP connection helper and email rendering (single + batched templates)
 │   ├── syslog_client.py         ← Non-blocking RFC 5424 forwarder, bounded 500-entry queue
 │   ├── license_checker.py       ← License expiration checker: compares expiry dates, fires warn/crit/ok events into flap_log, SSE broadcast
-│   └── network_map.py           ← Topology pages, nodes, links, groups (DB-backed)
+│   ├── network_map.py           ← Topology Design (manual editor) pages, nodes, links, groups (DB-backed)
+│   ├── site_rollup.py           ← Live Map roll-ups: site_summary_list() (per-site up/warn/down/alerts + metadata) and noc_summary() (hero stats, by-kind, top problems, recent alerts, off-site)
+│   └── site_tree.py             ← Tier inference + cluster grouping for the Live Map drill-in (firewall / switch / hypervisor / VM / IPMI); regex-based, falls back to TIER_HYPERVISOR so unclassified servers still render
 │
 ├── backup/
 │   ├── engine.py           ← SSH (paramiko) + Telnet connections, TOFU key verify,
@@ -184,7 +188,8 @@ pingwatch/
 │   ├── alert_profiles.py   ← Alert profile + action template CRUD; stage state tracking (alert_profile_state)
 │   ├── alert_events.py     ← Alert event log — dedup, ACK/resolve, auto-resolve on recovery, badge count
 │   ├── licenses.py         ← Per-device license CRUD + status update; db_license_summary() for widget/badge
-│   └── reports.py          ← Report template/schedule/history CRUD; 18 functions (db_list/get/create/update/delete for templates, schedules, history; prune, record_run, set_enabled)
+│   ├── reports.py          ← Report template/schedule/history CRUD; 18 functions (db_list/get/create/update/delete for templates, schedules, history; prune, record_run, set_enabled)
+│   └── sites.py            ← Sites metadata sidecar (Live Map): db_list_sites, db_get/upsert/ensure/rename/delete_site_meta, db_site_usage, db_distinct_site_names; lazy-creates rows when the rollup encounters an unseen devices.site value
 │
 ├── routes/
 │   ├── auth.py             ← Login, logout, users, user/self profile PATCH
@@ -206,7 +211,9 @@ pingwatch/
 │   ├── auto_discovery.py   ← Auto-discovery run-now, status, suppressed-host remove, first-scan approve
 │   ├── licenses.py         ← Device license CRUD + expiration check trigger
 │   ├── reports.py          ← Report template/schedule/history CRUD; preview; Run Now; test-send; PDF/CSV download
-│   └── diagnostics.py      ← Operator/support console: snapshot, db-stats, recent-errors, probe-from-server, NTP/DNS test, maintenance actions, sanitized support-bundle ZIP
+│   ├── diagnostics.py      ← Operator/support console: snapshot, db-stats, recent-errors, probe-from-server, NTP/DNS test, maintenance actions, sanitized support-bundle ZIP
+│   ├── sites.py            ← Sites metadata CRUD — /api/sites/meta (list, create, update/rename, delete with optional cascade); operator role; audit-logged
+│   └── livemap.py          ← Live Map read endpoints — /api/livemap/sites, /api/livemap/noc/summary, /api/livemap/sites/<name>/tree; viewer role
 │
 ├── certs/                  ← Optional: drop cert.pem + key.pem here
 │
@@ -232,9 +239,13 @@ pingwatch/
     ├── logs.js             ← Top-level Logs tab (admin-only): stream sub-tabs, live tail, smart scroll-follow, min-level filter, custom time range, word-wrap, copy / CSV / JSON, keyboard shortcuts, localStorage prefs
     ├── ipam.js             ← IPAM tab
     ├── bg.js               ← Animated background canvas
-    ├── map.html            ← Network Topology Manager shell
-    ├── map.css             ← NTM styles
-    ├── map.js              ← NTM canvas engine
+    ├── map.html            ← Topology Design (manual editor) shell — PingWatch Live tab removed; entry points stripped pre-1.0
+    ├── map.css             ← Topology Design styles
+    ├── map.js              ← Topology Design canvas engine — manual pages, drag/zoom, undo/redo, links, groups
+    ├── livemap.html        ← Live Map (NOC console + site drill-in) shell — separate iframe under #liveMapView
+    ├── livemap.css         ← Live Map styles — scope bar, sidebar mosaic, hero stats, tier rows, off-site band, site-detail panel; theme parity via [data-theme="light"]
+    ├── livemap.js          ← Live Map controller: sidebar render + search, NOC widgets, SiteDetail tier rendering, SVG connection lines, SSE/postMessage fan-out from parent app.js, hash-based routing (#/noc, #/site/<name>); single delegated #lm-main click listener
+    ├── forms-site.js       ← Add/Edit/Delete Site modal — used by both the Devices tab and the Live Map sidebar; self-injects modal CSS when run in the main app context (livemap.css only loads inside the iframe); cascade-delete with usage counts
     └── fonts/              ← Self-hosted woff2 files — Exo 2, JetBrains Mono, Orbitron, Share Tech Mono (no CDN dependency; air-gapped safe)
 ```
 
@@ -640,7 +651,7 @@ The frontend is served as static files — no build step.
 | `style.css` | Application-wide styles and CSS variables |
 | `app.js` | Bootstrap, tab routing, SSE connection, shared helpers (`api()`, `toast()`, `esc()`); `TIMINGS` frozen object centralises all SSE/UI timing constants (SSE batch interval, reconnect backoff, clock update rate, etc.); reconciles `theme_preference` from `/api/me` into `setTheme(..., {sync:false})` after login |
 | `theme.js` | Theme manager — public API `getTheme()` / `setTheme(t, opts)` / `toggleTheme()` / `getCssVar(name)` / `getCssRgb(name)`. `setTheme` writes `<html data-theme>`, persists `localStorage.pw_theme`, postMessages the map iframe, dispatches a `themechange` `CustomEvent`, refreshes the user-menu button label, and fires `PATCH /api/me/theme` in the background (skipped when `opts.sync===false` to avoid echo when mirroring the server value). `getCssRgb()` parses `#rgb` / `#rrggbb` / `rgb()` / `rgba()` values into `[r,g,b]` tuples — used by canvas modules that need `rgba(${rgb.join(',')},${alpha})` template literals. An inline bootstrap script in `<head>` applies the attribute synchronously before CSS paints — prevents FOUC. Loaded first in the JS bundle so downstream modules can call `getCssVar()` / `getCssRgb()` during init. |
-| `dashboard.js` | Customizable widget dashboard with **multi-dashboard tabs** — per-user named dashboards (up to 10) with tab bar, right-click rename/delete context menu, localStorage-persisted active tab; new users get a pre-populated "Default" dashboard with 8 starter widgets; `_dwDashboards` / `_dwActiveId` / `_dwWidgets` state; API: `/api/dashboards`; includes `license_overview` widget — 4-KPI grid (Expired / Expiring / Valid / Total) + sorted expiration table. `backup_status` widget (`_dwNcmStatusRefresh`) fetches `/api/backups` + `/api/settings` in parallel; renders the existing device-config 2×2 KPI grid (OK/Failed/Never/Enabled) plus a **Database** section (`_dwRenderDbBackup`) showing last-run age (color-coded green/amber/red by overdue threshold), next scheduled run, and optional remote upload status line; clicking the DB card navigates to Settings → Database. Availability sparkline / mini-chart canvases read theme colours fresh each paint via `getCssVar()` / `getCssRgb()` (`--bg`, `--text3`, `--up`, `--warn`, `--down`) so strips and gradients recolour on the next widget refresh after a theme flip |
+| `dashboard.js` | Customizable widget dashboard with **multi-dashboard tabs** + **redesigned Add Widget modal** — `_DW_REG` extended per-widget with `cat` (charts/status/events/reports/network), `desc`, `meta`, `popular`, `isNew`; `_DW_PREVIEW` registry of mini-preview DOM builders surfaces a side popout when a tile is hovered; modal shell built by `_dwOpenPicker()` — search input (Ctrl-K), category chips, Recently Used / Popular / per-category sections, 3-column tile grid, keyboard nav (↑↓/Enter/Esc), click-to-add with toast confirmation, recent tracking via `localStorage.pw_widget_recent` (cap 6); the picker's add and close handlers are closure-scoped (no window pollution). — per-user named dashboards (up to 10) with tab bar, right-click rename/delete context menu, localStorage-persisted active tab; new users get a pre-populated "Default" dashboard with 8 starter widgets; `_dwDashboards` / `_dwActiveId` / `_dwWidgets` state; API: `/api/dashboards`; includes `license_overview` widget — 4-KPI grid (Expired / Expiring / Valid / Total) + sorted expiration table. `backup_status` widget (`_dwNcmStatusRefresh`) fetches `/api/backups` + `/api/settings` in parallel; renders the existing device-config 2×2 KPI grid (OK/Failed/Never/Enabled) plus a **Database** section (`_dwRenderDbBackup`) showing last-run age (color-coded green/amber/red by overdue threshold), next scheduled run, and optional remote upload status line; clicking the DB card navigates to Settings → Database. Availability sparkline / mini-chart canvases read theme colours fresh each paint via `getCssVar()` / `getCssRgb()` (`--bg`, `--text3`, `--up`, `--warn`, `--down`) so strips and gradients recolour on the next widget refresh after a theme flip |
 | `devices.js` | Device list, detail panel, port scan modal; status filter pills (All/Down/Warn/Up/Pause) with SSE-live counts; device list pagination (25/50/100 per page, `localStorage`-persisted); filter + status + pagination compose cleanly |
 | `sensors.js` | Sensor list, detail panel, history chart; SNMP tile shows formatted rate for counter OIDs and orange warning when a non-numeric string is returned (wrong OID indicator); device tile loading skeleton (shimmer) while fresh data loads; drag-to-reorder sensor tiles with layout saved to `localStorage` per device; VMware sensors render as collapsible VM groups with per-metric rows, sparklines, formatted values (`_fmtVmVal`), and group-level mute toggle; KPI tiles (Avg/Min/Max) compute from `samples` array to match the stats bar and reflect the selected time range — Avail, Loss%, Jitter remain from hourly `summary` aggregates. History chart + sparkline canvases maintain a module-level `_SCC` RGB cache (`accent` / `up` / `warn` / `down` / `text` / `bg` / `bg2`) populated via `getCssRgb()` and invalidated on the `themechange` event; the listener iterates `_histCache` and calls `dmHistRedraw(did, sid)` on every open chart so all visible history modals repaint immediately after a theme toggle |
 | `events.js` | Flap/trap/error event log with filters; **inner Active / History tabs** — `_evtInnerTab` state (persisted in `localStorage`), `_evtSetInnerTab()` switcher, `_isEvtActive()` helper partitions flaps by `ack_state` and traps by matched alert state (unmatched traps → History); active count badge on Active tab; "Resolve All" hidden on History tab; alert tagging — matches sensor events to alert history (90 s window), renders severity badge + profile name + state inline, ACK/Resolve buttons on active rows, refreshes on SSE `ack_event`; resolved event duration uses `resolved_at` as fixed end time (stops counting); license event support — `license_ok`→recovery, `license_warn`→warning, `license_crit`→critical severity mapping; 📋 icon for `stype='license'`; "License" option in Type filter |
@@ -660,7 +671,9 @@ The frontend is served as static files — no build step.
 | `forms-group.js` | Edit Group modal — group rename and per-group alert profile (inherit / override controls with "Edit profile…" button) |
 | `ipam.js` | IPAM tab — subnet list, per-subnet IP table, inline editing; **sortable columns** (click headers, ▲/▼ arrows) on all 7 columns with IP-numeric, alpha, and date comparators; **filter dropdowns** on Status (All/Used/Free) and Licenses (All/Valid/Expiring/Expired/None); sort + filter + text search compose together; **Licenses column** — `_ipamLicenseMap` (did → worst status), `_ipamLicBadge(did)` renders Valid/Expiring/Expired badge; refreshed on SSE `license_status` |
 | `bg.js` | Animated background canvas (aurora + radar). Theme-aware: RGB colour cache populated via `getCssRgb()` from `--accent` / `--up` / `--text2`, refreshed by a `themechange` listener — the next RAF frame picks up the new palette without a page reload |
-| `map.js` | NTM canvas engine — drag-and-drop topology editor. Iframe theme sync: parent postMessage (`{type:'theme', value}`) + localStorage bootstrap (same-origin with parent) set `<html data-theme>` on arrival/load. Animated background palettes — two frozen objects (`_NTM_BG_PALETTES.dark` / `.light`) feeding an active `_NTM_BG` reference; `_ntmRefreshBgPalette()` swaps it and dispatches `ntm_themechange`. `initMainBg` (hex grid, matrix streams, particles, ring pulses, scan line, corner HUD, base fill) and `initDashBg` (side-panel particles + connections + scan bar) read `_NTM_BG` every frame; the `ntm_themechange` listener zeroes `hexCacheW/H` so the offscreen hex cache rebuilds with the new stroke colour on the next frame |
+| `livemap.js` | Live Map (NOC console) controller — loaded inside `/livemap.html` iframe. Sidebar render + search, NOC widget rendering, SiteDetail tier layout (firewall → switches → hypervisors + IPMI inline → VM clusters), SVG connection lines with `dashFlow` animation, hash-based routing (`#/noc`, `#/site/<name>`), SSE/postMessage fan-out from the parent app.js `_sseBatch` (2-second flush debounce). Click delegation on the stable `#lm-main` element is bound once in `boot()` so site re-renders don't accumulate listeners; `liveTickTimer` pauses on `visibilitychange` to avoid CPU churn when the iframe is hidden. `_lmRefresh` / `_lmGetSites` / `_lmGetSite` are exposed on `window` for `forms-site.js` to invalidate cached state after a CRUD operation. |
+| `forms-site.js` | Add/Edit/Delete Site modal — used from the Devices tab (the "+ Add Site" button and the right-click → "Edit Site" context menu item on a site header) and from the Live Map sidebar. Self-injects modal CSS the first time `openModal` runs (the styles live in `livemap.css`, which isn't loaded in the main app context). `_broadcastRefresh()` calls `_refreshDevices` + `_lmRefresh` + posts `{type:'lm_refresh'}` to the livemap iframe so all three surfaces re-fetch after every change. Delete flow opens a secondary confirm modal that pulls `/api/sites/meta/<name>/usage` and offers a cascade checkbox (default on when usage > 0). |
+| `map.js` | Topology Design (manual editor) canvas engine — drag-and-drop topology editor. PingWatch Live tab removed pre-1.0 (entry points stripped; the live overlay moved to `livemap.js`). A handful of unreachable live-mode helpers (`renderPingWatchCanvas`, `_pwLiveUpdate`, `showPwDashboardPanel`) remain in the file pending a post-1.0 cleanup pass. Iframe theme sync: parent postMessage (`{type:'theme', value}`) + localStorage bootstrap (same-origin with parent) set `<html data-theme>` on arrival/load. Animated background palettes — two frozen objects (`_NTM_BG_PALETTES.dark` / `.light`) feeding an active `_NTM_BG` reference; `_ntmRefreshBgPalette()` swaps it and dispatches `ntm_themechange`. `initMainBg` (hex grid, matrix streams, particles, ring pulses, scan line, corner HUD, base fill) and `initDashBg` (side-panel particles + connections + scan bar) read `_NTM_BG` every frame; the `ntm_themechange` listener zeroes `hexCacheW/H` so the offscreen hex cache rebuilds with the new stroke colour on the next frame |
 | `fonts/` | Self-hosted `.woff2` font files (Exo 2, JetBrains Mono, Orbitron, Share Tech Mono). Referenced by `@font-face` rules in `style.css` + `map.css` + inline `<style>` in `setup.html`. No external CDN — PingWatch has zero network dependencies at runtime (air-gapped safe). CSP reflects this: `style-src 'self' 'unsafe-inline'; font-src 'self';` in `server.py`. For PNG topology exports, `map.js::_inlineFontsForExport()` base64-embeds the Orbitron + Share Tech Mono woff2 files so exported images render correctly outside the app. |
 
 ---
@@ -680,262 +693,13 @@ The frontend is served as static files — no build step.
 
 ## API Reference
 
-### Devices & Sensors
+The complete REST API reference — endpoints, scopes, authentication,
+and curl examples — now lives in [API.md](API.md). Use scoped Bearer
+tokens (Settings → API Tokens) for scripts, CI, and Terraform.
 
-| Method | Path | Description |
-|--------|------|-------------|
-| `GET` | `/api/devices` | List all devices with latest sensor states |
-| `POST` | `/api/device` | Create a device |
-| `GET` | `/api/devices/{did}` | Get device detail |
-| `PATCH` | `/api/devices/{did}` | Update device |
-| `DELETE` | `/api/devices/{did}` | Delete device |
-| `POST` | `/api/devices/bulk` | Bulk action across up to 1000 devices `{device_ids:[], action:"move"\|"start"\|"stop"\|"delete", group?:"…"}` → `{ok, applied, failed, results:[{did, ok, reason?}]}`; one audit entry per call; operator role |
-| `GET` | `/api/sensors/{did}` | List sensors for a device |
-| `POST` | `/api/sensors/{did}` | Add a sensor |
-| `PATCH` | `/api/sensors/{did}/{sid}` | Update a sensor (accepts `anomaly_enabled`, `anomaly_sensitivity`, `anomaly_min_samples`) |
-| `DELETE` | `/api/sensors/{did}/{sid}` | Delete a sensor |
-| `POST` | `/api/sensors/{did}/{sid}/anomaly/reset` | Wipe the learned anomaly baseline (in-memory + DB row); operator role |
-| `POST` | `/api/device/{did}/scan` | Trigger port scan (async) |
-| `POST` | `/api/anomaly/bulk-enable` | Enable anomaly detection on every supported sensor that's currently off; resets each baseline to a fresh cold-start window; admin role |
+<!-- The detailed feature-grouped tables previously here were moved into
+     API.md so the user-facing API contract has its own home. -->
 
-### Settings
-
-| Method | Path | Description |
-|--------|------|-------------|
-| `GET` | `/api/settings` | All app settings |
-| `PATCH` | `/api/settings` | Update settings (partial) |
-| `GET` | `/api/server_info` | Server version, uptime, DB stats |
-| `POST` | `/api/settings/smtp_test` | Send a test email |
-| `POST` | `/api/settings/syslog_test` | Send a test syslog message |
-| `POST` | `/api/server/restart` | Restart the server process |
-| `POST` | `/api/server/shutdown` | Shutdown the server process |
-| `POST` | `/api/db/backup/run` | Trigger an immediate DB snapshot *(admin only)* |
-
-### Dashboards
-
-| Method | Path | Description |
-|--------|------|-------------|
-| `GET` | `/api/dashboards` | List user's dashboards (id, name only); auto-creates "Default" with starter widgets for new users |
-| `POST` | `/api/dashboards` | Create dashboard `{name}` (max 10 per user) |
-| `GET` | `/api/dashboards/{id}` | Get dashboard widgets |
-| `PUT` | `/api/dashboards/{id}` | Save widgets `{widgets: [...]}` |
-| `PATCH` | `/api/dashboards/{id}` | Rename dashboard `{name}` |
-| `DELETE` | `/api/dashboards/{id}` | Delete dashboard (rejects if last) |
-| `PUT` | `/api/dashboards/reorder` | Reorder tabs `{ids: [3, 1, 2]}` |
-
-### TLS
-
-| Method | Path | Description |
-|--------|------|-------------|
-| `GET` | `/api/tls` | Certificate metadata + TLS settings (no private key) |
-| `PATCH` | `/api/tls` | Update `tls_enabled`, `tls_port`, `http_redirect` |
-| `POST` | `/api/tls/upload` | Upload and validate a PEM cert + key pair |
-| `POST` | `/api/tls/generate` | Generate a new self-signed certificate |
-
-### Backups
-
-| Method | Path | Description |
-|--------|------|-------------|
-| `GET` | `/api/backups` | List all devices with latest backup metadata |
-| `GET` | `/api/backups/{did}` | Backup settings for a device (no plaintext passwords) |
-| `PUT` | `/api/backups/{did}` | Save backup settings |
-| `GET` | `/api/backups/{did}/history` | Backup run list for a device |
-| `GET` | `/api/backups/run/{id}` | Full run record including config text |
-| `POST` | `/api/backups/{did}/run` | Trigger immediate backup (async, rate-limited 30 s) |
-| `DELETE` | `/api/backups/run/{id}` | Delete a backup run *(admin only)* |
-
-### LDAP
-
-| Method | Path | Auth | Description |
-|--------|------|------|-------------|
-| `GET` | `/api/ldap/settings` | admin | LDAP config (bind password never returned) including group integration fields |
-| `PATCH` | `/api/ldap/settings` | admin | Save LDAP config |
-| `POST` | `/api/ldap/test_connection` | admin | Test service-account bind |
-| `POST` | `/api/ldap/test_auth` | admin | Test full user authentication flow |
-| `POST` | `/api/ldap/search_groups` | admin | Browse/search LDAP directory for groups `{query}` → `{ok, groups: [{dn, cn, description, member_count}]}` |
-| `POST` | `/api/ldap/test_user_groups` | admin | Look up a user's LDAP group memberships `{username}` → `{ok, display_name, email, groups: [dn, ...]}` |
-
-### RADIUS
-
-| Method | Path | Auth | Description |
-|--------|------|------|-------------|
-| `GET` | `/api/radius/settings` | admin | RADIUS config (shared secrets never returned; `radius_secret_set` / `radius_secret2_set` sentinels indicate if set) |
-| `PATCH` | `/api/radius/settings` | admin | Save RADIUS config; empty secret = keep existing; non-empty = Fernet-encrypt and replace |
-| `POST` | `/api/radius/test_connection` | admin | Send a bogus packet and verify the server responds `{ok, message}` |
-| `POST` | `/api/radius/test_auth` | admin | Run a full authentication `{username, password}` → `{ok, attrs?, challenge?, message}` |
-| `POST` | `/api/radius/test_auth_challenge` | admin | Continue a test-auth challenge `{challenge_id, response}` → same shape |
-| `GET` | `/api/radius/attribute_mappings` | admin | List all groups with their RADIUS mappings + `available_groups` (unmapped) |
-| `POST` | `/api/radius/attribute_mappings` | admin | Set or clear mapping for a group `{group_id, attribute, value}` |
-
-Also extends `POST /api/login` to return `{radius_challenge: true, challenge_id, prompt}` when RADIUS issues an `Access-Challenge`, and adds `POST /api/login/radius_challenge {challenge_id, response}` to complete it.
-
-### SAML 2.0 SSO
-
-| Method | Path | Auth | Description |
-|--------|------|------|-------------|
-| `GET`  | `/api/saml/login` | public | Build AuthnRequest (signed if `saml_sign_authn_requests=1`), return auto-submitting HTML form 302'd to the IdP SSO URL |
-| `POST` | `/api/saml/acs` | public | Assertion Consumer Service — validates RelayState, verifies signature against pinned IdP cert, runs `sso_provision_or_sync`, issues session cookie, 302 → `/`. TOTP gate honoured |
-| `GET`  | `/api/saml/metadata` | public | SP metadata XML (`application/samlmetadata+xml`) — admins download and upload to their IdP |
-| `GET`  | `/api/saml/settings` | admin | Read config (SP private key never returned; `saml_sp_key_pem_set` boolean indicates if set) |
-| `PATCH` | `/api/saml/settings` | admin | Partial update (allow-listed keys only) |
-| `POST` | `/api/saml/metadata/import` | admin | `{source: "url"\|"xml"\|"file", url?, xml?}` → fetches/parses IdP metadata, stores entity_id + SSO URL + signing cert |
-| `POST` | `/api/saml/sp_cert/generate` | admin | Generate a fresh RSA-2048 self-signed SP signing cert (825-day); returns the public PEM for display |
-| `POST` | `/api/saml/test` | admin | Dry-run validation: cert expiry, signxml import, AuthnRequest build smoke test → `{ok, message, detail}` |
-
-### OIDC SSO
-
-| Method | Path | Auth | Description |
-|--------|------|------|-------------|
-| `GET`  | `/api/oidc/login` | public | Build authorization URL with PKCE (S256) + state + nonce; 302 to IdP authorization endpoint |
-| `GET`  | `/api/oidc/callback` | public | Receives `code` + `state`; exchanges code for tokens; validates ID token via JWKS; runs `sso_provision_or_sync`; issues session cookie |
-| `GET`  | `/api/oidc/settings` | admin | Read config (`oidc_client_secret_set` boolean only) |
-| `PATCH` | `/api/oidc/settings` | admin | Partial update; if `oidc_issuer_url` changes, auto-refresh discovery |
-| `POST` | `/api/oidc/discovery/refresh` | admin | Re-fetch `.well-known/openid-configuration` + JWKS; persist to `oidc_discovery_cache` |
-| `POST` | `/api/oidc/test` | admin | Validates issuer reachability, parses discovery + JWKS → `{ok, message, detail}` |
-
-### Auth Backend Health
-
-| Method | Path | Auth | Description |
-|--------|------|------|-------------|
-| `POST` | `/api/auth/health/run_now` | admin | Wakes the refresh loop's multi-event wait so a full health pass runs immediately (returns immediately; results land in the status badges within seconds) |
-
-`auth_refresh_interval_min` (allow-listed: `0` / `15` / `30` / `60` / `240` / `720` minutes) is set via the standard `PATCH /api/settings`. `0` disables the hourly loop but the boot sanity pass still runs. `GET /api/settings` returns `auth_refresh_interval_min` + `auth_refresh_last_ts` (max `last_ok_ts` across all four backends) for the UI.
-
-`GET /api/settings/public_auth` (no auth required) returns `{saml_enabled, saml_display_name, oidc_enabled, oidc_display_name}` only — used by the login screen to render the SSO buttons before the user has a session.
-
-### IPAM
-
-| Method | Path | Description |
-|--------|------|-------------|
-| `GET` | `/api/ipam/subnets` | List all subnets with allocation summary |
-| `POST` | `/api/ipam/subnets` | Add a subnet `{cidr, name}` |
-| `DELETE` | `/api/ipam/subnets/{id}` | Remove subnet and all allocations |
-| `GET` | `/api/ipam/subnets/{id}/ips` | IP allocations for a subnet |
-| `PUT` | `/api/ipam/ips/{subnet_id}/{ip}` | Set or clear the name for an IP |
-
-### Device Licenses
-
-| Method | Path | Auth | Description |
-|--------|------|------|-------------|
-| `GET` | `/api/device/{did}/licenses` | viewer | List licenses for a device |
-| `POST` | `/api/device/{did}/licenses` | operator | Add license `{license_name, expiry_date, note?, warn_days?, crit_days?}` → `{id, licenses[]}` |
-| `PATCH` | `/api/license/{id}` | operator | Update license fields |
-| `DELETE` | `/api/license/{id}` | operator | Delete a license |
-| `GET` | `/api/licenses` | viewer | All licenses across all devices (for dashboard widget and IPAM map) |
-| `GET` | `/api/licenses/summary` | viewer | Counts by status `{ok, warn, crit, total}` |
-| `POST` | `/api/licenses/check` | admin | Trigger immediate expiration check |
-
-### Reports
-
-| Method | Path | Auth | Description |
-|--------|------|------|-------------|
-| `GET` | `/api/reports/templates` | viewer | List all report templates |
-| `POST` | `/api/reports/template` | admin | Create template `{name, kind, config_json}` |
-| `GET` | `/api/reports/template/{id}` | viewer | Get template detail |
-| `PATCH` | `/api/reports/template/{id}` | admin | Update template |
-| `DELETE` | `/api/reports/template/{id}` | admin | Delete template |
-| `GET` | `/api/reports/schedules` | viewer | List all report schedules |
-| `POST` | `/api/reports/schedule` | admin | Create schedule |
-| `PATCH` | `/api/reports/schedule/{id}` | admin | Update schedule (incl. enable/disable) |
-| `DELETE` | `/api/reports/schedule/{id}` | admin | Delete schedule |
-| `GET` | `/api/reports/history` | viewer | Paginated report history; optional `template_id` filter |
-| `GET` | `/api/reports/history/{id}` | viewer | Single history record |
-| `GET` | `/api/reports/history/{id}/download` | viewer | Download the generated PDF |
-| `GET` | `/api/reports/history/{id}/csv` | viewer | Download the CSV sidecar (if generated) |
-| `DELETE` | `/api/reports/history/{id}` | admin | Delete one history row + its PDF/CSV files |
-| `POST` | `/api/reports/history/bulk-delete` | admin | Delete many history rows `{ids:[…]}` — capped at 500 per call; returns `{deleted, missing}` |
-| `POST` | `/api/reports/run` | operator | Ad-hoc Run Now `{template_id}` — renders, saves PDF, returns history row |
-| `POST` | `/api/reports/preview` | operator | Render HTML preview `{template_id}` — returns full HTML with inlined CSS (no PDF) |
-| `POST` | `/api/reports/test-send` | operator | Test email delivery `{template_id, recipients}` — renders and emails PDF without saving history |
-
-### User Profiles
-
-| Method | Path | Auth | Description |
-|--------|------|------|-------------|
-| `GET` | `/api/me` | any | Own username, role, full_name, email, theme_preference |
-| `PATCH` | `/api/me/profile` | any | Update own full_name and email (also accepts optional `theme_preference`) |
-| `PATCH` | `/api/me/theme` | any | Update own theme preference `{theme: "dark"\|"light"}` — fired in the background by `setTheme()` |
-| `PATCH` | `/api/users/{u}/profile` | admin or self | Update profile; admin can also set group_id and role |
-
-### Two-Factor Authentication
-
-| Method | Path | Auth | Description |
-|--------|------|------|-------------|
-| `POST` | `/api/me/totp/setup` | any | Generate TOTP secret + QR code URI `{secret, qr_uri}`. Idempotent — safe to call multiple times before verification. |
-| `POST` | `/api/me/totp/verify` | any | Confirm enrolment `{code, secret}`. Activates 2FA and returns 8 single-use recovery codes. |
-| `POST` | `/api/me/totp/disable` | any | Disable 2FA for self `{password}`. Revokes all trusted devices for the user. |
-| `POST` | `/api/users/{u}/totp/reset` | admin | Admin: disable 2FA for `{u}` and revoke all their trusted devices. |
-| `POST` | `/api/login/totp` | — | Complete a TOTP challenge `{challenge_id, code, remember?, remember_hours?}`. On success sets `session` cookie; optionally sets `pw_trusted` cookie when `remember=true`. |
-
-### Trusted Devices
-
-| Method | Path | Auth | Description |
-|--------|------|------|-------------|
-| `GET` | `/api/me/trusted-devices` | viewer | List own trusted devices — label, IP, last used, expiry; includes `remember_hours` preference; current device flagged with `current: true` |
-| `DELETE` | `/api/me/trusted-devices` | viewer | Revoke all own trusted devices and clear the `pw_trusted` cookie |
-| `DELETE` | `/api/me/trusted-devices/{id}` | viewer | Revoke one trusted device; clears `pw_trusted` cookie if the request matches the current device |
-| `PATCH` | `/api/me/totp/remember-hours` | viewer | Set personal default remember duration `{hours: 9}` (0–720; 0 = always prompt TOTP) |
-
-### User Groups
-
-| Method | Path | Auth | Description |
-|--------|------|------|-------------|
-| `GET` | `/api/groups` | viewer | List all groups with member_count |
-| `POST` | `/api/group` | admin | Create group `{name, description}` |
-| `PATCH` | `/api/group/{id}` | admin | Update group name / description |
-| `DELETE` | `/api/group/{id}` | admin | Delete group; members are unassigned |
-| `PUT` | `/api/group/{id}/members` | admin | Replace member list `{usernames: [...]}` |
-| `POST` | `/api/user/group/import_ldap` | admin | Bulk-import LDAP groups `{groups: [{dn, cn, description, default_role}]}` — idempotent (skips existing DNs) → `{ok, imported, skipped, groups}` |
-
-### Alert Profiles
-
-| Method | Path | Auth | Description |
-|--------|------|------|-------------|
-| `GET` | `/api/alert/profiles` | viewer | List all profiles with scope and stage count |
-| `POST` | `/api/alert/profile` | admin | Create profile |
-| `GET` | `/api/alert/profile/{id}` | viewer | Get profile with all stages |
-| `PATCH` | `/api/alert/profile/{id}` | admin | Update profile and stages |
-| `DELETE` | `/api/alert/profile/{id}` | admin | Delete profile |
-| `POST` | `/api/alert/profile/{id}/test` | admin | Test-fire all stages with synthetic event |
-| `GET` | `/api/alert/action-templates` | viewer | List all action templates |
-| `POST` | `/api/alert/action-template` | admin | Create action template |
-| `PATCH` | `/api/alert/action-template/{id}` | admin | Update action template |
-| `DELETE` | `/api/alert/action-template/{id}` | admin | Delete action template |
-
-### Alert Events
-
-| Method | Path | Auth | Description |
-|--------|------|------|-------------|
-| `GET` | `/api/alert/events` | viewer | Paginated event history |
-| `GET` | `/api/alert/events/active` | viewer | Active / unresolved events |
-| `POST` | `/api/alert/events/resolve-all` | operator | Resolve all active alert events and flaps |
-| `POST` | `/api/alert/event/{id}/ack` | operator | Acknowledge event |
-| `POST` | `/api/alert/event/{id}/resolve` | operator | Resolve event |
-
-### VMware
-
-| Method | Path | Auth | Description |
-|--------|------|------|-------------|
-| `GET` | `/api/vmware/metrics` | viewer | Available VM metrics with labels, units, groups |
-| `POST` | `/api/vmware/vms` | operator | Discover VMs on a vCenter/ESXi host |
-
-### Maintenance Windows
-
-| Method | Path | Auth | Description |
-|--------|------|------|-------------|
-| `GET` | `/api/alert/windows` | viewer | List all maintenance windows |
-| `POST` | `/api/alert/windows` | admin | Create window |
-| `PATCH` | `/api/alert/window/{id}` | admin | Update window |
-| `DELETE` | `/api/alert/window/{id}` | admin | Delete window |
-
-### Subnet Discovery
-
-| Method | Path | Auth | Description |
-|--------|------|------|-------------|
-| `POST` | `/api/discovery/scan` | operator | Start a subnet scan `{cidr, skip_monitored, mode}` → `202 {scan_id}` |
-| `GET` | `/api/discovery/scan/{id}` | viewer | Poll scan progress and results |
-| `DELETE` | `/api/discovery/scan/{id}` | operator | Cancel a running scan |
-| `POST` | `/api/discovery/bulk-add` | operator | Bulk-create up to 500 devices with sensors `{devices: [{name, host, group, sensors: [...]}]}` |
 
 ---
 

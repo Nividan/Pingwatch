@@ -12,6 +12,7 @@
     devices:       '<rect x="3" y="4" width="18" height="6" rx="1.5"/><rect x="3" y="14" width="18" height="6" rx="1.5"/><circle cx="7" cy="7" r=".7" fill="currentColor"/><circle cx="7" cy="17" r=".7" fill="currentColor"/>',
     events:        '<path d="M13 2 L4 14 H11 L10 22 L20 9 H13 Z"/>',
     map:           '<polyline points="3 6 9 4 15 6 21 4 21 18 15 20 9 18 3 20 3 6"/><line x1="9" y1="4" x2="9" y2="18"/><line x1="15" y1="6" x2="15" y2="20"/>',
+    livemap:       '<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="1.6" fill="currentColor"/><line x1="12" y1="3" x2="12" y2="6"/><line x1="12" y1="18" x2="12" y2="21"/><line x1="3" y1="12" x2="6" y2="12"/><line x1="18" y1="12" x2="21" y2="12"/>',
     ipam:          '<path d="M4 5 H20 M4 12 H20 M4 19 H20"/><circle cx="7" cy="5" r="1.2" fill="currentColor"/><circle cx="12" cy="12" r="1.2" fill="currentColor"/><circle cx="17" cy="19" r="1.2" fill="currentColor"/>',
     alerts:        '<path d="M6 8 a6 6 0 0 1 12 0 c0 5 2 7 2 7 H4 s2-2 2-7"/><path d="M10 19 a2 2 0 0 0 4 0"/>',
     reports:       '<rect x="4" y="3" width="16" height="18" rx="1.5"/><line x1="8" y1="9" x2="16" y2="9"/><line x1="8" y1="13" x2="16" y2="13"/><line x1="8" y1="17" x2="13" y2="17"/>',
@@ -112,8 +113,9 @@
     var rail = [
       ['tabDashboard','dashboard'], ['tabDevices','devices'], ['tabEvents','events'],
       ['tabAlerting','alerts'],
-      ['tabMap','map'],              ['tabBackups','backups'], ['tabIpam','ipam'],
-      ['tabReports','reports'],      ['tabLogs','logs'],       ['railSettings','settings'],
+      ['tabLiveMap','livemap'],      ['tabMap','map'],          ['tabBackups','backups'],
+      ['tabIpam','ipam'],            ['tabReports','reports'],  ['tabLogs','logs'],
+      ['railSettings','settings'],
     ];
     for (var i = 0; i < rail.length; i++) {
       var el = document.getElementById(rail[i][0]);

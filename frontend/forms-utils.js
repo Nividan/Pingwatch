@@ -1,4 +1,79 @@
 // ── Shared helpers (loaded first — used by all other forms-*.js files) ────
+
+/** Live Map tier dropdown — single source of truth for both Add Group and
+ *  Edit Group modals. Mirrored on the backend in monitoring/site_tree.py
+ *  _VALID_TIERS. When adding a new tier here, add the matching key + regex
+ *  in the backend too. */
+const _LM_TIER_OPTIONS = [
+  {value: '',            label: '— Auto-detect from name —'},
+  {value: 'isp',         label: 'ISP'},
+  {value: 'wan_switch',  label: 'WAN Switch'},
+  {value: 'firewall',    label: 'Firewall'},
+  {value: 'core_switch', label: 'Core Switch'},
+  {value: 'switch',      label: 'Access Switch'},
+  {value: 'chassis',     label: 'Chassis / Enclosure'},
+  {value: 'hypervisor',  label: 'Hypervisor / Server'},
+  {value: 'vm',          label: 'VM'},
+  {value: 'ipmi',        label: 'IPMI / OOB'},
+  {value: 'other',       label: 'Other'},
+];
+/** Build option HTML for the tier dropdown. `selected` is the currently
+ *  chosen value (or '' for auto-detect). */
+function _lmTierOptionsHtml(selected) {
+  const sel = String(selected == null ? '' : selected);
+  return _LM_TIER_OPTIONS.map(function(o) {
+    return '<option value="' + o.value + '"' +
+           (o.value === sel ? ' selected' : '') +
+           '>' + o.label + '</option>';
+  }).join('');
+}
+
+/* ── SNMP dropdown option lists — single source of truth ───────────────
+   Used by Add/Edit Device + Sensor modals. Backend whitelist mirrors are
+   in routes/devices.py (_V3_LEVELS / _V3_AUTH / _V3_PRIV) and probes.py.
+   When changing any list here, update the matching backend whitelist. */
+const _SNMP_VERSIONS = [
+  {value: '2c', label: 'v2c'},
+  {value: '1',  label: 'v1'},
+  {value: '3',  label: 'v3'},
+];
+const _SNMP_V3_LEVELS = [
+  {value: 'noAuthNoPriv', label: 'noAuthNoPriv'},
+  {value: 'authNoPriv',   label: 'authNoPriv'},
+  {value: 'authPriv',     label: 'authPriv'},
+];
+const _SNMP_V3_AUTH_PROTOS = [
+  {value: 'SHA',     label: 'SHA'},
+  {value: 'MD5',     label: 'MD5'},
+  {value: 'SHA-224', label: 'SHA-224'},
+  {value: 'SHA-256', label: 'SHA-256'},
+  {value: 'SHA-384', label: 'SHA-384'},
+  {value: 'SHA-512', label: 'SHA-512'},
+];
+const _SNMP_V3_PRIV_PROTOS = [
+  {value: 'AES',     label: 'AES'},
+  {value: 'DES',     label: 'DES'},
+  {value: 'AES-192', label: 'AES-192'},
+  {value: 'AES-256', label: 'AES-256'},
+];
+
+/** Generic option-list HTML builder. Falls back to the first entry as
+ *  default when `selected` is empty / null. */
+function _optHtml(list, selected) {
+  const sel = selected == null ? '' : String(selected);
+  // First entry is the default when no value is set.
+  const effective = sel || (list[0] && list[0].value) || '';
+  return list.map(function(o) {
+    return '<option value="' + o.value + '"' +
+           (o.value === effective ? ' selected' : '') +
+           '>' + o.label + '</option>';
+  }).join('');
+}
+function _snmpVerOptionsHtml(selected)      { return _optHtml(_SNMP_VERSIONS,        selected); }
+function _snmpV3LevelOptionsHtml(selected)  { return _optHtml(_SNMP_V3_LEVELS,       selected); }
+function _snmpV3AuthOptionsHtml(selected)   { return _optHtml(_SNMP_V3_AUTH_PROTOS,  selected); }
+function _snmpV3PrivOptionsHtml(selected)   { return _optHtml(_SNMP_V3_PRIV_PROTOS,  selected); }
+
 function closeM(id){document.getElementById(id)?.remove();}
 /** Attach backdrop-click-to-close that ignores mousedown-inside drags. */
 function _overlayClose(o, closeFn) {

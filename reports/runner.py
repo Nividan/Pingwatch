@@ -107,8 +107,24 @@ def render_from_template(template: dict,
 
     kind   = template.get("kind") or "executive"
     period = period_override or cfg.get("period") or "last_month"
-    filters = cfg.get("filters") or {}
+    filters = dict(cfg.get("filters") or {})
     pdfa_mode = str(cfg.get("pdfa_mode") or "").strip()
+
+    # Site filter — single-site scope for the whole report. Resolved to a
+    # device_id list here so downstream queries only need the existing
+    # device_ids filter. Empty / unset means "all sites" (no filter).
+    site_filter = str(cfg.get("site_filter") or "").strip()
+    if site_filter and not filters.get("device_ids"):
+        try:
+            from core.app_state import STATE
+            with STATE._lock:
+                site_dids = [d.device_id for d in STATE.devices.values()
+                             if (getattr(d, "site", "") or "").strip() == site_filter]
+            filters["device_ids"] = site_dids
+        except Exception as _e:
+            # Fail open — render an all-sites report rather than crashing.
+            from core.logger import log as _log
+            _log.warning(f"reports.runner: site_filter resolution failed ({_e}); falling back to all sites")
 
     t0 = time.time()
     ctx = _data.build_report_context(

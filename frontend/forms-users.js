@@ -140,7 +140,7 @@ async function _open2faModal(){
                <input type="password" id="tfa-pass" autocomplete="current-password"/></div>
              <div class="fr"><label class="fl">Current 2FA code</label>
                <input type="text" id="tfa-code" maxlength="6" autocomplete="one-time-code"
-                      style="font-family:monospace;letter-spacing:2px;text-align:center"/></div>
+                      style="font-family:monospace;letter-spacing:0.5px;text-align:center"/></div>
              ${_trustedSection}`
           : `<div style="margin-bottom:14px">2FA is currently <b>disabled</b>. Click below to enrol.</div>`
         }
@@ -175,7 +175,7 @@ async function _2faStartSetup(){
     <div style="background:var(--surface-inset,#0e141a);border:1px solid var(--border);border-radius:6px;padding:10px;margin-bottom:14px;font-family:monospace;font-size:14px;letter-spacing:1px;user-select:all;text-align:center">${esc(r.secret)}</div>
     <div class="fr"><label class="fl">Enter 6-digit code from your app</label>
       <input type="text" id="tfa-verify-code" maxlength="6" autocomplete="one-time-code"
-             style="font-family:monospace;letter-spacing:3px;text-align:center;font-size:18px"/></div>`;
+             style="font-family:monospace;letter-spacing:1px;text-align:center;font-size:18px"/></div>`;
   const ft=document.querySelector('#m-2fa .mft');
   if(ft){ ft.innerHTML=`<button class="btn-s" onclick="closeM('m-2fa')">Cancel</button>
                        <button class="btn-p" onclick="_2faVerifyEnrol()">Verify & Enable</button>`; }

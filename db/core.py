@@ -161,6 +161,25 @@ def db_init():
                 username TEXT NOT NULL,
                 expires  REAL NOT NULL
             )""")
+        # Bearer-token auth for scripts / CI / Terraform. token_hash is
+        # SHA-256 of the plaintext token (plaintext never stored). scope
+        # gates HTTP method: 'read' = GET/HEAD/OPTIONS only, 'full' = any.
+        con.execute("""
+            CREATE TABLE IF NOT EXISTS api_tokens (
+                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                token_hash   TEXT NOT NULL UNIQUE,
+                name         TEXT NOT NULL,
+                username     TEXT NOT NULL,
+                scope        TEXT NOT NULL CHECK(scope IN ('read','full')),
+                created_at   REAL NOT NULL,
+                expires_at   REAL,
+                last_used_at REAL,
+                revoked_at   REAL
+            )""")
+        con.execute("CREATE INDEX IF NOT EXISTS idx_api_tokens_user "
+                    "ON api_tokens(username)")
+        con.execute("CREATE INDEX IF NOT EXISTS idx_api_tokens_hash "
+                    "ON api_tokens(token_hash)")
         con.execute("""
             CREATE TABLE IF NOT EXISTS devices (
                 did TEXT PRIMARY KEY, name TEXT, host TEXT,
@@ -568,6 +587,47 @@ def db_init():
             con.commit()
         except Exception:
             pass  # column already exists
+        # Parent device linking (v1.0+, Live Map tree) — JSON array of device IDs
+        # that this device hangs off. Drives the SVG connection lines in the
+        # Live Map drill-in. Empty array = orphan/root. Multi-parent for
+        # dual-NIC/dual-homed devices. Group-level fallback lives in
+        # topo_settings('pw_group_parents').
+        try:
+            con.execute("ALTER TABLE devices ADD COLUMN parent_device_ids TEXT DEFAULT '[]'")
+            con.commit()
+        except Exception:
+            pass  # column already exists
+        try:
+            con.execute(
+                "CREATE INDEX IF NOT EXISTS idx_devices_parent_ids ON devices(parent_device_ids)"
+            )
+            con.commit()
+        except Exception:
+            pass
+        # Per-parent port wiring (v1.x+, Live Map link info). JSON dict keyed by
+        # parent device id → {"lport": "<local>", "rport": "<remote>"}. Group
+        # refs ("group:<name>") never appear here — wiring is per-device only.
+        try:
+            con.execute("ALTER TABLE devices ADD COLUMN parent_device_ports TEXT DEFAULT '{}'")
+            con.commit()
+        except Exception:
+            pass  # column already exists
+        # Sites metadata sidecar (v1.0+, Live Map NOC console).
+        # Distinct site names still come from devices.site / ipam_subnets.site;
+        # this table stores presentation metadata (kind, pinned, display_name)
+        # so the new Live Map can colour the sidebar mosaic and sites-by-type
+        # widget. Rows are created lazily by the Live Map rollup.
+        con.execute("""
+            CREATE TABLE IF NOT EXISTS sites (
+                name         TEXT PRIMARY KEY,
+                kind         TEXT NOT NULL DEFAULT 'lab',
+                pinned       INTEGER NOT NULL DEFAULT 0,
+                display_name TEXT NOT NULL DEFAULT '',
+                sort_order   INTEGER NOT NULL DEFAULT 0,
+                created_ts   INTEGER NOT NULL DEFAULT 0,
+                updated_ts   INTEGER NOT NULL DEFAULT 0
+            )
+        """)
         # Exclusive flag on alert profiles (v1.0+) — when an exclusive profile
         # matches the cascade, broader-scope profiles are not added. Lets users
         # opt out of the new default-additive cascade per-profile.
@@ -700,6 +760,9 @@ def db_init():
             "ALTER TABLE ipam_subnets ADD COLUMN first_scan_approved INTEGER DEFAULT 0",
             "ALTER TABLE ipam_subnets ADD COLUMN last_auto_scan_ts   TEXT    DEFAULT NULL",
             "ALTER TABLE ipam_subnets ADD COLUMN dns_server          TEXT    DEFAULT ''",
+            # Auto-host-scan (v1.x+) — independent of auto_discover. Sweeps for
+            # alive IPs and writes ip_allocations rows with kind='discovered'.
+            "ALTER TABLE ipam_subnets ADD COLUMN auto_host_scan      INTEGER DEFAULT 0",
         ]:
             try:
                 con.execute(_ad_col)

@@ -4,9 +4,152 @@ Detailed implementation notes for every shipped feature. For the high-level road
 
 ---
 
+## v1.1 — REST API tokens & dedicated API doc
+
+Scoped Bearer-token authentication for scripts, CI, and Terraform — running alongside the existing browser cookie session, never replacing it. The full REST API reference moves out of DEVELOPER.md into its own [API.md](API.md).
+
+### Bearer-token authentication
+
+New `Authorization: Bearer pw_<token>` header path coexists with the cookie-session path inside a single resolver. A request is identified as either a `session` (implicit `full` scope) or an `api_token` (explicit `read` / `full` scope), and the rest of the stack treats them identically — same RBAC role check, same audit pipeline.
+
+**Token shape.** `pw_` + `secrets.token_hex(32)` → 67 chars (visually distinct from session cookies). Plaintext is **shown once** in the create response; the DB stores only the SHA-256 hash (`_hash_token` in [core/auth.py](core/auth.py)). There is no recover-token flow — lose it and you revoke + regenerate.
+
+**Scopes — method-based, enforced centrally.** Audit of every route module confirmed all mutating handlers use POST / PUT / PATCH / DELETE. A `read` token is therefore restricted in one place — `_require()` in [server.py](server.py) — to `GET / HEAD / OPTIONS`. No per-route declarations needed.
+
+**SSE.** `EventSource` can't send custom headers, so an API token hitting `/events` is rejected with `400 {"error": "SSE requires cookie session"}` rather than failing the auth handshake silently. The block lives in both [`_auth()` and `_require()`](server.py) since `/events` calls `_auth` directly.
+
+**Cache.** New `_API_TOKENS` dict + lock in [core/auth.py](core/auth.py) mirrors the `_SESSIONS` pattern but with different invalidation semantics (fixed `expires_at`, no sliding TTL). Cache TTL = 300s — that's how long revocation takes to propagate. Revoke explicitly evicts matching entries by hash via `auth_evict_api_token_hash()`.
+
+### Database
+
+New `api_tokens` table — dual SQLite ([db/core.py](db/core.py)) + PostgreSQL ([db/pg_schema.py](db/pg_schema.py)):
+
+```sql
+api_tokens(id PK, token_hash UNIQUE, name, username, scope CHECK('read','full'),
+           created_at, expires_at NULL, last_used_at, revoked_at NULL)
+```
+
+with indexes on `username` and `token_hash`. CRUD lives in [db/api_tokens.py](db/api_tokens.py) using the existing `db.helpers` abstraction (one path, branches on `is_pg()` internally). Re-exported through [db/__init__.py](db/__init__.py).
+
+### Routes — `routes/api_tokens.py`
+
+Admin-only management endpoints, registered in the GET / POST / DELETE dispatch lists in [server.py](server.py):
+
+- `GET /api/tokens` — list (no plaintext, no hash). `?user=<name>` filters.
+- `POST /api/tokens` — `{name, scope, expires_at?}` → `201 {id, token: "pw_..."}` *(plaintext returned exactly once)*.
+- `DELETE /api/tokens/{id}` — revoke (sets `revoked_at`, evicts cache).
+
+A token-cannot-create-token rule blocks `POST /api/tokens` when the caller is itself an API token. Audit logs record `api_token_create` and `api_token_revoke` via [`db_log_audit`](db/audit.py); individual API calls are **not** audited (would be noise).
+
+### Frontend — Settings → API Tokens tab
+
+New `apitokens` admin-only tab in [frontend/forms-settings.js](frontend/forms-settings.js), wired into the Identity section after Users / Groups. Mirrors the Users-tab pattern: list table (Name · Owner · Scope · Created · Last used · Expires · [Revoke]) plus a "Generate Token" modal.
+
+**One-time reveal.** The create response surfaces the plaintext in a dedicated modal with a copy-to-clipboard button, a warning that this is the only time the value will be shown, and a sample `curl` command using `location.origin`. Closing the modal removes the plaintext from the DOM permanently.
+
+### Documentation
+
+- New [API.md](API.md) at the repo root — feature-grouped REST reference with a "Getting started" preamble (create + use + revoke), an "Authentication" section explaining session vs. token + scope semantics, an SSE caveat, and an error-envelope convention. Token creation lives at the top of the "Authentication & API tokens" section so curl examples for any later endpoint can assume a token in hand.
+- [DEVELOPER.md](DEVELOPER.md) lines 694–975 (the previous in-tree API tables) are replaced with a 3-line pointer stub to API.md. The architecture, schema, and contributor notes around it are unchanged.
+
+### Verified
+
+End-to-end backend test (synthetic SQLite DB + monkeypatched STATE) covers: create → auth check → unknown-token rejection → non-bearer rejection → list filters → revoke-with-cache-eviction → expired-token rejection. **9/9 pass.**
+
+**Files**: [db/api_tokens.py](db/api_tokens.py), [db/core.py](db/core.py), [db/pg_schema.py](db/pg_schema.py), [db/__init__.py](db/__init__.py), [core/auth.py](core/auth.py), [server.py](server.py), [routes/api_tokens.py](routes/api_tokens.py), [frontend/forms-settings.js](frontend/forms-settings.js), [API.md](API.md), [DEVELOPER.md](DEVELOPER.md).
+
+---
+
 ## v1.0 — New UI Design
 
 Major visual refresh based on a hi-fi design prototype exported from claude.ai/design (see [MIGRATION_NOTES.md](MIGRATION_NOTES.md) for the full handoff history). Backend behavior is unchanged except for one additive endpoint (Active Sessions). All view-container IDs, RBAC class hooks, localStorage keys, and JSON contracts at `/api/*` are preserved.
+
+### Live Map — new NOC console (M1a) and per-site drill-in (M1b)
+
+Brand-new top-level page at `/livemap.html` (icon "Live Map" in the rail) that replaces the live overlay that used to live on the NTM tab. The old NTM page is now manual-only and renamed **Topology Design**. The Live Map is its own iframe — independent layout, independent state — so it doesn't fight the manual canvas editor for DOM ownership.
+
+**M1a — NOC Overview.** Default route `#/noc`. Four hero stat cards (SITES, DEVICES, ACTIVE ALERTS, UPTIME · 24H) with stacked up/warn/down bars; **site-health mosaic** with `grid-auto-flow: dense` cells sized by `sqrt(deviceCount)` and tinted by worst-status (click to drill in); **OFF-Site internet widget** rendering pinned reachability checks (latency or "— timeout"); **Sites by Type** bars per kind; **Top Problem Sites** ranked by active alerts; **Recent Alerts** feed (last 8 events, time-ago text refreshed every 5 s, paused via `visibilitychange` when the iframe is hidden).
+
+**M1b — Site Drill-In.** Route `#/site/<name>`. Flex-row tier layout: FIREWALL row centered, SWITCHES, HYPERVISORS (with IPMI inline at the trailing edge), VM CLUSTERS. Cluster cards show a mini status dot-grid (one cell per child device, auto-fit columns by `sqrt(count)`). Tier inference (`monitoring/site_tree.py`) is regex-based with a fallback to TIER_HYPERVISOR so unclassified servers still render as a cluster instead of disappearing. Internet-kind sites render as a flat reachability grid instead of forcing a tier structure that doesn't apply.
+
+**Data plane.** `monitoring/site_rollup.py` produces `site_summary_list()` (per-site up/warn/down/alerts/devices) and `noc_summary()` (hero stats, by-kind, top problems, recent alerts, off-site). Reads `STATE.devices`, `alert_events` (active/acknowledged), and `flap_log` (uptime/flap/incident counts over 24 h). `flap_log.ts` is TEXT (ISO `YYYY-MM-DDTHH:MM:SSZ`), so `_iso_utc()` and `_parse_iso_ts()` bind ISO strings rather than epoch ints to keep both PG and SQLite comparators happy. `resolved_at` is REAL/DOUBLE — the rollup uses `COALESCE(resolved_at, 0) AS rts` and treats anything > 0 as resolved.
+
+**Routes** (read-only, `viewer` role):
+- `GET /api/livemap/sites` — sidebar mosaic + rollup
+- `GET /api/livemap/noc/summary` — NOC widgets
+- `GET /api/livemap/sites/{name}/tree` — drill-in tier tree
+
+**SSE wiring.** `frontend/app.js` `_sseBatch` flush also `postMessage`s `{type:'lm_update'}` to the livemap iframe. The iframe coalesces 2 s windows, hashes the resulting payload (`name + up/warn/down/alerts + summary totals`), and skips re-render when the hash is unchanged — eliminates flicker on idle SSE bursts.
+
+**Files**: [frontend/livemap.html](frontend/livemap.html), [frontend/livemap.css](frontend/livemap.css), [frontend/livemap.js](frontend/livemap.js), [monitoring/site_rollup.py](monitoring/site_rollup.py), [monitoring/site_tree.py](monitoring/site_tree.py), [routes/livemap.py](routes/livemap.py). Sidebar nav + iframe pause/resume + theme/postMessage relay added to [frontend/index.html](frontend/index.html), [frontend/icons.js](frontend/icons.js), [frontend/app.js](frontend/app.js), [server.py](server.py).
+
+### Sites — metadata sidecar table + CRUD UI
+
+A new `sites` table stores presentation metadata for the Live Map sidebar pills, mosaic tint, and Sites by Type widget. Distinct site names still come from `devices.site` and `ipam_subnets.site`; this table only carries `kind` (`internet`/`hq`/`dc`/`lab`/`pop`/`edge`/`office`), `pinned` flag, `display_name`, `sort_order`, and timestamps. Rows are auto-created lazily by the Live Map rollup the first time it encounters an unseen site name, so fresh installs need no seeding.
+
+**Schema** ([db/core.py:577](db/core.py#L577), [db/pg_schema.py:153](db/pg_schema.py#L153)): idempotent `CREATE TABLE IF NOT EXISTS sites (...)` on both backends; PG uses `BIGINT` for timestamps, SQLite uses `INTEGER`. The IPAM `/api/sites` UNION was extended to include `sites.name` so the Devices and IPAM autocomplete pickers also see metadata-only sites.
+
+**CRUD UI in the Devices tab.** Decision: site CRUD lives in Devices (not the Live Map sidebar) because the Devices tab is where users already manage device→site assignments. The Devices toolbar gets a `+ Site` button; each site header gets a cog (⚙ Edit Site) and a right-click context menu with Edit Site / Add Site. The modal ([frontend/forms-site.js](frontend/forms-site.js)) is loaded by both the main app and the Live Map iframe; it self-injects its own CSS when run outside the iframe (because `livemap.css` only loads inside it). After save it broadcasts to every refresh hook in the current context (`_refreshDevices`, `_lmRefresh`, and a `postMessage` to the livemap-frame).
+
+**Cascade delete.** The delete flow first calls `GET /api/sites/meta/<name>/usage` to fetch `{devices, subnets}` counts and shows a second confirm modal with a cascade checkbox (defaulted ON when usage > 0). On confirm, `DELETE /api/sites/meta/<name>?cascade=1` clears `devices.site` and `ipam_subnets.site` for every row tagged with that name as well as removing the metadata row.
+
+**Endpoints**: `GET /api/sites/meta` (merged with distinct names), `POST /api/sites/meta`, `PUT /api/sites/meta/{name}` (accepts `new_name` + `also_rename` for bulk-rename of `devices.site`), `GET /api/sites/meta/{name}/usage`, `DELETE /api/sites/meta/{name}?cascade=0|1`. All writes `operator` role + audit-logged. New `_to_int()` helper in [routes/sites.py](routes/sites.py) returns the default for non-numeric input so a garbage `pinned` value never crashes with a 500.
+
+**Files**: [db/sites.py](db/sites.py), [routes/sites.py](routes/sites.py), [frontend/forms-site.js](frontend/forms-site.js); [routes/ipam.py](routes/ipam.py) (extends `/api/sites` UNION); [frontend/devices.js](frontend/devices.js) (toolbar button + site-header cog + context menu); [frontend/ipam.js](frontend/ipam.js) (empty-site placeholders for metadata-only sites).
+
+### Expandable rail sidebar
+
+The 56 px icon rail gets a toggle button that expands it to 180 px with tab name labels next to each icon. Expansion **pushes** content (does not overlay) — `#layout` uses `grid-template-columns: var(--rail-w) 1fr` and the expanded state is keyed off `#layout:has(> .rail.expanded)` (with a `.rail-expanded` class fallback on `#layout` for browsers without `:has()`). Preference persisted in `localStorage.pw_rail_expanded`. Implementation: [frontend/app.js](frontend/app.js) (`_railToggle` / `_railRestore`), [frontend/style.css](frontend/style.css) (`.rail.expanded` rules + grid override).
+
+### Add Widget modal — redesign
+
+The dashboard's "+ Add Widget" picker was rebuilt around a hi-fi design (see [design/handoff_add_widget_modal/README.md](design/handoff_add_widget_modal/README.md)). The new modal has a search input (Ctrl-K focus), category chips (ALL / RECENT / Charts / Status / Events / Reports / Network) with live counts, sectioned 3-column tile grid (RECENTLY USED · POPULAR · per-category), and a side-popout panel that renders a real DOM-backed mini-preview on hover.
+
+**Registry extensions** in [frontend/dashboard.js](frontend/dashboard.js):
+- `_DW_REG` entries gain `cat`, `desc`, `meta` (string list shown in the popout), `popular`, `isNew`.
+- `_DW_CATS` palette + `_DW_CAT_ORDER` define the section order and category colours.
+- `_DW_PREVIEW` registers 18 builders mapping every widget type to one of 12 reusable mini-render helpers (`_mpSparkline`, `_mpDevicePills`, `_mpUptimeBar`, `_mpGauge`, `_mpFlapList`, `_mpBars`, `_mpHeatmap`, `_mpDots`, `_mpSla`, `_mpInternet`, `_mpRing`, `_mpLicense`).
+
+**Interactions.** Live search filters tiles and sections; chips toggle (re-clicking the active chip clears back to ALL); ↑↓ moves the hover state with scroll-into-view; Enter adds the highlighted tile; click-on-tile adds immediately; widgets requiring per-instance config (device/sensor selectors) still hand off to the existing config-form path. Recent tracking via `localStorage.pw_widget_recent` (capped at 6). Add-confirmation surfaces a `.mw-toast` slide-in inside the popout column so the picker can stay open for adding multiple widgets in a row. The picker's `_dwPickerAdd` and `_dwClosePicker` are closure-scoped (no `window` pollution); close buttons in the template carry `data-mw-close` and are wired with `addEventListener` after the modal is appended.
+
+**Styles** ([frontend/style.css](frontend/style.css)): complete `.mw-*` block — modal shell, search, chips, body, sections, tiles, popout, foot, mini-preview helpers, `mw-toast` slide-in keyframes; full `:root[data-theme="light"]` override block for theme parity.
+
+### Sensor History Chart widget
+
+A configurable per-sensor chart widget for the dashboard. Picks a device + sensor and renders the same `sensor_chart` history view that lives in the Sensor detail panel, scoped to the dashboard's time-range selector. Avoids the flicker that an unthrottled SSE refresh would cause: refreshes guarded by `_dwChartLastFetch` with a 5-second minimum gap, and the time-range argument now correctly threads through `_dwTimeRangeMinutes()` instead of an undefined `w.cfg.minutes` reference.
+
+### Topology Design — strip + bug fixes
+
+The old NTM page is renamed **Topology Design** in the sidebar and is manual-only now. The PingWatch Live tab entry points (`switchToPingWatchPage`, `loadPingWatchPage`) and the dead REFRESH button were removed; the `.inc-*` CSS section (incident cards) was deleted from [map.css](frontend/map.css). About 500 lines of unreachable live-mode helpers (`renderPingWatchCanvas`, `_pwLiveUpdate`, `showPwDashboardPanel`) remain in [map.js](frontend/map.js) pending a post-1.0 cleanup — they're inert without the entry points but interconnected enough that surgical removal pre-release was too risky.
+
+**Bug fix**: clicking "Topology Design" used to land on an empty Main tab; you had to switch to another tab and back to see devices/links. Root cause: with the live tab gone, `isPingWatchPage` defaults to `false`, and the boot path called `switchPage(pages[0].id)` while `currentPageId` was already `1` (the Main page id) — the early-return guard at the start of `switchPage` matched and never called `loadData()`. New `_pageDataLoaded` flag in [map.js](frontend/map.js) blocks the early-return until the first load completes.
+
+### 1.0 pre-release audit fixes
+
+Surgical fixes uncovered by the pre-1.0 audit pass. Full report lives in chat history; the highlights:
+
+- **HIGH** — `db_rename_site_meta` was broken on PostgreSQL because `cursor.execute(...).fetchone()` chaining only works in SQLite (psycopg2's `execute` returns `None`). Split into two statements ([db/sites.py:135-148](db/sites.py#L135)).
+- **HIGH** — `monitoring/network_map.py:_conn()` was used as `with _conn() as con:` everywhere, but `sqlite3.Connection.__exit__` only commits — it never closes. Refactored `_conn()` into a `@contextmanager` that commits on success, rolls back on failure, and *always* closes ([monitoring/network_map.py:10-26](monitoring/network_map.py#L10)). About 20 callers fixed by the single refactor.
+- **HIGH** — Removed developer-name leak from the VM tier inference regex ([monitoring/site_tree.py:39](monitoring/site_tree.py#L39)).
+- **MEDIUM** — Three SQLite helpers in [routes/export.py](routes/export.py) (`_validate_sqlite`, `_vacuum_file`, `_detect_db_kind`) only closed the connection on the happy path; wrapped each in `try/finally` so a malformed upload no longer leaks a handle. `_validate_sqlite` no longer returns `str(e)` either — generic message + server-side log.
+- **MEDIUM** — `routes/ipam.py` subnet-add no longer surfaces `str(e)` (uses `e.args[0]` from the curated `ValueError` so the user-safe message survives but unrelated exceptions can't piggyback). LDAP test-connection / test-auth endpoints now return `"unexpected {ExceptionType}; check server log"` instead of leaking the raw message.
+- **MEDIUM** — `_DW_PREVIEW` builder failures `console.warn` instead of failing silently so QA can notice regressions.
+- **LOW** — `livemap.js` site-canvas click listener now binds once in `boot()` (was re-bound per site render — would accumulate after N navigations). `liveTickTimer` pauses on `visibilitychange` instead of burning CPU when the iframe is hidden. `routes/sites.py` `_to_int()` helper avoids 500s on garbage `pinned`/`sort_order` input. Add Widget modal's `_dwPickerAdd` / `_dwClosePicker` moved off `window` into closures.
+
+### NTM Live — professional auto-layout (tier-ordered + orthogonal links)
+
+The auto-layout that the NTM Live tab produces on a pristine canvas was redesigned to look like a NOC tool instead of a shelf-packed grid. Four changes work together:
+
+1. **Orthogonal link routing.** Every link — manual + auto-discovered + bundled — now draws as a right-angle elbow (`<path d="M.. L.. L.. L..">`) instead of a straight `<line>`/cubic Bezier. Endpoints anchor on the rect edges facing the partner via `_edgeAnchor()`, so arrowheads land cleanly at the node boundary instead of stabbing inward. The `_orthoPath(x1,y1,x2,y2)` helper picks H-V, V-H, H-V-H, or V-H-V automatically based on the dx/dy ratio. Bundled links share the bundle's midX so N siblings collapse into one trunk — preserving the bundling effect the old cubic Bezier provided. Tunnel links (ZTNA / IPsec) keep their curved style as a distinct visual cue for encrypted overlays.
+2. **Tier-ordered groups within each site.** Each group gets a tier 1..5 derived from the highest-priority topology role of any device in it (gateway=1, core=2, backbone=3, switch=4, endpoint=5 via `_groupTier()`). Inside a site frame, groups stack by tier — gateway/FW groups anchor the top, switches mid, endpoint groups (VMs, IPMI, servers) at the bottom — with `TIER_ROWGAP=30px` between tiers for visual separation.
+3. **2D corner-based bin packing** (replaces fixed `COLS=3` shelf wrap). Within each tier band, groups sort by area descending; the largest group anchors the top-left of its tier, and smaller groups slot into the topmost-leftmost free corner alongside or below larger ones via the new `_fitFreeCorner()` helper. A tier with one huge group + several narrow ones used to draw the narrow ones in their own cramped rows below — now they pack alongside the huge one in the vertical gap to its right, dramatically reducing site height. The same primitive packs sites onto the canvas: with a small rank-0 site (e.g. OFF-Site/Internet, ~200×300px) plus a huge rank-2 site (e.g. main LAN, ~4500×2500px), the corner packer places the small site top-left and slots the large one beside it at top-right instead of forcing it onto a fresh row below — eliminating the dead horizontal whitespace.
+4. **Site ranking — WAN/edge sites anchor the top.** Sites named `Internet`, `OFF-SITE`, `WAN`, `Cloud`, `External`, or `Edge` (case-insensitive) get rank 0; sites containing only gateway/core groups get rank 1; internal sites rank 2 (via `_siteRank()`). The sort comparator orders sites by rank ascending → device count descending → name, so the corner packer encounters rank-0 sites first and they naturally claim top-left positions.
+
+**New button**: `⚡ AUTO-ARRANGE` in the dashboard panel actions ([frontend/map.js](frontend/map.js)). One click → confirmation dialog → wipes both `pwGroupOverrides` and `pwOverrides` → re-renders into the tier-based layout. Manual drags between clicks are preserved (existing `RESET LAYOUT` behavior reused via `autoArrangePwLayout()` wrapper that adds a position-count-aware confirmation).
+
+**Out of scope for this redesign**: A* link routing that avoids crossing group rects (naive dogleg may cross intermediate groups — flag as follow-up if it looks bad in practice); tier-band background colors (deferred polish); Auto-Arrange undo (manual re-drag covers it).
+
+**Files**: [frontend/map.js](frontend/map.js) (`_orthoPath`, `_edgeAnchor`, `_TIER_BY_ROLE`, `_groupTier`, `_WAN_KEYWORDS`, `_siteRank`, `_fitFreeCorner`, `autoArrangePwLayout`, rewrites of `renderPwAutoLinks`, `renderPwLinksInLayer`, `buildLink`, and `calcPwLayout` PASS 1+2). Pure frontend — no backend, no DB, no API changes.
 
 ### NTM Live — auto-link suppression + bundling
 

@@ -33,44 +33,24 @@ function openAddDevice(){
             <div class="fr" id="ad-snmp-comm-row"><label class="fl">SNMP Community</label>
               <input type="text" id="ad-snmp-comm" placeholder="public" autocomplete="off"/></div>
             <div class="fr"><label class="fl">SNMP Version</label>
-              <select id="ad-snmp-ver" onchange="_adSnmpVerChange()">
-                <option value="2c" selected>v2c</option>
-                <option value="1">v1</option>
-                <option value="3">v3</option>
-              </select></div>
+              <select id="ad-snmp-ver" onchange="_adSnmpVerChange()">${_snmpVerOptionsHtml('2c')}</select></div>
           </div>
           <div id="ad-v3-block" style="display:none;border-left:2px solid var(--accent);padding-left:10px;margin-left:2px;flex-direction:column;gap:8px">
             <div class="fgrid">
               <div class="fr"><label class="fl">v3 Username</label>
                 <input type="text" id="ad-v3-user" placeholder="snmpuser" autocomplete="off"/></div>
               <div class="fr"><label class="fl">Security Level</label>
-                <select id="ad-v3-level" onchange="_adV3LevelChange()">
-                  <option value="noAuthNoPriv" selected>noAuthNoPriv</option>
-                  <option value="authNoPriv">authNoPriv</option>
-                  <option value="authPriv">authPriv</option>
-                </select></div>
+                <select id="ad-v3-level" onchange="_adV3LevelChange()">${_snmpV3LevelOptionsHtml('noAuthNoPriv')}</select></div>
             </div>
             <div class="fgrid" id="ad-v3-auth-row" style="display:none">
               <div class="fr"><label class="fl">Auth Protocol</label>
-                <select id="ad-v3-auth-proto">
-                  <option value="SHA" selected>SHA</option>
-                  <option value="MD5">MD5</option>
-                  <option value="SHA-224">SHA-224</option>
-                  <option value="SHA-256">SHA-256</option>
-                  <option value="SHA-384">SHA-384</option>
-                  <option value="SHA-512">SHA-512</option>
-                </select></div>
+                <select id="ad-v3-auth-proto">${_snmpV3AuthOptionsHtml('SHA')}</select></div>
               <div class="fr"><label class="fl">Auth Passphrase</label>
                 <input type="password" id="ad-v3-auth-pass" placeholder="min 8 chars" autocomplete="new-password"/></div>
             </div>
             <div class="fgrid" id="ad-v3-priv-row" style="display:none">
               <div class="fr"><label class="fl">Privacy Protocol</label>
-                <select id="ad-v3-priv-proto">
-                  <option value="AES" selected>AES</option>
-                  <option value="DES">DES</option>
-                  <option value="AES-192">AES-192</option>
-                  <option value="AES-256">AES-256</option>
-                </select></div>
+                <select id="ad-v3-priv-proto">${_snmpV3PrivOptionsHtml('AES')}</select></div>
               <div class="fr"><label class="fl">Privacy Passphrase</label>
                 <input type="password" id="ad-v3-priv-pass" placeholder="min 8 chars" autocomplete="new-password"/></div>
             </div>
@@ -193,6 +173,14 @@ async function submitAddDevice(){
 // ── EDIT DEVICE ──────────────────────────────────────────────────────────
 
 let _edSecIps = [];   // secondary IPs being edited
+// Parent links being edited (Live Map). One entry per chip: {pid, lport, rport}.
+// Duplicates by pid are allowed and expected — LACP / multi-link aggregations
+// connect the same device pair over multiple physical interfaces, each with
+// its own local↔remote port pair. Group refs (pid starting "group:") never
+// carry port info but still live in this array as bare entries.
+let _edParentLinks = [];
+let _edParentDid = null;  // did of the device currently open in Edit Device
+let _edParentTierFilter = null;  // inferred tier for the device being edited (null = no filter)
 
 function openEditDevice(did){
   const dev = S.devices[did];
@@ -200,6 +188,30 @@ function openEditDevice(did){
   closeM('dwo');
   closeM('med');
   _edSecIps = [...(dev.secondary_ips || [])];
+  // Flatten the server's {pid, list[]} ports shape into one entry per chip.
+  // A pid with no port entries gets a single bare chip; a pid with N port
+  // pairs gets N chips. Group refs (no port info) always get one bare chip.
+  _edParentLinks = [];
+  const _srcIds = Array.isArray(dev.parent_device_ids) ? dev.parent_device_ids : [];
+  const _srcPorts = (dev.parent_device_ports && typeof dev.parent_device_ports === 'object')
+    ? dev.parent_device_ports : {};
+  _srcIds.forEach(pid => {
+    if (typeof pid !== 'string' || !pid) return;
+    const isGroup = pid.indexOf('group:') === 0;
+    const raw = _srcPorts[pid];
+    // Server canonical shape is a list, but tolerate the pre-LACP single-dict
+    // shape too in case a stale cache slipped through.
+    const pairs = Array.isArray(raw) ? raw : (raw && typeof raw === 'object' ? [raw] : []);
+    if (isGroup || pairs.length === 0) {
+      _edParentLinks.push({ pid, lport: '', rport: '' });
+    } else {
+      pairs.forEach(p => _edParentLinks.push({
+        pid, lport: String(p.lport || ''), rport: String(p.rport || '')
+      }));
+    }
+  });
+  _edParentDid = did;
+  _edParentTierFilter = _edInferTierForFilter(dev);
   const _edGroups = [...new Set(Object.values(S.devices).map(d=>d.group).filter(Boolean))].sort();
   const _edGroupItems = _edGroups.map(g =>
     `<div class="grp-dd-item${g===(dev.group||'Default Group')?' cur':''}" data-g="${esc(g.toLowerCase())}" onmousedown="event.preventDefault()" onclick="_edgPick(this.textContent)">${esc(g)}</div>`
@@ -283,6 +295,24 @@ function openEditDevice(did){
                  style="flex:1" onkeydown="if(event.key==='Enter'){event.preventDefault();_edSipAdd()}"/>
           <button class="btn-s" type="button" onclick="_edSipAdd()" style="white-space:nowrap">+ Add</button>
         </div>
+
+        <div class="ed-pane-hdr" style="margin-top:18px">Parent Devices <span style="color:var(--text3);font-weight:400;font-size:12px">(Live Map)</span></div>
+        <div class="ed-pane-sub">
+          Devices this hangs off (e.g. a hypervisor's TOR switches, a VM's hypervisors).
+          Drives connection lines on the Live Map drill-in. Leave empty to inherit the
+          group default. Multi-select supports dual-NIC / dual-homed devices.
+        </div>
+        <div id="ed-parents-chips" class="pw-chip-input"></div>
+        <div style="display:flex;gap:6px;align-items:center">
+          <input type="text" id="ed-parents-input" list="ed-parents-dl"
+                 placeholder="Type to search devices…" autocomplete="off"
+                 style="flex:1"/>
+          <datalist id="ed-parents-dl"></datalist>
+          <label style="display:flex;align-items:center;gap:4px;font-size:11px;color:var(--text2);white-space:nowrap;cursor:pointer;user-select:none">
+            <input type="checkbox" id="ed-parents-allTiers"/> All tiers
+          </label>
+        </div>
+        <div class="fh" id="ed-parents-hint" style="margin-top:4px"></div>
       </div>
 
       <!-- Tab: Credentials -->
@@ -293,44 +323,24 @@ function openEditDevice(did){
             <div class="fr" id="ed-snmp-comm-row" style="${dev.snmp_version_default==='3'?'display:none':''};"><label class="fl">SNMP Community</label>
               <input type="text" id="ed-snmp-comm" value="${esc(dev.snmp_community_default||'')}" placeholder="public" autocomplete="off"/></div>
             <div class="fr"><label class="fl">SNMP Version</label>
-              <select id="ed-snmp-ver" onchange="_edSnmpVerChange()">
-                <option value="2c" ${!dev.snmp_version_default || dev.snmp_version_default==='2c'?'selected':''}>v2c</option>
-                <option value="1"  ${dev.snmp_version_default==='1'?'selected':''}>v1</option>
-                <option value="3"  ${dev.snmp_version_default==='3'?'selected':''}>v3</option>
-              </select></div>
+              <select id="ed-snmp-ver" onchange="_edSnmpVerChange()">${_snmpVerOptionsHtml(dev.snmp_version_default || '2c')}</select></div>
           </div>
           <div id="ed-v3-block" style="${dev.snmp_version_default==='3'?'':'display:none;'}border-left:2px solid var(--accent);padding-left:10px;margin-left:2px;display:flex;flex-direction:column;gap:8px">
             <div class="fgrid">
               <div class="fr"><label class="fl">v3 Username</label>
                 <input type="text" id="ed-v3-user" value="${esc(dev.snmp_v3_user_default||'')}" placeholder="snmpuser" autocomplete="off"/></div>
               <div class="fr"><label class="fl">Security Level</label>
-                <select id="ed-v3-level" onchange="_edV3LevelChange()">
-                  <option value="noAuthNoPriv" ${(dev.snmp_v3_level_default||'noAuthNoPriv')==='noAuthNoPriv'?'selected':''}>noAuthNoPriv</option>
-                  <option value="authNoPriv"   ${dev.snmp_v3_level_default==='authNoPriv'?'selected':''}>authNoPriv</option>
-                  <option value="authPriv"     ${dev.snmp_v3_level_default==='authPriv'?'selected':''}>authPriv</option>
-                </select></div>
+                <select id="ed-v3-level" onchange="_edV3LevelChange()">${_snmpV3LevelOptionsHtml(dev.snmp_v3_level_default || 'noAuthNoPriv')}</select></div>
             </div>
             <div class="fgrid" id="ed-v3-auth-row" style="${(dev.snmp_v3_level_default==='authNoPriv'||dev.snmp_v3_level_default==='authPriv')?'':'display:none'}">
               <div class="fr"><label class="fl">Auth Protocol</label>
-                <select id="ed-v3-auth-proto">
-                  <option value="SHA"     ${(dev.snmp_v3_auth_proto_default||'SHA')==='SHA'?'selected':''}>SHA</option>
-                  <option value="MD5"     ${dev.snmp_v3_auth_proto_default==='MD5'?'selected':''}>MD5</option>
-                  <option value="SHA-224" ${dev.snmp_v3_auth_proto_default==='SHA-224'?'selected':''}>SHA-224</option>
-                  <option value="SHA-256" ${dev.snmp_v3_auth_proto_default==='SHA-256'?'selected':''}>SHA-256</option>
-                  <option value="SHA-384" ${dev.snmp_v3_auth_proto_default==='SHA-384'?'selected':''}>SHA-384</option>
-                  <option value="SHA-512" ${dev.snmp_v3_auth_proto_default==='SHA-512'?'selected':''}>SHA-512</option>
-                </select></div>
+                <select id="ed-v3-auth-proto">${_snmpV3AuthOptionsHtml(dev.snmp_v3_auth_proto_default || 'SHA')}</select></div>
               <div class="fr"><label class="fl">Auth Passphrase</label>
                 <input type="password" id="ed-v3-auth-pass" placeholder="${dev.has_snmp_v3_auth_pass_default?'(unchanged)':'min 8 chars'}" autocomplete="new-password"/></div>
             </div>
             <div class="fgrid" id="ed-v3-priv-row" style="${dev.snmp_v3_level_default==='authPriv'?'':'display:none'}">
               <div class="fr"><label class="fl">Privacy Protocol</label>
-                <select id="ed-v3-priv-proto">
-                  <option value="AES"     ${(dev.snmp_v3_priv_proto_default||'AES')==='AES'?'selected':''}>AES</option>
-                  <option value="DES"     ${dev.snmp_v3_priv_proto_default==='DES'?'selected':''}>DES</option>
-                  <option value="AES-192" ${dev.snmp_v3_priv_proto_default==='AES-192'?'selected':''}>AES-192</option>
-                  <option value="AES-256" ${dev.snmp_v3_priv_proto_default==='AES-256'?'selected':''}>AES-256</option>
-                </select></div>
+                <select id="ed-v3-priv-proto">${_snmpV3PrivOptionsHtml(dev.snmp_v3_priv_proto_default || 'AES')}</select></div>
               <div class="fr"><label class="fl">Privacy Passphrase</label>
                 <input type="password" id="ed-v3-priv-pass" placeholder="${dev.has_snmp_v3_priv_pass_default?'(unchanged)':'min 8 chars'}" autocomplete="new-password"/></div>
             </div>
@@ -384,9 +394,218 @@ function openEditDevice(did){
   document.getElementById('ed-g')?.addEventListener('blur', () => setTimeout(_edgHide, 150));
   _populateSiteDatalist('ed-site-dl');
   _edSipRender();
+  _edParentInit(did);
   _edLicLoad(did);
   _loadDeviceProfileSection(did);
   _loadDeviceRole(did);
+}
+
+// ── Parent Devices (Live Map) helpers ─────────────────────────────────
+// Tier filter mirrors monitoring/site_tree.py: VM → hypervisor parents,
+// hypervisor → switch, switch → firewall+switch, IPMI → switch,
+// firewall → firewall (root). Falls back to "anything" when we can't tell.
+const _ED_PARENT_TIER_RULES = [
+  {tier: 'ipmi',        parents: ['switch','core_switch'],                                     rx: /\b(ipmi|idrac|ilo|drac|oob|bmc|cimc)\b/i},
+  {tier: 'isp',         parents: [],                                                           rx: /\b(isp|isp\d|isp[-_](?:gw|router|link|modem|cpe)|wan[-_]link|fiber[-_]?isp|cable[-_]?isp|starlink|carrier[-_]?(?:cpe|demarc))\b/i},
+  {tier: 'wan_switch',  parents: ['isp'],                                                      rx: /\b(wan[-_]?(?:sw|switch|router|gw)|edge[-_]?(?:router|sw|switch)|isp[-_]?sw|border[-_]?(?:sw|router))\b/i},
+  {tier: 'firewall',    parents: ['wan_switch','isp','firewall'],                              rx: /\b(fortigate|fortinet|palo[\s\-]?alto|sonicwall|checkpoint|firewall|fw\d|asa\d|edgewall|pfsense|opnsense|untangle|fw-)\b/i},
+  {tier: 'core_switch', parents: ['firewall','wan_switch','core_switch'],                      rx: /\b(core[-_]?(?:sw|switch|router)|core\d|aggregation|agg[-_]?(?:sw|switch)|backbone[-_]?(?:sw|switch)|l3[-_]?(?:sw|switch)|spine[-_]?(?:sw|switch)|spine\d|n[79]k|nexus[-_]?[79]\d{3}|asr\d|cat(?:alyst)?[-_]?[69]\d{3})\b/i},
+  {tier: 'switch',      parents: ['core_switch','firewall','switch'],                          rx: /\b(switch|sw\d|sw-|tor-|ex[-\s]?\d+|n5k|catalyst|nexus|junos|mikrotik|aruba|cisco-sw|l2|access[-_]?(?:sw|switch)|router|rtr-)\b/i},
+  {tier: 'chassis',     parents: ['switch','core_switch'],                                     rx: /\b(bladecenter|chassis|enclosure|c[-\s]?class|c7000|c3000|ucs[-\s]?\d|ucs-fi|m1000e|oa\d|onboard[-\s]?admin)\b/i},
+  {tier: 'vm',          parents: ['hypervisor'],                                               rx: /\b(vm-|-vm\b|vms?\b|cluster-vm|guest|tenant)\b/i},
+  {tier: 'hypervisor',  parents: ['chassis','switch','core_switch'],                           rx: /\b(esxi?|hyperv|kvm|proxmox|vmware|xenserver|blade|esx-|hypervisor|host\d)\b/i},
+];
+
+function _edInferTierForFilter(dev) {
+  const blob = `${dev.name || ''} ${dev.host || ''} ${dev.group || ''}`;
+  for (const rule of _ED_PARENT_TIER_RULES) {
+    if (rule.rx.test(blob)) return rule;
+  }
+  return {tier: 'hypervisor', parents: ['switch']};  // safe default
+}
+
+// Suffix used in the datalist + commit parser to mark a group entry.
+// Datalist values must be plain strings; embedding a sentinel lets us
+// distinguish a group like "Hypervisors" from a device named "Hypervisors".
+const _GRP_SFX = '  ·  group';
+
+function _edRenderParentChips() {
+  const wrap = document.getElementById('ed-parents-chips');
+  if (!wrap) return;
+  if (!_edParentLinks.length) {
+    const groupName = (document.getElementById('ed-g')?.value || '').trim();
+    wrap.innerHTML = `<span class="pw-chip-empty">None — falls back to group default${groupName ? ` (${esc(groupName)})` : ''}</span>`;
+    return;
+  }
+  wrap.innerHTML = _edParentLinks.map((link, i) => {
+    const pid = link.pid;
+    if (typeof pid === 'string' && pid.indexOf('group:') === 0) {
+      const gname = pid.slice(6);
+      // Group refs don't carry port info — wiring is per-device only.
+      return `<span class="pw-chip pw-chip-group">
+        <span class="pw-chip-badge">GROUP</span>${esc(gname)}
+        <button class="pw-chip-x" onclick="_edRemoveParent(${i})" title="Remove">&times;</button>
+      </span>`;
+    }
+    const d = S.devices[pid];
+    const label = d ? (d.name || pid) : `(missing: ${pid})`;
+    const lport = esc(link.lport || '');
+    const rport = esc(link.rport || '');
+    // Inline port boxes: local (this device's port) ↔ remote (parent's port).
+    // Either field can be left blank; both-blank pairs are pruned on save.
+    return `<span class="pw-chip pw-chip-link">
+      <span class="pw-chip-label">${esc(label)}</span>
+      <input type="text" class="pw-chip-port" placeholder="local" value="${lport}"
+             maxlength="32" title="Local port on this device"
+             oninput="_edSetParentLinkPort(${i},'lport',this.value)"/>
+      <span class="pw-chip-port-sep">&harr;</span>
+      <input type="text" class="pw-chip-port" placeholder="remote" value="${rport}"
+             maxlength="32" title="Remote port on the parent device"
+             oninput="_edSetParentLinkPort(${i},'rport',this.value)"/>
+      <button class="pw-chip-x" onclick="_edRemoveParent(${i})" title="Remove">&times;</button>
+    </span>`;
+  }).join('');
+}
+
+function _edRemoveParent(idx) {
+  if (idx < 0 || idx >= _edParentLinks.length) return;
+  _edParentLinks.splice(idx, 1);
+  _edRenderParentChips();
+}
+
+function _edSetParentLinkPort(idx, key, val) {
+  if (idx < 0 || idx >= _edParentLinks.length) return;
+  if (key !== 'lport' && key !== 'rport') return;
+  _edParentLinks[idx][key] = String(val || '').slice(0, 32);
+}
+
+function _edPopulateParentDatalist() {
+  const dl = document.getElementById('ed-parents-dl');
+  if (!dl) return;
+  const allTiers = document.getElementById('ed-parents-allTiers')?.checked;
+  const allowed = allTiers ? null : (_edParentTierFilter ? new Set(_edParentTierFilter.parents) : null);
+
+  function _devTier(d) {
+    const blob = `${d.name || ''} ${d.host || ''} ${d.group || ''}`;
+    for (const rule of _ED_PARENT_TIER_RULES) {
+      if (rule.rx.test(blob)) return rule.tier;
+    }
+    return 'hypervisor';  // unclassified fallback
+  }
+
+  const candidates = Object.values(S.devices || {})
+    .filter(d => d.device_id !== _edParentDid)
+    .filter(d => allowed ? allowed.has(_devTier(d)) : true)
+    .sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+
+  // Group candidates: aggregate per (group name → tier of majority + count).
+  // Allow a group if at least one member matches the tier filter.
+  const groupAgg = new Map();
+  Object.values(S.devices || {}).forEach(d => {
+    const g = (d.group || 'Default Group').trim();
+    if (!groupAgg.has(g)) groupAgg.set(g, { count: 0, tiers: new Set() });
+    const a = groupAgg.get(g);
+    a.count += 1;
+    a.tiers.add(_devTier(d));
+  });
+  const groupRows = [...groupAgg.entries()]
+    .filter(([g, a]) => a.count >= 2)  // singleton groups: just pick the device
+    .filter(([g, a]) => !allowed || [...a.tiers].some(t => allowed.has(t)))
+    .sort((a, b) => a[0].localeCompare(b[0]));
+
+  const devOpts = candidates.map(d =>
+    `<option value="${esc(d.name || d.device_id)}"></option>`);
+  const grpOpts = groupRows.map(([g, a]) =>
+    `<option value="${esc(g + _GRP_SFX + ' (' + a.count + ')')}"></option>`);
+  dl.innerHTML = [...devOpts, ...grpOpts].join('');
+
+  const hint = document.getElementById('ed-parents-hint');
+  if (hint) {
+    const grpLabel = groupRows.length ? ` · ${groupRows.length} group(s)` : '';
+    if (allTiers || !_edParentTierFilter) {
+      hint.textContent = `Showing all ${candidates.length} device(s)${grpLabel}.`;
+    } else {
+      hint.textContent = `Filtered to ${_edParentTierFilter.parents.join(' / ')} tier(s) — ${candidates.length} device(s)${grpLabel}. Tick "All tiers" to widen.`;
+    }
+  }
+}
+
+function _edCommitParentFromInput(input) {
+  const raw = (input.value || '').trim();
+  if (!raw) return;
+  if (_edParentLinks.length >= 16) {
+    toast('Max 16 parent links', 'err');
+    return;
+  }
+  // Helper: a group ref appears at most once (no port info to differentiate);
+  // device refs may repeat — duplicate chips represent LACP / multi-NIC links.
+  const _hasGroupRef = (ref) => _edParentLinks.some(l => l.pid === ref);
+
+  // Group entries from the datalist look like "Hypervisors  ·  group (10)".
+  // Detect via the embedded sentinel and strip the suffix to recover the
+  // raw group name.
+  const grpSfxIdx = raw.indexOf(_GRP_SFX);
+  if (grpSfxIdx > 0) {
+    const gname = raw.slice(0, grpSfxIdx);
+    const exists = Object.values(S.devices || {}).some(
+      d => (d.group || 'Default Group') === gname
+    );
+    if (!exists) { toast(`Group "${gname}" not found`, 'err'); return; }
+    const ref = 'group:' + gname;
+    if (_hasGroupRef(ref)) { toast('Group already added', 'err'); return; }
+    _edParentLinks.push({ pid: ref, lport: '', rport: '' });
+    input.value = '';
+    _edRenderParentChips();
+    return;
+  }
+  // Try as a device name (case-insensitive exact match).
+  const lc = raw.toLowerCase();
+  let match = Object.values(S.devices || {}).find(
+    d => d.device_id !== _edParentDid && (d.name || '').toLowerCase() === lc
+  );
+  if (!match && S.devices[raw] && raw !== _edParentDid) match = S.devices[raw];
+  if (match) {
+    // Duplicates allowed — each chip is a distinct physical link (LACP).
+    _edParentLinks.push({ pid: match.device_id, lport: '', rport: '' });
+    input.value = '';
+    _edRenderParentChips();
+    return;
+  }
+  // Fall back: try as a bare group name (user typed without the suffix).
+  const groupSet = new Set(Object.values(S.devices || {}).map(
+    d => (d.group || 'Default Group')
+  ));
+  if (groupSet.has(raw)) {
+    const ref = 'group:' + raw;
+    if (_hasGroupRef(ref)) { toast('Group already added', 'err'); return; }
+    _edParentLinks.push({ pid: ref, lport: '', rport: '' });
+    input.value = '';
+    _edRenderParentChips();
+    return;
+  }
+  toast(`No device or group named "${raw}"`, 'err');
+}
+
+function _edParentInit(did) {
+  _edRenderParentChips();
+  _edPopulateParentDatalist();
+  const input = document.getElementById('ed-parents-input');
+  const allBox = document.getElementById('ed-parents-allTiers');
+  if (input) {
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ',') {
+        e.preventDefault();
+        _edCommitParentFromInput(input);
+      } else if (e.key === 'Backspace' && !input.value && _edParentLinks.length) {
+        _edParentLinks.pop();
+        _edRenderParentChips();
+      }
+    });
+    input.addEventListener('change', () => _edCommitParentFromInput(input));
+  }
+  if (allBox) {
+    allBox.addEventListener('change', () => _edPopulateParentDatalist());
+  }
 }
 
 // Tab switcher for the Edit Device modal. Hides every .ed-tab-pane in #med
@@ -571,9 +790,30 @@ async function submitEditDevice(did){
   if(!name || !host){ toast('Name and host are required','err'); return; }
   const btn=document.querySelector('#med .btn-p');
   if(btn){btn.disabled=true;btn.textContent='Saving...';}
+  // Serialize chip list → server shape. parent_device_ids is the deduped list
+  // of unique pids; parent_device_ports groups port pairs by pid (multiple
+  // pairs per pid = LACP / multi-link).
+  const _serializedIds = [];
+  const _serializedPorts = {};
+  const _seenPids = new Set();
+  (Array.isArray(_edParentLinks) ? _edParentLinks : []).forEach(link => {
+    if (!link || typeof link.pid !== 'string' || !link.pid) return;
+    if (!_seenPids.has(link.pid)) {
+      _seenPids.add(link.pid);
+      _serializedIds.push(link.pid);
+    }
+    const lp = (link.lport || '').trim();
+    const rp = (link.rport || '').trim();
+    if (!lp && !rp) return;  // bare chip — no wiring info to persist
+    if (link.pid.indexOf('group:') === 0) return;  // group refs never carry ports
+    if (!_serializedPorts[link.pid]) _serializedPorts[link.pid] = [];
+    _serializedPorts[link.pid].push({ lport: lp, rport: rp });
+  });
   const payload = {name, host, group, site, alerts_muted,
     snmp_community_default, snmp_version_default, vmware_user_default,
-    secondary_ips: _edSecIps};
+    secondary_ips: _edSecIps,
+    parent_device_ids: _serializedIds,
+    parent_device_ports: _serializedPorts};
   if(vmware_password_default) payload.vmware_password_default = vmware_password_default;
   // SNMPv3 device defaults — emit only when the section is visible (version=3).
   if(snmp_version_default === '3'){
@@ -621,8 +861,11 @@ async function submitEditDevice(did){
   }
   closeM('med');
   const dev = S.devices[did];
-  if(dev){ dev.name = name; dev.host = host; dev.group = group; dev.site = site; dev.alerts_muted = alerts_muted; dev.snmp_community_default = snmp_community_default; dev.snmp_version_default = snmp_version_default; dev.vmware_user_default = vmware_user_default; dev.secondary_ips = _edSecIps; if(vmware_password_default) dev.has_vmware_password_default = true; renderDp(dev); }
-  pruneEmptyGroups();
+  if(dev){ dev.name = name; dev.host = host; dev.group = group; dev.site = site; dev.alerts_muted = alerts_muted; dev.snmp_community_default = snmp_community_default; dev.snmp_version_default = snmp_version_default; dev.vmware_user_default = vmware_user_default; dev.secondary_ips = _edSecIps; dev.parent_device_ids = [..._serializedIds]; dev.parent_device_ports = JSON.parse(JSON.stringify(_serializedPorts)); if(vmware_password_default) dev.has_vmware_password_default = true; renderDp(dev); }
+  // Live Map runs in iframe — postMessage triggers a tree refresh so the
+  // connection lines redraw without a full page reload.
+  const _lf = document.getElementById('livemap-frame');
+  _lf?.contentWindow?.postMessage({ type: 'lm_refresh' }, window.location.origin);
   updatePills();
   refreshGroupCounts();
   toast(`Saved: ${name}`, 'ok');

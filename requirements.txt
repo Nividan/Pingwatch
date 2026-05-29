@@ -22,7 +22,25 @@ matplotlib>=3.7       # Charts (rendered to PNG, embedded as data URIs)
 openpyxl>=3.1         # Pure-Python; CSV/JSON/PRTG/Zabbix imports work without it
 
 # Optional: PostgreSQL backend (required only if using PostgreSQL instead of SQLite)
-psycopg2-binary>=2.9.9
+#
+# IMPORTANT — DO NOT use `psycopg2-binary` on Linux. The binary wheel bundles
+# its own libpq + libkrb5 and that bundled libkrb5 segfaults on some systems
+# (notably RHEL 9 / Rocky 9 with certain CPUs), taking the whole server down
+# with status=11/SEGV. The setup wizard's install_psycopg2() helper handles
+# this for you. If you're installing manually, use one of:
+#
+#   Linux  — source build (recommended; needs gcc + libpq-dev / postgresql-devel):
+#       pip install --no-binary :all: psycopg2
+#     or the distro package:
+#       sudo apt  install python3-psycopg2     # Debian/Ubuntu
+#       sudo dnf  install python3-psycopg2     # RHEL/Rocky/Fedora
+#
+#   Windows — the binary wheel works fine here, no libkrb5 issue:
+#       pip install psycopg2-binary
+#
+# `pip install -r requirements.txt` intentionally does NOT pull psycopg2 —
+# the wizard chooses the right variant per platform.
+# psycopg2-binary>=2.9.9        # ← do not uncomment on Linux
 
 # Optional: VMware VM monitoring (required only for VMware sensor type)
 # pyvmomi>=8.0.0

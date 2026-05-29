@@ -28,6 +28,36 @@ def _int_or_none(v):
         return None
 
 
+def _normalize_pp_shape(raw) -> dict:
+    """Coerce parent_device_ports into the canonical list-of-pairs shape.
+
+    Accepts the legacy single-dict shape `{pid: {lport, rport}}` (pre-LACP
+    support) and the new shape `{pid: [{lport, rport}, ...]}`. Always returns
+    the list shape so every downstream consumer can iterate uniformly.
+    """
+    if not isinstance(raw, dict):
+        return {}
+    out = {}
+    for pid, val in raw.items():
+        if not isinstance(pid, str) or not pid:
+            continue
+        if isinstance(val, list):
+            pairs = [p for p in val if isinstance(p, dict)]
+        elif isinstance(val, dict):
+            pairs = [val]
+        else:
+            continue
+        clean = []
+        for p in pairs:
+            l = p.get("lport", "") if isinstance(p.get("lport", ""), str) else ""
+            r = p.get("rport", "") if isinstance(p.get("rport", ""), str) else ""
+            if l or r:
+                clean.append({"lport": l, "rport": r})
+        if clean:
+            out[pid] = clean
+    return out
+
+
 def _pg_save(state):
     """Upsert all devices and sensors into PostgreSQL."""
     from db.pg_pool import pg_conn
@@ -55,7 +85,9 @@ def _pg_save(state):
              getattr(dev, "snmp_v3_auth_pass_default", ""),
              getattr(dev, "snmp_v3_priv_proto_default", ""),
              getattr(dev, "snmp_v3_priv_pass_default", ""),
-             getattr(dev, "snmp_v3_context_default", ""))
+             getattr(dev, "snmp_v3_context_default", ""),
+             json.dumps(getattr(dev, "parent_device_ids", []) or []),
+             json.dumps(getattr(dev, "parent_device_ports", {}) or {}))
             for dev in state.devices.values()
         ]
         snr_rows = [
@@ -137,7 +169,7 @@ def _pg_save(state):
                     "snmp_v3_user_default,snmp_v3_level_default,"
                     "snmp_v3_auth_proto_default,snmp_v3_auth_pass_default,"
                     "snmp_v3_priv_proto_default,snmp_v3_priv_pass_default,"
-                    "snmp_v3_context_default) "
+                    "snmp_v3_context_default,parent_device_ids,parent_device_ports) "
                     "VALUES %s "
                     "ON CONFLICT (did) DO UPDATE SET "
                     "name=EXCLUDED.name, host=EXCLUDED.host, grp=EXCLUDED.grp, site=EXCLUDED.site, "
@@ -157,7 +189,9 @@ def _pg_save(state):
                     "snmp_v3_auth_pass_default=EXCLUDED.snmp_v3_auth_pass_default, "
                     "snmp_v3_priv_proto_default=EXCLUDED.snmp_v3_priv_proto_default, "
                     "snmp_v3_priv_pass_default=EXCLUDED.snmp_v3_priv_pass_default, "
-                    "snmp_v3_context_default=EXCLUDED.snmp_v3_context_default",
+                    "snmp_v3_context_default=EXCLUDED.snmp_v3_context_default, "
+                    "parent_device_ids=EXCLUDED.parent_device_ids, "
+                    "parent_device_ports=EXCLUDED.parent_device_ports",
                     dev_rows,
                 )
             # Delete orphaned devices
@@ -244,7 +278,13 @@ def _pg_save(state):
                 cur.execute("DELETE FROM sensors")
             cur.close()
     except Exception as e:
-        log.error(f"DB save error: {e}")
+        # Stay quiet during a known PG outage — the breaker has already raised
+        # the WARNING. Surface real errors otherwise.
+        from db.pg_pool import is_pg_in_outage
+        if is_pg_in_outage():
+            log.debug(f"DB save skipped (PG outage): {e}")
+        else:
+            log.error(f"DB save error: {e}")
 
 
 def db_save(state):
@@ -281,7 +321,9 @@ def db_save(state):
              getattr(dev, "snmp_v3_auth_pass_default", ""),
              getattr(dev, "snmp_v3_priv_proto_default", ""),
              getattr(dev, "snmp_v3_priv_pass_default", ""),
-             getattr(dev, "snmp_v3_context_default", ""))
+             getattr(dev, "snmp_v3_context_default", ""),
+             json.dumps(getattr(dev, "parent_device_ids", []) or []),
+             json.dumps(getattr(dev, "parent_device_ports", {}) or {}))
             for dev in state.devices.values()
         ]
         snr_rows = [
@@ -362,8 +404,8 @@ def db_save(state):
             "snmp_v3_user_default,snmp_v3_level_default,"
             "snmp_v3_auth_proto_default,snmp_v3_auth_pass_default,"
             "snmp_v3_priv_proto_default,snmp_v3_priv_pass_default,"
-            "snmp_v3_context_default) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", dev_rows)
+            "snmp_v3_context_default,parent_device_ids,parent_device_ports) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", dev_rows)
         if live_dids:
             cur.execute(
                 f"DELETE FROM devices WHERE did NOT IN ({','.join('?'*len(live_dids))})",
@@ -432,7 +474,9 @@ def _pg_load(state):
                 "COALESCE(snmp_v3_priv_proto_default,'') AS snmp_v3_priv_proto_default,"
                 "COALESCE(snmp_v3_priv_pass_default,'') AS snmp_v3_priv_pass_default,"
                 "COALESCE(snmp_v3_context_default,'') AS snmp_v3_context_default,"
-                "COALESCE(site,'') AS site "
+                "COALESCE(site,'') AS site,"
+                "COALESCE(parent_device_ids,'[]') AS parent_device_ids,"
+                "COALESCE(parent_device_ports,'{}') AS parent_device_ports "
                 "FROM devices"
             )
             devs = cur.fetchall()
@@ -525,6 +569,17 @@ def _pg_load(state):
         dev.snmp_v3_priv_pass_default  = (row[20] or "") if len(row) > 20 else ""
         dev.snmp_v3_context_default    = (row[21] or "") if len(row) > 21 else ""
         # dev.site set at Device() construction above (row[22])
+        try:
+            dev.parent_device_ids = json.loads(row[23] or "[]") if len(row) > 23 else []
+            if not isinstance(dev.parent_device_ids, list):
+                dev.parent_device_ids = []
+        except (json.JSONDecodeError, TypeError):
+            dev.parent_device_ids = []
+        try:
+            _pp_raw = json.loads(row[24] or "{}") if len(row) > 24 else {}
+            dev.parent_device_ports = _normalize_pp_shape(_pp_raw)
+        except (json.JSONDecodeError, TypeError):
+            dev.parent_device_ports = {}
         state.devices[did] = dev
 
     for row in srows:
@@ -670,7 +725,9 @@ def db_load(state):
             "COALESCE(snmp_v3_auth_proto_default,''),COALESCE(snmp_v3_auth_pass_default,''),"
             "COALESCE(snmp_v3_priv_proto_default,''),COALESCE(snmp_v3_priv_pass_default,''),"
             "COALESCE(snmp_v3_context_default,''),"
-            "COALESCE(site,'') "
+            "COALESCE(site,''),"
+            "COALESCE(parent_device_ids,'[]'),"
+            "COALESCE(parent_device_ports,'{}') "
             "FROM devices"
         ).fetchall()
         srows = con.execute(
@@ -724,7 +781,8 @@ def db_load(state):
          v3_user_default, v3_level_default,
          v3_auth_proto_default, v3_auth_pass_default,
          v3_priv_proto_default, v3_priv_pass_default,
-         v3_context_default, site) = _row
+         v3_context_default, site, parent_ids_json,
+         parent_ports_json) = _row
         dev = Device(did, name, host, grp, site=site or "")
         try:
             n = int(did.replace("d", ""))
@@ -752,6 +810,16 @@ def db_load(state):
         dev.snmp_v3_priv_proto_default = v3_priv_proto_default or ""
         dev.snmp_v3_priv_pass_default  = v3_priv_pass_default or ""
         dev.snmp_v3_context_default    = v3_context_default or ""
+        try:
+            _pids = json.loads(parent_ids_json or "[]")
+            dev.parent_device_ids = _pids if isinstance(_pids, list) else []
+        except (json.JSONDecodeError, TypeError):
+            dev.parent_device_ids = []
+        try:
+            _pports = json.loads(parent_ports_json or "{}")
+            dev.parent_device_ports = _normalize_pp_shape(_pports)
+        except (json.JSONDecodeError, TypeError):
+            dev.parent_device_ports = {}
         state.devices[did] = dev
 
     for (did, sid, name, stype, host, port, url, interval, timeout,

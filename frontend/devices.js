@@ -343,7 +343,6 @@ async function _bulkApplyMove(){
       dev.group = target;
       renderDp(dev);
     });
-    pruneEmptyGroups();
     if (r.failed > 0) toast(`${r.applied} of ${dids.length} moved (${r.failed} failed)`,'warn');
     else              toast(`${r.applied} device(s) moved to "${target}"`,'ok');
     if (input) input.value = '';
@@ -370,7 +369,6 @@ async function _bulkApplySiteMove(){
       dev.site = target;
       renderDp(dev);
     });
-    pruneEmptyGroups();
     window._pwSitesCache = null;  // next autocomplete fetch picks up the new site
     const lbl = target || 'Unsited';
     if (r.failed > 0) toast(`${r.applied} of ${dids.length} moved (${r.failed} failed)`,'warn');
@@ -473,7 +471,20 @@ function ensureSiteSection(site){
   const cnt=document.createElement('div');
   cnt.className='site-count'; cnt.id=scid; cnt.textContent='';
 
-  hdr.appendChild(arr); hdr.appendChild(label); hdr.appendChild(cnt);
+  // Edit cog — opens the same modal as the toolbar "+ Site" button but in
+  // "edit" mode. Hidden for the synthetic Unsited bucket (no metadata to edit).
+  const editBtn=document.createElement('button');
+  editBtn.className='site-edit-btn rbac-op';
+  editBtn.title='Edit site';
+  editBtn.innerHTML='⚙';
+  editBtn.style.cssText='background:transparent;border:0;cursor:pointer;color:rgba(255,255,255,0.4);font-size:14px;padding:2px 6px;margin-left:6px;line-height:1';
+  if (!site) editBtn.style.display='none';
+  editBtn.addEventListener('click', function(ev){
+    ev.stopPropagation();
+    if (typeof window.openSiteModal === 'function') window.openSiteModal('edit', site);
+  });
+
+  hdr.appendChild(arr); hdr.appendChild(label); hdr.appendChild(cnt); hdr.appendChild(editBtn);
 
   const body=document.createElement('div');
   body.className='site-body'+(isCol?' collapsed':'');
@@ -599,7 +610,7 @@ function ensureGroupSection(group, site){
   const addCard=document.createElement('div');
   addCard.className='dc dc-add';
   addCard.innerHTML='<div class="dc-add-ico">&#xFF0B;</div><div>Add Device</div>';
-  addCard.addEventListener('click',function(){ openAddDeviceGroup(group); });
+  addCard.addEventListener('click',function(){ openAddDeviceGroup(group, site || ''); });
   grid.appendChild(addCard);
 
   wrap.appendChild(hdr);
@@ -729,7 +740,7 @@ function _devSnrSummaryHtml(did){
 }
 
 // ── DEVICES CONTEXT MENU ─────────────────────────────────────────────────
-let _dcm=null, _ctxGrp=null;
+let _dcm=null, _ctxGrp=null, _ctxGrpSite=null, _ctxSite=null;
 
 function _showDcm(x,y){
   if(!_dcm) return;
@@ -754,6 +765,7 @@ function _initDevCtxMenu(){
     const card=e.target.closest('.dc:not(.dc-add)');
     const row =e.target.closest('.dc-list-row');
     const grpHdr=e.target.closest('.grp-hdr');
+    const siteHdr=e.target.closest('.site-hdr');
     const raw =(card?.id||row?.id||'');
     const did =raw.replace(/^dp-|^dpl-/,'') || null;
     if(did&&S.devices[did]){
@@ -769,19 +781,40 @@ function _initDevCtxMenu(){
         <div class="dci-sep"></div>
         <div class="dci dci-danger rbac-op" onclick="_hideDcm();delDev('${did}')">🗑️ Delete Device</div>`;
     } else if(grpHdr){
-      _ctxGrp=grpHdr.closest('.grp-wrap')?.dataset.grpName||'';
+      const _gwrap = grpHdr.closest('.grp-wrap');
+      _ctxGrp     = _gwrap?.dataset.grpName || '';
+      _ctxGrpSite = _gwrap?.dataset.site    || '';
       const _isDefault = _ctxGrp === 'Default Group';
       _dcm.innerHTML=`
         <div class="dci dci-accent rbac-op" onclick="_hideDcm();if(typeof openEditGroup==='function')openEditGroup(_ctxGrp)">⚙️ Edit Group</div>
         <div class="dci-sep"></div>
-        <div class="dci rbac-op" onclick="_hideDcm();openAddDeviceGroup(_ctxGrp)">🖥️ Add Device</div>
+        <div class="dci rbac-op" onclick="_hideDcm();openAddDeviceGroup(_ctxGrp,_ctxGrpSite)">🖥️ Add Device</div>
         ${_isDefault ? '' : `
         <div class="dci-sep"></div>
         <div class="dci dci-danger rbac-op" onclick="_hideDcm();_deleteGroup(${JSON.stringify(_ctxGrp)})">🗑️ Delete Group</div>`}`;
+    } else if(siteHdr){
+      // Right-click on a site header — offer Edit / Add Site. We grab the
+      // site name from the wrapping .site-wrap[data-site]. Unsited bucket
+      // (empty data-site) only gets "Add Site". Stash the name on a
+      // module-level var (mirrors the _ctxGrp pattern) so the onclick can
+      // reference it by identifier — JSON.stringify into an attribute
+      // breaks for any value with quotes/spaces and breaks the whole menu.
+      _ctxSite = siteHdr.closest('.site-wrap')?.dataset.site || '';
+      const editItem = _ctxSite
+        ? `<div class="dci dci-accent rbac-op" onclick="_hideDcm();if(typeof openSiteModal==='function')openSiteModal('edit',_ctxSite)">⚙️ Edit Site</div>
+           <div class="dci-sep"></div>`
+        : '';
+      _dcm.innerHTML=`
+        ${editItem}
+        <div class="dci rbac-op" onclick="_hideDcm();openAddGroup(_ctxSite)">👥 Add Group</div>
+        <div class="dci-sep"></div>
+        <div class="dci rbac-op" onclick="_hideDcm();if(typeof openSiteModal==='function')openSiteModal('add')">📍 Add Site</div>`;
     } else {
       _dcm.innerHTML=`
         <div class="dci dci-accent rbac-op" onclick="_hideDcm();openAddDevice()">🖥️ Add Device</div>
-        <div class="dci rbac-op" onclick="_hideDcm();openAddGroup()">👥 Add Group</div>`;
+        <div class="dci rbac-op" onclick="_hideDcm();openAddGroup()">👥 Add Group</div>
+        <div class="dci-sep"></div>
+        <div class="dci rbac-op" onclick="_hideDcm();if(typeof openSiteModal==='function')openSiteModal('add')">📍 Add Site</div>`;
     }
     _showDcm(e.clientX+2,e.clientY+2);
   });
@@ -834,20 +867,6 @@ async function _toggleMuteDevice(did){
   }catch(e){
     toast('Failed to update alert setting','err');
   }
-}
-
-function pruneEmptyGroups(){
-  document.querySelectorAll('.grp-wrap').forEach(w=>{
-    const grid=w.querySelector('.grp-grid');
-    const n=grid?grid.querySelectorAll('.dc:not(.dc-add)').length:0;
-    if(n===0) w.remove();
-  });
-  // Then prune site wrappers that have no groups left in their body.
-  document.querySelectorAll('.site-wrap').forEach(sw=>{
-    const body=sw.querySelector('.site-body');
-    if(body && body.querySelectorAll('.grp-wrap').length===0) sw.remove();
-  });
-  refreshSiteCounts();
 }
 
 function renderDp(dev){
@@ -1286,7 +1305,6 @@ function onDrop(e){
     if (siteChanged) window._pwSitesCache = null;
   }
   refreshGroupCounts();
-  pruneEmptyGroups();
   refreshSiteCounts();
 }
 
@@ -1424,7 +1442,7 @@ function renameGroup(labelEl, oldName){
     if (addCard) {
       addCard.replaceWith(addCard.cloneNode(true));
       const fresh = wrap.querySelector('.dc-add');
-      fresh.addEventListener('click', function(){ openAddDeviceGroup(newName); });
+      fresh.addEventListener('click', function(){ openAddDeviceGroup(newName, wrap.dataset.site || ''); });
     }
     // Update the label text
     const lbl = wrap.querySelector('.grp-label');
@@ -1450,28 +1468,75 @@ function cntId_refresh(wrap, key){
 }
 
 // ── Add Device pre-filled with a group ───────────────────────────
-function openAddDeviceGroup(group){
+// Site is required when the group lives under a non-Unsited site, otherwise
+// the form's blank site field re-creates the same-named group under Unsited
+// (groups are keyed by site+name).
+function openAddDeviceGroup(group, site){
   openAddDevice();
-  setTimeout(()=>{const f=document.getElementById('ad-g');if(f)f.value=group;},40);
+  setTimeout(()=>{
+    const f=document.getElementById('ad-g');     if(f) f.value=group;
+    const s=document.getElementById('ad-site');  if(s) s.value=site||'';
+  },40);
 }
 
 // ── Add Group modal ──────────────────────────────────────────────
-function openAddGroup(){
+// Mirrors the Edit Group modal's field set (Site, Tier, Mute) so a user
+// can fully configure a group at creation time instead of having to reopen
+// it for editing. Alert Profile is omitted — it's an inheritance viewer
+// that needs an existing group to scope against.
+function openAddGroup(siteName){
   closeM('mag');
   const o=document.createElement('div');
   o.className='mo';o.id='mag';
   _overlayClose(o, ()=>closeM('mag'));
   o.innerHTML=`
-  <div class="mbox" style="min-width:360px;max-width:420px">
+  <div class="mbox" style="min-width:520px;max-width:600px">
     <div class="mhd">
       <div class="mttl">Add Group</div>
       <button class="mclose" onclick="closeM('mag')">✕</button>
     </div>
     <div class="mbdy">
-      <div class="fr">
-        <label class="fl">Group Name</label>
-        <input type="text" id="ag-n" placeholder="e.g. Production, Office, Lab…" autocomplete="off"/>
-        <div class="fh">A new empty group section will appear on the dashboard.</div>
+      <div class="alrt-section">
+        <div class="alrt-section-hdr">Group Name</div>
+        <div class="fr">
+          <input type="text" id="ag-n" placeholder="e.g. Production, Office, Lab…" autocomplete="off"/>
+          <div class="fh">A new empty group section will appear on the dashboard.</div>
+        </div>
+      </div>
+
+      <div class="alrt-section">
+        <div class="alrt-section-hdr">Site</div>
+        <div class="fr">
+          <input type="text" id="ag-site" list="ag-site-dl" placeholder="HQ, DR-Site-2…" autocomplete="off"/>
+          <datalist id="ag-site-dl"></datalist>
+          <div class="fh">
+            Where the empty group section will live in the sidebar. Leave blank for Unsited.
+            Future devices added to this group will not auto-inherit this — set per-device on Add Device.
+          </div>
+        </div>
+      </div>
+
+      <div class="alrt-section">
+        <div class="alrt-section-hdr">Tier (Live Map)</div>
+        <div class="fr">
+          <select id="ag-tier">${_lmTierOptionsHtml('')}</select>
+          <div class="fh">
+            Forces every device in this group into the chosen Live Map tier.
+            Leave on Auto to use name-pattern inference.
+          </div>
+        </div>
+      </div>
+
+      <div class="alrt-section">
+        <div class="alrt-section-hdr">Alerts</div>
+        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;user-select:none">
+          <input type="checkbox" id="ag-muted"/>
+          <span>🔕 Mute alerts for this group</span>
+        </label>
+        <div class="fh" style="margin-top:4px">
+          Suppresses alert dispatch and flap events for every device and sensor in this group.
+          Probes still run and device cards still reflect their real status.
+        </div>
       </div>
     </div>
     <div class="mft">
@@ -1480,7 +1545,13 @@ function openAddGroup(){
     </div>
   </div>`;
   document.body.appendChild(o);
+  // Populate the Site datalist from /api/sites (UNION of IPAM + devices)
+  if (typeof _populateSiteDatalist === 'function') _populateSiteDatalist('ag-site-dl');
   setTimeout(()=>{
+    if(siteName){
+      const sf=document.getElementById('ag-site');
+      if(sf) sf.value=siteName;
+    }
     const inp=document.getElementById('ag-n');
     if(inp){
       inp.focus();
@@ -1489,14 +1560,16 @@ function openAddGroup(){
   },40);
 }
 
-function submitAddGroup(){
-  const name=(document.getElementById('ag-n')?.value||'').trim();
+async function submitAddGroup(){
+  const name = (document.getElementById('ag-n')?.value || '').trim();
   if(!name){ toast('Group name is required','err'); return; }
-  // New groups land in the Unsited site by default — user can drag devices
-  // in and reassign sites via the Edit Device modal.
-  const site='';
-  const exists=document.getElementById(grpId(_dgKey(site, name)));
+  const site  = (document.getElementById('ag-site')?.value || '').trim().slice(0, 80);
+  const tier  = (document.getElementById('ag-tier')?.value || '').trim();
+  const muted = !!document.getElementById('ag-muted')?.checked;
+
+  const exists = document.getElementById(grpId(_dgKey(site, name)));
   if(exists){ toast('Group already exists','err'); return; }
+
   ensureGroupSection(name, site);
   // Persist the new group at the END of the saved order. Without this, the
   // group is unsaved and the next restoreGroupOrder() pass would push every
@@ -1509,11 +1582,40 @@ function submitAddGroup(){
     document.getElementById('dpanels').style.display='';
     document.getElementById('devActBar').style.display='';
   }
+
+  // Persist the group-level Live Map tier override (if set). Same payload
+  // shape the Edit Group modal uses (pw_group_tiers settings key + postMessage
+  // to the livemap iframe so the drill-in re-buckets without a reload).
+  if (tier) {
+    try {
+      const cur = await api('GET', '/api/settings/pw_group_tiers').catch(() => null);
+      const map = (cur && cur.value && typeof cur.value === 'object') ? { ...cur.value } : {};
+      map[name] = tier;
+      await api('PATCH', '/api/settings/pw_group_tiers', { value: map });
+      const _lf = document.getElementById('livemap-frame');
+      _lf?.contentWindow?.postMessage({ type: 'lm_refresh' }, window.location.origin);
+    } catch (e) {
+      toast('Tier save failed: ' + (e.message || e), 'err');
+      // Still proceed — the group exists; the user can re-set the tier later
+    }
+  }
+
+  // Persist the mute state if requested. The mute API keys on the group name
+  // (no group_id), so we just POST with the freshly chosen name.
+  if (muted) {
+    try {
+      await api('POST', '/api/device-group/' + encodeURIComponent(name) + '/mute', { muted: true });
+      if (typeof _setGroupMutedLocal === 'function') _setGroupMutedLocal(name, true);
+    } catch (e) {
+      toast('Mute save failed: ' + (e.message || e), 'err');
+    }
+  }
+
   closeM('mag');
   toast('Group "'+name+'" created','ok');
-  // Scroll the new group into view (Unsited bucket by default)
+  // Scroll the new group into view (at the chosen site, or Unsited bucket)
   setTimeout(()=>{
-    const wrap=document.getElementById(grpId(_dgKey('', name)));
+    const wrap=document.getElementById(grpId(_dgKey(site, name)));
     if(wrap) wrap.scrollIntoView({behavior:'smooth',block:'start'});
   },80);
 }

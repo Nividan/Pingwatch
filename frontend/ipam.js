@@ -25,8 +25,64 @@ async function _ipamInit() {
   if (!_ipamShellInited) {
     _ipamShellInited = true;
     _ipamRenderShell();
+    // Wire the right-click context menu once the shell exists.
+    _initIpamCtxMenu();
   }
   await Promise.all([_ipamLoadSubnets(), _ipamLoadLicenses()]);
+}
+
+// ── Subnet card context menu ───────────────────────────────────────────────
+// Right-click on any subnet card → Edit Subnet / Delete Subnet. Reuses the
+// devices tab's .dev-ctx-menu + .dci styling so it matches the rest of the
+// app without a separate CSS block. Both actions piggy-back on the existing
+// _ipamOpenEdit / _ipamRemoveSubnet flows, which already key on _ipamSelectedId
+// — we select the subnet first, then open the menu.
+let _icm = null;
+
+function _ipamHideCtxMenu() {
+  if (_icm) _icm.style.display = 'none';
+}
+
+function _ipamShowCtxMenu(x, y) {
+  if (!_icm) return;
+  _icm.style.display = 'block';
+  const mw = _icm.offsetWidth || 185, mh = _icm.offsetHeight || 100;
+  _icm.style.left = (x + mw > innerWidth ? x - mw : x) + 'px';
+  _icm.style.top  = (y + mh > innerHeight ? y - mh : y) + 'px';
+}
+
+function _initIpamCtxMenu() {
+  if (_icm) return;
+  _icm = document.createElement('div');
+  _icm.className = 'dev-ctx-menu';
+  _icm.id = 'ipam-ctx-menu';
+  _icm.style.display = 'none';
+  document.body.appendChild(_icm);
+  // Any click anywhere (including on the menu items themselves) closes the
+  // menu — the inline onclick handlers fire first because we attach this
+  // listener to document and bubbling lets the menu's click run before
+  // dismissal.
+  document.addEventListener('click', _ipamHideCtxMenu);
+  document.addEventListener('keydown', e => { if (e.key === 'Escape') _ipamHideCtxMenu(); });
+  // Delegate contextmenu off the sidebar list so we don't re-bind on every
+  // re-render. The list element is built by _ipamRenderShell.
+  const list = document.getElementById('ipam-subnet-list');
+  if (!list) return;
+  list.addEventListener('contextmenu', e => {
+    const card = e.target.closest('.ipam-subnet-card[data-subnet-id]');
+    if (!card) return;
+    e.preventDefault();
+    const sid = parseInt(card.getAttribute('data-subnet-id'), 10);
+    if (!sid) return;
+    // Select the subnet so the existing Edit/Remove handlers find it via
+    // _ipamSelectedId. Also visually highlights the card the user clicked.
+    _ipamOnSubnetChange(sid);
+    _icm.innerHTML = `
+      <div class="dci dci-accent" onclick="_ipamHideCtxMenu();_ipamOpenEdit()">⚙️ Edit Subnet</div>
+      <div class="dci-sep"></div>
+      <div class="dci dci-danger rbac-op" onclick="_ipamHideCtxMenu();_ipamRemoveSubnet()">🗑️ Delete Subnet</div>`;
+    _ipamShowCtxMenu(e.clientX + 2, e.clientY + 2);
+  });
 }
 
 function _ipamRenderShell() {
@@ -39,9 +95,14 @@ function _ipamRenderShell() {
         <div class="sub" id="ipam-sub">Subnets and per-host allocation tracking.</div>
       </div>
       <div class="pagehead-r">
-        <button class="btn primary rbac-op" onclick="_ipamOpenAddSubnet()">${icon('plus',13)} Add Subnet</button>
+        <!-- Left group — always available (subnet inventory). -->
+        <button class="btn primary rbac-op" onclick="_ipamOpenAddSubnet()" title="Create a new subnet">${icon('plus',13)} Add Subnet</button>
+        <button class="btn rbac-op" onclick="_ipamOpenImport()" title="Bulk-import subnets from a CSV file or paste">${icon('upload',13)} Import</button>
+        <span class="ipam-tb-divider" aria-hidden="true"></span>
+        <!-- Right group — operate on the selected subnet. Disabled until one is picked. -->
+        <button class="btn rbac-op" id="ipam-scan-btn" onclick="_ipamScanActive()" disabled title="Ping every IP in this subnet and populate the grid with the active ones (no devices created)">${icon('activity',13)} Scan hosts</button>
+        <button class="btn rbac-op" id="ipam-dns-btn" onclick="_ipamRefreshDns()" disabled title="Resolve reverse DNS for every IP in this subnet">${icon('refresh',13)} Refresh DNS</button>
         <button class="btn rbac-op" id="ipam-edit-btn" onclick="_ipamOpenEdit()" disabled title="Edit subnet name, auto-discovery, DNS server">${icon('edit',13)} Edit</button>
-        <button class="btn ghost rbac-op" id="ipam-dns-btn" onclick="_ipamRefreshDns()" style="display:none" title="Resolve DNS hostnames for all IPs in this subnet">${icon('refresh',13)} Refresh DNS</button>
         <button class="btn danger rbac-op" id="ipam-rm-btn" onclick="_ipamRemoveSubnet()" disabled title="Delete this subnet">${icon('trash',13)} Remove</button>
       </div>
     </div>
@@ -108,12 +169,25 @@ async function _ipamOnLicenseUpdate() {
 }
 
 // ── Subnet loading ─────────────────────────────────────────────────────────
+// Cache of all known site names (UNION of devices.site + ipam_subnets.site +
+// sites metadata table). Populated each time we load subnets so empty Live
+// Map-added sites still appear as collapsible IPAM sections with 0 subnets.
+let _ipamKnownSites = [];
+
 async function _ipamLoadSubnets() {
   const r = await fetch('/api/ipam/subnets');
   if (r.status === 401) { if(!_loggedOut)showLogin('Session expired'); return; }
   if (!r.ok) { toast('Failed to load subnets', 'err'); return; }
   const d = await r.json();
   _ipamSubnets = d.subnets || [];
+  // Refresh the known-sites list in parallel — best-effort, ignore errors.
+  try {
+    const sr = await fetch('/api/sites');
+    if (sr.ok) {
+      const sd = await sr.json();
+      _ipamKnownSites = sd.sites || [];
+    }
+  } catch (_) {}
   _ipamRenderSubnetSelect();
   // Restore previously selected subnet if still present
   if (_ipamSelectedId && _ipamSubnets.find(s => s.id === _ipamSelectedId)) {
@@ -183,7 +257,13 @@ function _ipamRenderSidebar() {
       })
     : _ipamSubnets;
 
-  if (!visible.length) {
+  // Early-out only when there's truly nothing to render — no subnets AND no
+  // known-site placeholders to surface. Without this, a fresh install that
+  // has sites but no subnets falls through here and never reaches the
+  // known-sites merge below, so the user just sees "No subnets yet" with
+  // their sites invisible.
+  const hasKnownSitesToShow = !q && (_ipamKnownSites || []).length > 0;
+  if (!visible.length && !hasKnownSitesToShow) {
     list.innerHTML = `<div class="ipam-empty">${q ? 'No subnets match.' : 'No subnets yet — click + Add Subnet.'}</div>`;
     return;
   }
@@ -194,6 +274,14 @@ function _ipamRenderSidebar() {
     const site = (s.site || '').trim() || _IPAM_UNGROUPED;
     if (!groups.has(site)) groups.set(site, []);
     groups.get(site).push(s);
+  }
+  // Surface known sites that have no subnets yet (created in Live Map but
+  // not yet assigned). Only do this when the user isn't actively searching —
+  // a search should filter to matches, not add empty placeholders.
+  if (!q) {
+    for (const name of (_ipamKnownSites || [])) {
+      if (!groups.has(name)) groups.set(name, []);
+    }
   }
   // Sort groups alphabetically; push "Ungrouped" to the end
   const sortedSites = [...groups.keys()].sort((a, b) => {
@@ -210,6 +298,9 @@ function _ipamRenderSidebar() {
     const collapsed = _ipamGrpCollapsed.has(site) && !containsActive;
     const arrCls = collapsed ? '' : ' open';
     const bodyStyle = collapsed ? 'display:none' : '';
+    const emptyPlaceholder = subnets.length === 0
+      ? '<div class="ipam-empty" style="padding:8px 12px;opacity:.6;font-size:11px">No subnets in this site yet.</div>'
+      : '';
     const cards = subnets.map(s => {
       const u = _ipamUtilCache[s.id];
       const pct = u && u.total ? Math.round((u.used / u.total) * 100) : 0;
@@ -218,7 +309,7 @@ function _ipamRenderSidebar() {
       const v = s.vlan|0;
       const vlanChip = v ? `<span class="ipam-subnet-vlan" title="VLAN ${v}">V${v}</span>` : '';
       return `
-        <div class="ipam-subnet-card${active}" onclick="_ipamOnSubnetChange(${s.id})">
+        <div class="ipam-subnet-card${active}" data-subnet-id="${s.id}" onclick="_ipamOnSubnetChange(${s.id})">
           <div class="ipam-subnet-card-l">
             <div class="ipam-subnet-cidr mono">${esc(s.cidr)}${vlanChip}</div>
             <div class="ipam-subnet-meta">${esc(s.name || '—')}</div>
@@ -233,7 +324,7 @@ function _ipamRenderSidebar() {
           <span class="ipam-grp-name">${esc(site)}</span>
           <span class="ipam-grp-cnt">${subnets.length}</span>
         </button>
-        <div class="ipam-grp-body" style="${bodyStyle}">${cards}</div>
+        <div class="ipam-grp-body" style="${bodyStyle}">${cards}${emptyPlaceholder}</div>
       </div>`;
   }).join('');
 }
@@ -257,10 +348,8 @@ function _ipamRenderMain(subnet) {
         <div class="ipam-main-title mono">${esc(subnet.cidr)}</div>
         <div class="ipam-main-sub">${esc(meta)}</div>
       </div>
-      <div class="ipam-main-head-r">
-        <button class="btn ghost sm" onclick="_ipamRefreshDns()" title="Rescan subnet (refresh DNS + allocations)">${icon('refresh',12)} Rescan</button>
-        <button class="btn sm rbac-op" onclick="_ipamOpenReserve()" title="Reserve an IP">${icon('plus',12)} Reserve</button>
-      </div>
+      <!-- Per-subnet actions (Scan, Refresh DNS, Edit, Remove) live in the
+           top toolbar so the user has one consistent control surface. -->
     </div>
     <div class="ipam-kpis" id="ipam-kpis"></div>
     <div class="ipam-section">
@@ -272,6 +361,7 @@ function _ipamRenderMain(subnet) {
           <span><i class="ipam-leg gw"></i>Gateway</span>
           <span><i class="ipam-leg rsv"></i>Reserved</span>
           <span><i class="ipam-leg cfl"></i>Conflict</span>
+          <span title="Discovered previously but didn't respond in the last scan"><i class="ipam-leg stale"></i>Stale</span>
         </div>
       </div>
       <div class="ipam-heatmap" id="ipam-heatmap"></div>
@@ -294,6 +384,13 @@ function _ipamClassify(entry) {
   if (kind === 'gateway')  return 'gw';
   if (kind === 'reserved') return 'rsv';
   if (kind === 'conflict') return 'cfl';
+  // Stale = discovered previously, didn't respond in the last subnet scan.
+  // modified_at stays as the "last seen alive" timestamp on the row.
+  if (kind === 'stale')    return 'stale';
+  // Discovered = scanner saw the IP alive. Treat as "in use" regardless of
+  // whether reverse DNS resolved — an IP without a PTR record but responding
+  // to ping is still occupied.
+  if (kind === 'discovered') return 'used';
   // Heuristic fallback for legacy allocations without a kind tag
   const name = (entry.name || '').toLowerCase();
   const dns  = (entry.dns_name || '').toLowerCase();
@@ -368,31 +465,34 @@ function _ipamFocusIp(ip) {
   if (inp) { inp.value = ip; _ipamOnSearch(ip); }
 }
 
-function _ipamOpenReserve() {
-  // Stub for now — the existing Edit-cell flow lets users assign a name to a row.
-  // A dedicated Reserve modal can come later; for now, focus the first free
-  // row's name cell so the user can type into it.
-  const free = _ipamAllIps.find(e => !e.name && !e.device_id);
-  if (free && typeof toast === 'function') {
-    toast(`Tip: click any "click to assign…" cell in the table to reserve an IP (next free: ${free.ip}).`, 'info');
-  }
+// IDs of the toolbar buttons that act on the currently-selected subnet —
+// gated together by _ipamOnSubnetChange so the user can never click into a
+// nonsensical state (e.g. "Scan hosts" with no subnet picked).
+const _IPAM_SELECTED_BTN_IDS = ['ipam-scan-btn', 'ipam-dns-btn', 'ipam-edit-btn', 'ipam-rm-btn'];
+
+function _ipamSetSelectedBtnsDisabled(disabled) {
+  _IPAM_SELECTED_BTN_IDS.forEach(id => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    if (disabled) el.setAttribute('disabled', '');
+    else          el.removeAttribute('disabled');
+  });
 }
 
 // ── Subnet selection ───────────────────────────────────────────────────────
 async function _ipamOnSubnetChange(idVal) {
   _ipamCancelDnsInterval();   // cancel any in-flight DNS poll for previous subnet
+  _ipamCancelScanPoll();      // ditto for the active-host scan poller
   const id = parseInt(idVal);
   if (!id) {
     _ipamSelectedId = null;
-    document.getElementById('ipam-rm-btn')?.setAttribute('disabled', '');
-    document.getElementById('ipam-edit-btn')?.setAttribute('disabled', '');
+    _ipamSetSelectedBtnsDisabled(true);
     return;
   }
   _ipamSelectedId = id;
   _ipamSortCol = 'status_ip'; _ipamSortDir = 1;
   _ipamFilterStatus = ''; _ipamFilterLic = '';
-  document.getElementById('ipam-rm-btn')?.removeAttribute('disabled');
-  document.getElementById('ipam-edit-btn')?.removeAttribute('disabled');
+  _ipamSetSelectedBtnsDisabled(false);
 
   // Refresh sidebar so the active card highlights immediately
   _ipamRenderSidebar();
@@ -510,10 +610,17 @@ function _ipamSortCmp(a, b) {
       r = (a.modified_by || '').localeCompare(b.modified_by || ''); break;
     case 'modified_at':
       r = (a.modified_at || 0) - (b.modified_at || 0); break;
-    case 'status_ip': // default: Used first, then by IP
-      r = (a.name ? 0 : 1) - (b.name ? 0 : 1);
+    case 'status_ip': {
+      // Default: any occupied IP first (Used / Discovered / Gateway / Reserved
+      // / Conflict / Stale), then Free — and within each bucket sorted by IP.
+      // Using _ipamClassify so a discovered row with no PTR (empty name) still
+      // groups with the in-use ones instead of being scattered with Free.
+      const aOccupied = _ipamClassify(a) !== 'free' ? 0 : 1;
+      const bOccupied = _ipamClassify(b) !== 'free' ? 0 : 1;
+      r = aOccupied - bOccupied;
       if (r === 0) r = _ipamIpCmp(a.ip, b.ip);
       return r; // default sort ignores direction toggle
+    }
     default:
       r = _ipamIpCmp(a.ip, b.ip);
   }
@@ -604,7 +711,10 @@ function _ipamRenderGlobalResults(results, q) {
     const nameText = e.name ? devBadge + esc(e.name) : '<span style="color:var(--text3)">—</span>';
     const dns = e.dns_name || '';
     const dnsDisplay = dns.length > 30 ? dns.slice(0, 28) + '…' : dns;
-    return `<tr class="${used ? 'ipam-row-used' : 'ipam-row-free'}">
+    // Row tint follows occupancy, not just `name` — so a discovered IP with
+    // no PTR still gets the green left-border.
+    const rowCls = _ipamClassify(e) !== 'free' ? 'ipam-row-used' : 'ipam-row-free';
+    return `<tr class="${rowCls}">
       <td class="ipam-ip">${esc(e.ip)}</td>
       <td style="font-size:11px;color:var(--text3)">${esc(e.subnetLabel)}</td>
       <td>${nameText}</td>
@@ -674,12 +784,17 @@ function _ipamRenderTable() {
   const rows = page.map(e => {
     const used    = !!e.name;
     const kind    = (e.kind || '').toLowerCase();
-    // Status pill — kind takes precedence over the generic used/free label
+    // Status pill — kind takes precedence over the generic used/free label.
+    // 'discovered' is its own badge so the user can tell a scan-populated row
+    // (which may have an empty name when reverse DNS failed) from a manually-
+    // assigned one. The class still uses the 'used' colour family.
     let badge;
-    if      (kind === 'gateway')  badge = `<span class="ipam-kbadge gw">Gateway</span>`;
-    else if (kind === 'reserved') badge = `<span class="ipam-kbadge rsv">Reserved</span>`;
-    else if (kind === 'conflict') badge = `<span class="ipam-kbadge cfl">Conflict</span>`;
-    else                          badge = used
+    if      (kind === 'gateway')    badge = `<span class="ipam-kbadge gw">Gateway</span>`;
+    else if (kind === 'reserved')   badge = `<span class="ipam-kbadge rsv">Reserved</span>`;
+    else if (kind === 'conflict')   badge = `<span class="ipam-kbadge cfl">Conflict</span>`;
+    else if (kind === 'stale')      badge = `<span class="ipam-kbadge stale" title="Discovered previously, did not respond in the last scan">Stale</span>`;
+    else if (kind === 'discovered') badge = `<span class="ipam-kbadge disc" title="Responded to the last subnet scan">Discovered</span>`;
+    else                            badge = used
       ? `<span class="ipam-used">Used</span>`
       : `<span class="ipam-free">Free</span>`;
     const dateStr = e.modified_at
@@ -688,16 +803,28 @@ function _ipamRenderTable() {
     const devBadge = e.device_id
       ? `<span class="ipam-dev-badge" title="Auto-populated from device">🔗</span>`
       : '';
+    // A discovered IP without a name is a real responder whose PTR lookup
+    // failed — show a hint that's distinct from the "Free" prompt so the user
+    // can tell at a glance: this IP responded, just didn't resolve.
     const nameText = e.name
       ? devBadge + esc(e.name)
-      : (canEdit ? '<span style="color:var(--text3);font-style:italic">click to assign…</span>' : '<span style="color:var(--text3)">—</span>');
+      : (kind === 'discovered'
+          ? (canEdit
+              ? '<span style="color:var(--text3);font-style:italic" title="No reverse DNS — click to name">no hostname</span>'
+              : '<span style="color:var(--text3)">no hostname</span>')
+          : (canEdit
+              ? '<span style="color:var(--text3);font-style:italic">click to assign…</span>'
+              : '<span style="color:var(--text3)">—</span>'));
     const nameCell = canEdit
       ? `<td class="ipam-name-cell" onclick="_ipamEditCell(this,'${esc(e.ip)}')">${nameText}</td>`
       : `<td>${nameText}</td>`;
     const dns = e.dns_name || '';
     const dnsDisplay = dns.length > 35 ? dns.slice(0, 33) + '…' : dns;
     const dnsCell = `<td class="ipam-dns" title="${esc(dns)}">${dnsDisplay ? esc(dnsDisplay) : '<span class="ipam-ts">—</span>'}</td>`;
-    return `<tr class="${used ? 'ipam-row-used' : 'ipam-row-free'}">
+    // Row tint follows occupancy classification, not just whether a name is
+    // set — so a discovered IP with no PTR still gets the green left-border.
+    const rowCls = _ipamClassify(e) !== 'free' ? 'ipam-row-used' : 'ipam-row-free';
+    return `<tr class="${rowCls}">
       <td class="ipam-ip">${esc(e.ip)}</td>
       ${nameCell}
       ${dnsCell}
@@ -841,6 +968,292 @@ function _ipamEditCell(td, ip) {
 }
 
 // ── Add subnet modal ───────────────────────────────────────────────────────
+// ── Bulk subnet import ────────────────────────────────────────────────────
+// Single-screen modal: paste CSV or upload a file → server-side preview →
+// per-row toggle → apply. Mirrors the device-import UX pattern but stays
+// in one modal because subnets have far fewer fields than devices.
+//
+// `opts.prefillText` (optional): seed the textarea with CSV from another
+// source — used by the Backups → Extract Subnets flow so the user lands
+// directly on the preview step.
+// `opts.banner` (optional): one-line caption shown above the textarea
+// explaining where the prefill came from.
+// `opts.autoPreview` (optional, defaults true when prefillText is set):
+// skip the upload step and run the preview immediately.
+function _ipamOpenImport(opts) {
+  opts = opts || {};
+  closeM('ipam-imp-modal');
+  const o = document.createElement('div');
+  o.className = 'mo'; o.id = 'ipam-imp-modal';
+  _overlayClose(o, () => closeM('ipam-imp-modal'));
+  o.innerHTML = `
+    <div class="mbox" style="width:min(95vw,820px);max-height:88vh;display:flex;flex-direction:column">
+      <div class="mhd">
+        <div class="mttl">📥 Import Subnets</div>
+        <button class="mclose" onclick="closeM('ipam-imp-modal')">✕</button>
+      </div>
+      <div class="mbdy" id="ipam-imp-body" style="overflow:auto;flex:1">
+        <div id="ipam-imp-step-upload">
+          <div class="fh" style="margin-bottom:10px">
+            Bulk-create subnets from a CSV file. Columns:
+            <code>cidr,name,site,vlan</code> (header row optional).
+            Existing CIDRs are skipped — they won't duplicate or overwrite.
+          </div>
+          <div style="display:flex;gap:8px;align-items:center;margin:10px 0 14px">
+            <a class="btn ghost sm" href="/api/import/subnets/template" download="pingwatch-subnets-template.csv">
+              ${icon('download',12)} Download template
+            </a>
+            <label class="btn ghost sm" style="cursor:pointer">
+              ${icon('upload',12)} Choose CSV file…
+              <input type="file" id="ipam-imp-file" accept=".csv,.tsv,.txt,text/csv" style="display:none"/>
+            </label>
+            <span id="ipam-imp-fname" style="font-size:12px;color:var(--text3)"></span>
+          </div>
+          <div class="fr">
+            <label class="fl" style="font-size:12px">Or paste CSV directly</label>
+            <textarea id="ipam-imp-text" rows="10"
+              placeholder="cidr,name,site,vlan&#10;10.0.0.0/24,Office LAN,HQ,10&#10;192.168.50.0/24,Lab,BSLAB,20"
+              style="width:100%;font-family:'JetBrains Mono',monospace;font-size:12px"></textarea>
+          </div>
+          <div id="ipam-imp-err" style="color:var(--down);font-size:12px;margin-top:8px;display:none"></div>
+        </div>
+        <div id="ipam-imp-step-preview" style="display:none">
+          <div id="ipam-imp-summary" style="margin-bottom:10px;font-size:13px"></div>
+          <div id="ipam-imp-table-wrap" style="border:1px solid var(--border);border-radius:6px;overflow:auto;max-height:48vh"></div>
+        </div>
+        <div id="ipam-imp-step-result" style="display:none">
+          <div id="ipam-imp-result-body"></div>
+        </div>
+      </div>
+      <div class="mft" id="ipam-imp-foot">
+        <button class="btn-s" onclick="closeM('ipam-imp-modal')" id="ipam-imp-cancel">Cancel</button>
+        <button class="btn-p" id="ipam-imp-preview-btn" onclick="_ipamImpPreview()">Preview</button>
+        <button class="btn-p" id="ipam-imp-apply-btn"   onclick="_ipamImpApply()" style="display:none">Import 0 subnets</button>
+        <button class="btn-p" id="ipam-imp-done-btn"    onclick="closeM('ipam-imp-modal')" style="display:none">Done</button>
+      </div>
+    </div>`;
+  document.body.appendChild(o);
+  // Wire the file picker → read into the textarea so preview only ever
+  // sends one source-of-truth payload (the textarea contents).
+  document.getElementById('ipam-imp-file').addEventListener('change', ev => {
+    const f = ev.target.files?.[0];
+    if (!f) return;
+    document.getElementById('ipam-imp-fname').textContent = f.name + ' · ' + Math.ceil(f.size/1024) + ' KB';
+    const r = new FileReader();
+    r.onload = () => { document.getElementById('ipam-imp-text').value = String(r.result || ''); };
+    r.onerror = () => { _ipamImpShowErr('Could not read file: ' + (r.error?.message || 'unknown')); };
+    r.readAsText(f);
+  });
+  // Caller-supplied prefill (e.g. from the Extract-Subnets flow). The
+  // banner sits above the textarea so the user knows where the data came
+  // from; autoPreview jumps straight to the preview step.
+  if (opts.banner) {
+    const step = document.getElementById('ipam-imp-step-upload');
+    if (step) {
+      const b = document.createElement('div');
+      b.style.cssText = 'background:rgba(0,212,255,0.08);border:1px solid rgba(0,212,255,0.3);' +
+                        'border-radius:4px;padding:8px 12px;margin-bottom:10px;font-size:12px;color:var(--accent)';
+      b.innerHTML = opts.banner; // caller controls — banner is dev-controlled, not user input
+      step.insertBefore(b, step.firstChild);
+    }
+  }
+  if (opts.prefillText) {
+    const ta = document.getElementById('ipam-imp-text');
+    if (ta) ta.value = String(opts.prefillText);
+  }
+  const auto = opts.autoPreview !== undefined ? opts.autoPreview : !!opts.prefillText;
+  if (auto) {
+    // Defer one frame so the modal is in the DOM before we mutate the
+    // step display — _ipamImpPreview() flips to the preview step itself.
+    setTimeout(() => _ipamImpPreview(), 0);
+  } else {
+    setTimeout(() => document.getElementById('ipam-imp-text')?.focus(), 30);
+  }
+}
+
+function _ipamImpShowErr(msg) {
+  const e = document.getElementById('ipam-imp-err');
+  if (!e) return;
+  if (!msg) { e.style.display = 'none'; e.textContent = ''; return; }
+  e.textContent = msg; e.style.display = '';
+}
+
+// Mutable state for the preview→apply round trip. Closure-free so the
+// inline onclick handlers can reach it.
+let _ipamImpRows = [];
+
+async function _ipamImpPreview() {
+  _ipamImpShowErr('');
+  const text = document.getElementById('ipam-imp-text').value || '';
+  if (!text.trim()) { _ipamImpShowErr('Paste CSV or choose a file first.'); return; }
+  const btn = document.getElementById('ipam-imp-preview-btn');
+  btn.disabled = true; btn.textContent = 'Parsing…';
+  try {
+    const r = await fetch('/api/import/subnets/preview', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text }),
+    });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) { _ipamImpShowErr(j.error || ('Preview failed: ' + r.statusText)); return; }
+    _ipamImpRows = j.rows || [];
+    if (!_ipamImpRows.length) { _ipamImpShowErr('No rows found in the input.'); return; }
+    _ipamImpRenderPreview(j.valid|0, j.total|0, j.existing|0);
+  } catch (e) {
+    _ipamImpShowErr('Preview request failed: ' + (e.message || e));
+  } finally {
+    btn.disabled = false; btn.textContent = 'Preview';
+  }
+}
+
+function _ipamImpRenderPreview(validCount, total, existing) {
+  document.getElementById('ipam-imp-step-upload').style.display = 'none';
+  document.getElementById('ipam-imp-step-preview').style.display = '';
+  document.getElementById('ipam-imp-preview-btn').style.display = 'none';
+  document.getElementById('ipam-imp-apply-btn').style.display = '';
+  const invalid     = total - validCount;
+  const existingCnt = existing | 0;
+  // Default-select: any row that's valid AND not already in IPAM. Existing
+  // CIDRs land in the table for visibility but unchecked + flagged so the
+  // user understands why they're being skipped (without having to wait for
+  // the apply step to surface a "duplicate" error).
+  _ipamImpRows.forEach(r => {
+    if (!r._ok) { r._selected = false; return; }
+    r._selected = !r._exists;
+  });
+  const newCount = _ipamImpRows.filter(r => r._ok && !r._exists).length;
+  document.getElementById('ipam-imp-summary').innerHTML =
+    `<strong>${total}</strong> row${total===1?'':'s'} parsed · ` +
+    `<span style="color:var(--up)">${newCount} new</span>` +
+    (existingCnt ? ` · <span style="color:var(--warn)">${existingCnt} already in IPAM</span>` : '') +
+    (invalid ? ` · <span style="color:var(--down)">${invalid} with errors</span>` : '') +
+    ` <span style="color:var(--text3);font-size:11px">— uncheck to skip · re-check an existing row to force it (will fail)</span>`;
+  const rows = _ipamImpRows.map((r, i) => {
+    const ok     = !!r._ok;
+    const exists = !!r._exists;
+    // Three checkbox states:
+    //   • valid & new          → checked, enabled
+    //   • valid & existing     → unchecked, enabled (user can override)
+    //   • invalid              → unchecked, disabled
+    let cbAttrs = `data-imp-idx="${i}"`;
+    if (!ok) cbAttrs += ` disabled title="${esc(r._msg||'')}"`;
+    else if (!exists) cbAttrs += ' checked';
+    if (ok) cbAttrs += ` onclick="_ipamImpToggle(${i}, this.checked)"`;
+    const checkbox = `<input type="checkbox" ${cbAttrs}/>`;
+    let statusCell;
+    if (!ok)
+      statusCell = `<span style="color:var(--down)" title="${esc(r._msg||'')}">✕ ${esc(r._msg||'invalid')}</span>`;
+    else if (exists)
+      statusCell = '<span style="color:var(--warn)" title="A subnet with this CIDR already exists in IPAM">● already exists</span>';
+    else
+      statusCell = '<span style="color:var(--up)">✓ new</span>';
+    const rowOpacity = ok ? (exists ? '0.7' : '1') : '0.55';
+    return `<tr style="opacity:${rowOpacity}">
+      <td style="padding:6px 10px;text-align:center">${checkbox}</td>
+      <td style="padding:6px 10px;font-family:\'JetBrains Mono\',monospace">${esc(r.cidr||'')}</td>
+      <td style="padding:6px 10px">${esc(r.name||'—')}</td>
+      <td style="padding:6px 10px">${esc(r.site||'—')}</td>
+      <td style="padding:6px 10px;text-align:right">${r.vlan ? r.vlan : '—'}</td>
+      <td style="padding:6px 10px;font-size:11px">${statusCell}</td>
+    </tr>`;
+  }).join('');
+  // "Select all" defaults to the same state as the rows we just rendered —
+  // checked only when every selectable row is selected. With existing rows
+  // unchecked by default this means the box is checked iff there are no
+  // existing duplicates in the file.
+  const allSelected = _ipamImpRows.every(r => !r._ok || r._selected !== false);
+  document.getElementById('ipam-imp-table-wrap').innerHTML = `
+    <table style="width:100%;border-collapse:collapse;font-size:12px">
+      <thead>
+        <tr style="background:var(--bg2);position:sticky;top:0">
+          <th style="padding:8px 10px;text-align:center;width:40px">
+            <input type="checkbox" id="ipam-imp-all" ${allSelected?'checked':''} onclick="_ipamImpToggleAll(this.checked)"/>
+          </th>
+          <th style="padding:8px 10px;text-align:left">CIDR</th>
+          <th style="padding:8px 10px;text-align:left">Name</th>
+          <th style="padding:8px 10px;text-align:left">Site</th>
+          <th style="padding:8px 10px;text-align:right">VLAN</th>
+          <th style="padding:8px 10px;text-align:left">Status</th>
+        </tr>
+      </thead>
+      <tbody>${rows}</tbody>
+    </table>`;
+  _ipamImpUpdateApplyLabel();
+}
+
+function _ipamImpToggle(i, on) {
+  const r = _ipamImpRows[i];
+  if (!r || !r._ok) return;
+  r._selected = !!on;
+  _ipamImpUpdateApplyLabel();
+}
+
+function _ipamImpToggleAll(on) {
+  _ipamImpRows.forEach((r, i) => {
+    if (!r._ok) return;
+    r._selected = !!on;
+    const cb = document.querySelector(`input[data-imp-idx="${i}"]`);
+    if (cb && !cb.disabled) cb.checked = !!on;
+  });
+  _ipamImpUpdateApplyLabel();
+}
+
+function _ipamImpSelectedRows() {
+  return _ipamImpRows.filter(r => r._ok && (r._selected !== false));
+}
+
+function _ipamImpUpdateApplyLabel() {
+  const n = _ipamImpSelectedRows().length;
+  const btn = document.getElementById('ipam-imp-apply-btn');
+  if (!btn) return;
+  btn.textContent = `Import ${n} subnet${n===1?'':'s'}`;
+  btn.disabled = (n === 0);
+}
+
+async function _ipamImpApply() {
+  const sel = _ipamImpSelectedRows();
+  if (!sel.length) return;
+  const btn = document.getElementById('ipam-imp-apply-btn');
+  btn.disabled = true; btn.textContent = 'Importing…';
+  try {
+    const r = await fetch('/api/import/subnets/apply', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ rows: sel }),
+    });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) { _ipamImpShowErr(j.error || ('Import failed: ' + r.statusText)); btn.disabled = false; return; }
+    _ipamImpRenderResult(j.created|0, j.errors || []);
+    // Refresh the IPAM sidebar so the new subnets appear immediately.
+    if (typeof _ipamLoadSubnets === 'function') _ipamLoadSubnets();
+  } catch (e) {
+    _ipamImpShowErr('Import request failed: ' + (e.message || e));
+    btn.disabled = false;
+  }
+}
+
+function _ipamImpRenderResult(created, errors) {
+  document.getElementById('ipam-imp-step-preview').style.display = 'none';
+  document.getElementById('ipam-imp-step-result').style.display = '';
+  document.getElementById('ipam-imp-apply-btn').style.display = 'none';
+  document.getElementById('ipam-imp-cancel').style.display = 'none';
+  document.getElementById('ipam-imp-done-btn').style.display = '';
+  const errList = errors.length
+    ? `<div style="margin-top:14px">
+         <div style="font-size:12px;color:var(--down);margin-bottom:6px">${errors.length} row${errors.length===1?'':'s'} failed:</div>
+         <ul style="font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--text2);max-height:30vh;overflow:auto;padding-left:18px">
+           ${errors.map(e => `<li><strong>${esc(e.cidr||'')}</strong> — ${esc(e.error||'unknown')}</li>`).join('')}
+         </ul>
+       </div>`
+    : '';
+  document.getElementById('ipam-imp-result-body').innerHTML = `
+    <div style="text-align:center;padding:18px 8px">
+      <div style="font-size:36px;color:var(--up);margin-bottom:8px">✓</div>
+      <div style="font-size:16px;font-weight:600">Imported ${created} subnet${created===1?'':'s'}</div>
+    </div>
+    ${errList}`;
+}
+
 function _ipamOpenAddSubnet() {
   closeM('ipam-add-modal');
   const o = document.createElement('div');
@@ -941,6 +1354,7 @@ function _ipamOpenEdit() {
   closeM('ipam-edit-modal');
 
   const adChecked   = !!(sub.auto_discover | 0);
+  const ahsChecked  = !!(sub.auto_host_scan | 0);
   const alreadyHadFirstScan = !!(sub.first_scan_approved | 0) || !!sub.last_auto_scan_ts;
   const lastScanStr = sub.last_auto_scan_ts || '—';
 
@@ -985,15 +1399,25 @@ function _ipamOpenEdit() {
         </div>
 
         <div class="ipam-edit-sec">
-          <div class="ipam-edit-hd">Auto-Discovery</div>
+          <div class="ipam-edit-hd">Scheduled scans</div>
           <label class="cb-row" style="padding:4px 0">
             <input type="checkbox" id="ipam-edit-ad" ${adChecked?'checked':''}/>
-            <span>Auto-discover new hosts in this subnet</span>
+            <span>Auto-discover new hosts <em style="color:var(--text3);font-style:normal">(creates devices)</em></span>
           </label>
           <div class="fh" style="margin-bottom:6px">
             Periodically scan this subnet. New hosts become devices with a ping sensor
             plus any services the Port Scanner detects. Global cadence + safety rails
             live in Settings → 📡 Auto-Discovery.
+          </div>
+          <label class="cb-row" style="padding:4px 0;margin-top:4px">
+            <input type="checkbox" id="ipam-edit-ahs" ${ahsChecked?'checked':''}/>
+            <span>Auto-host-scan <em style="color:var(--text3);font-style:normal">(IPAM only — no devices created)</em></span>
+          </label>
+          <div class="fh" style="margin-bottom:6px">
+            Periodically ping every IP in this subnet and populate the IPAM grid
+            with active responders (kind = <code>discovered</code>). Use for networks
+            you want visibility into without committing to monitoring every host.
+            Shares the same global cadence as Auto-Discovery.
           </div>
           <div id="ipam-ad-confirm" class="ipam-ad-confirm" style="display:${(!adChecked || alreadyHadFirstScan)?'none':'flex'}">
             <div style="font-size:13px;font-weight:600;margin-bottom:4px">⚠ First-scan cap applies</div>
@@ -1101,10 +1525,11 @@ async function _ipamSaveEdit() {
   const vlanRaw = (document.getElementById('ipam-edit-vlan')?.value || '').trim();
   const body = {
     name:          (document.getElementById('ipam-edit-name')?.value || '').trim(),
-    site:          (document.getElementById('ipam-edit-site')?.value || '').trim(),
-    vlan:          vlanRaw ? Math.max(0, Math.min(4094, parseInt(vlanRaw, 10) || 0)) : 0,
-    auto_discover: !!document.getElementById('ipam-edit-ad')?.checked ? 1 : 0,
-    dns_server:    (document.getElementById('ipam-edit-dns')?.value || '').trim(),
+    site:           (document.getElementById('ipam-edit-site')?.value || '').trim(),
+    vlan:           vlanRaw ? Math.max(0, Math.min(4094, parseInt(vlanRaw, 10) || 0)) : 0,
+    auto_discover:  !!document.getElementById('ipam-edit-ad')?.checked  ? 1 : 0,
+    auto_host_scan: !!document.getElementById('ipam-edit-ahs')?.checked ? 1 : 0,
+    dns_server:     (document.getElementById('ipam-edit-dns')?.value || '').trim(),
   };
   if (modal?.dataset.adApprove === '1') body.approve_first_scan = 1;
 
@@ -1209,6 +1634,114 @@ function _ipamCancelDnsInterval() {
     clearInterval(_ipamDnsInterval);
     _ipamDnsInterval = null;
   }
+}
+
+// ── Active-host scan (auto-populate allocations) ──────────────────────────
+// Kicks off a ping sweep across the selected subnet; alive IPs land in the
+// allocation grid with kind='discovered'. Polls progress on a 2-second
+// cadence and reloads the subnet view on completion. Bound to module scope
+// so a navigation away from the subnet cancels the poller.
+let _ipamScanPollTimer = null;
+let _ipamScanInflight  = null;  // { subnet_id, scan_id }
+
+function _ipamCancelScanPoll() {
+  if (_ipamScanPollTimer) {
+    clearInterval(_ipamScanPollTimer);
+    _ipamScanPollTimer = null;
+  }
+  _ipamScanInflight = null;
+}
+
+function _ipamScanBtnState(label, disabled) {
+  const btn = document.getElementById('ipam-scan-btn');
+  if (!btn) return;
+  // Stay consistent with the rest of the selected-subnet button group: if the
+  // user deselected the subnet mid-scan, keep the button disabled regardless
+  // of what the call site requested.
+  btn.disabled = !!disabled || !_ipamSelectedId;
+  // Preserve the icon — replace just the text node trailing the SVG.
+  const svg = btn.querySelector('svg');
+  btn.innerHTML = '';
+  if (svg) btn.appendChild(svg);
+  btn.appendChild(document.createTextNode(' ' + label));
+}
+
+async function _ipamScanActive() {
+  if (!_ipamSelectedId) return;
+  const subnetId = _ipamSelectedId;
+  _ipamCancelScanPoll();
+  _ipamScanBtnState('Starting…', true);
+  let scanId;
+  try {
+    const r = await fetch(`/api/ipam/subnets/${subnetId}/scan`, {method: 'POST'});
+    if (!r.ok) {
+      const msg = (await r.json().catch(() => ({}))).error || 'scan start failed';
+      toast(msg, 'err');
+      _ipamScanBtnState('Scan hosts', false);
+      return;
+    }
+    const j = await r.json();
+    scanId = j.scan_id;
+    if (j.already_running) toast('Scan already in progress — joining', 'info');
+    else                   toast('Subnet scan started', 'info');
+  } catch {
+    toast('Scan start failed', 'err');
+    _ipamScanBtnState('Scan hosts', false);
+    return;
+  }
+  _ipamScanInflight = { subnet_id: subnetId, scan_id: scanId };
+
+  // Poll progress every 2s; reload subnet allocations when scan completes.
+  // Cap at 600 polls (~20 min) so a stuck scan can't leak the timer.
+  let polls = 0;
+  _ipamScanPollTimer = setInterval(async () => {
+    polls++;
+    // User may have navigated away to a different subnet — abandon the poll.
+    if (!_ipamScanInflight || _ipamScanInflight.subnet_id !== _ipamSelectedId) {
+      _ipamCancelScanPoll();
+      return;
+    }
+    try {
+      const r = await fetch(`/api/ipam/subnets/${subnetId}/scan/${scanId}`);
+      if (!r.ok) {
+        // 404 = the scan_id has been purged from the registry (TTL expired).
+        // Treat as done and reload so any partial results show up.
+        _ipamCancelScanPoll();
+        _ipamScanBtnState('Scan hosts', false);
+        await _ipamReloadCurrentSubnet();
+        return;
+      }
+      const st = await r.json();
+      const p = st.progress || {};
+      if (st.state === 'running') {
+        const total   = p.total || 0;
+        const checked = p.checked || 0;
+        const alive   = p.alive || 0;
+        const pctTxt  = total ? Math.floor(100 * checked / total) + '%' : '…';
+        _ipamScanBtnState(`Scanning ${pctTxt} · ${alive} alive`, true);
+      } else {
+        // done / cancelled / error → close the poller and reload allocations
+        // so the new kind='discovered' rows appear in the grid.
+        _ipamCancelScanPoll();
+        _ipamScanBtnState('Scan hosts', false);
+        if (st.state === 'done') {
+          toast(`Scan complete — ${p.alive || 0} alive host(s)`, 'ok');
+        } else if (st.state === 'cancelled') {
+          toast('Scan cancelled', 'info');
+        } else if (st.error) {
+          toast('Scan error: ' + st.error, 'err');
+        }
+        await _ipamReloadCurrentSubnet();
+      }
+    } catch {
+      // Network blip — keep polling, will recover on next tick.
+    }
+    if (polls >= 600) {
+      _ipamCancelScanPoll();
+      _ipamScanBtnState('Scan hosts', false);
+      toast('Scan poll timeout — refresh manually if needed', 'warn');
+    }
+  }, 2000);
 }
 
 async function _ipamRefreshDns() {

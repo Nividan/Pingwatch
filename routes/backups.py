@@ -16,14 +16,14 @@ import time as _time
 
 from core.config import (
     _RE_BACKUPS, _RE_BACKUP_DEV, _RE_BACKUP_HISTORY,
-    _RE_BACKUP_RUN_ID, _RE_BACKUP_TRIGGER,
+    _RE_BACKUP_RUN_ID, _RE_BACKUP_TRIGGER, _RE_BACKUP_EXTRACT,
 )
 from db import (
     db_log_audit,
     db_get_backup_list, db_get_backup_settings, db_save_backup_settings,
     db_get_backup_history, db_get_backup_run,
     db_delete_backup_run, db_ensure_backup_device,
-    db_search_configs,
+    db_search_configs, db_get_last_successful_config,
 )
 from backup.engine import do_backup
 from core.logger import log_backup as log
@@ -48,6 +48,10 @@ def handle(h, method, path, body):
             entry['name']    = live.name  if live else None
             entry['host']    = live.host  if live else ''
             entry['group']   = live.group if live else ''
+            # Surface the device's site so the Backups page can group by
+            # site the same way Devices / IPAM / Live Map do. Empty string
+            # means "Unsited" — the frontend renders that bucket last.
+            entry['site']    = (getattr(live, 'site', '') or '') if live else ''
             entry['orphaned'] = live is None
         # Also include devices not yet configured (enabled=False placeholder)
         configured = {e['did'] for e in devices}
@@ -56,6 +60,7 @@ def handle(h, method, path, body):
                 devices.append({
                     'did': did, 'name': d.name,
                     'host': d.host, 'group': d.group,
+                    'site': (getattr(d, 'site', '') or ''),
                     'enabled': False, 'method': 'ssh', 'port': 22,
                     'username': '', 'has_password': False, 'has_enable': False,
                     'commands': ['show running-config'], 'paging_cmd': '',
@@ -188,6 +193,45 @@ def handle(h, method, path, body):
         db_save_backup_settings(did, body)
         db_log_audit(user, h.client_address[0], 'backup_settings_save', did)
         h._json(200, {'ok': True})
+        return True
+
+    # ── POST /api/backups/<did>/extract-subnets ───────────────────
+    # Parse subnet definitions out of the device's most recent successful
+    # backup. Returns rows + a ready-to-paste CSV so the Import Subnets
+    # modal can pre-fill its textarea with no extra round-trip.
+    m = _RE_BACKUP_EXTRACT.match(path)
+    if m and method == 'POST':
+        user, _ = h._require('operator')
+        if not user:
+            return True
+        did = m.group(1)
+        # Use the dedicated helper — single query, returns the config text
+        # of the most recent successful run for this device (None if none).
+        config_text = db_get_last_successful_config(did)
+        if not config_text:
+            h._json(404, {'error': 'no successful backup found for this device'}); return True
+        # Pull the device's site to pre-fill every extracted row.
+        from core.app_state import STATE
+        live = STATE.devices.get(did)
+        src_site = (getattr(live, 'site', '') or '') if live else ''
+        # Honour an optional vendor override from the request body, then
+        # fall back to auto-detection. Useful for non-standard exports.
+        from core.subnet_extractor import extract_subnets, rows_to_csv
+        vendor, rows = extract_subnets(
+            config_text,
+            vendor_hint=(body.get('vendor') or '') if isinstance(body, dict) else '',
+        )
+        csv_text = rows_to_csv(rows, site=src_site)
+        db_log_audit(
+            user, h.client_address[0], 'backup_extract_subnets',
+            f"{did} vendor={vendor or 'unknown'} found={len(rows)}",
+        )
+        h._json(200, {
+            'vendor':      vendor,
+            'rows':        rows,
+            'csv':         csv_text,
+            'source_site': src_site,
+        })
         return True
 
     return False

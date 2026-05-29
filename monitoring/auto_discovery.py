@@ -286,8 +286,14 @@ def _tick() -> None:
                      "(auto_discover_during_maint=skip)")
             return
 
+        # A subnet enters the scheduled sweep when EITHER flag is set:
+        #   auto_discover  → create monitored devices for new hosts (heavy)
+        #   auto_host_scan → only populate ip_allocations with kind=discovered
+        # Both flags can be on at the same time — the scan runs once and the
+        # discovery flow + IPAM apply both consume its results.
         subnets = [s for s in db_list_subnets()
-                   if int(s.get("auto_discover") or 0) == 1]
+                   if int(s.get("auto_discover") or 0) == 1
+                   or int(s.get("auto_host_scan") or 0) == 1]
         if not subnets:
             return
 
@@ -423,20 +429,36 @@ def _scan_deadline_s() -> float:
 
 
 def _scan_subnet(subnet: dict) -> dict:
-    """Scan a single subnet and auto-add any new hosts. Returns stats dict.
+    """Scan a single subnet, run any enabled apply passes, return stats dict.
 
-    Shape: {added, suppressed, cap_hit, errors}.
+    Two flags drive what happens with the scan results:
+      • auto_discover  — create monitored devices for new hosts (mode='full' so
+                         the port scan informs sensor suggestions).
+      • auto_host_scan — populate ip_allocations with kind='discovered' and
+                         flip previously-discovered IPs that didn't respond
+                         this round to kind='stale'. Independent of
+                         auto_discover; cheaper mode='ping' is enough when
+                         it's the only flag on.
+
+    Both can be on at once — one scan, two apply passes. Stats shape stays
+    backward-compatible with the device-creation summary fields.
     """
     from monitoring.subnet_discovery import start_scan, get_scan
     from core.device_importer import create_devices_batch
+    from db import apply_subnet_scan_results
 
     cidr = (subnet.get("cidr") or "").strip()
     sid  = subnet.get("id")
+    do_discovery = int(subnet.get("auto_discover")  or 0) == 1
+    do_host_scan = int(subnet.get("auto_host_scan") or 0) == 1
     stats = {"added": 0, "found": 0, "suppressed": 0, "cap_hit": False, "errors": 0}
-    if not cidr:
+    if not cidr or (not do_discovery and not do_host_scan):
         return stats
 
-    scan_id, err = start_scan(cidr, skip_monitored=True, mode="full")
+    # Full mode populates suggested sensors per host (needed by device creation);
+    # ping mode skips that work since the IPAM apply only needs ip + hostname.
+    scan_mode = "full" if do_discovery else "ping"
+    scan_id, err = start_scan(cidr, skip_monitored=True, mode=scan_mode)
     if err or not scan_id:
         log.warning(f"Auto-Discovery: start_scan failed for {cidr}: {err}")
         stats["errors"] = 1
@@ -495,8 +517,31 @@ def _scan_subnet(subnet: dict) -> dict:
     allowed_results, skipped = _filter_suppressed(raw_results)
     stats["suppressed"] = skipped
 
+    # IPAM apply — runs against raw_results (NOT allowed_results) because the
+    # suppressed list is a "don't auto-create a device" mechanism; an IP being
+    # alive is still IPAM-relevant. apply_subnet_scan_results also stamps the
+    # subnet's last_auto_scan_ts internally, so we skip the explicit commit
+    # below when the host-scan ran.
+    host_scan_done = False
+    if do_host_scan:
+        try:
+            ipam_stats = apply_subnet_scan_results(sid, raw_results, "system")
+            host_scan_done = True
+            log.debug(f"Auto-Discovery: IPAM apply for {cidr} — "
+                      f"alive={ipam_stats['alive']} upserted={ipam_stats['upserted']} "
+                      f"skipped={ipam_stats['skipped']} staled={ipam_stats['staled']}")
+        except Exception as e:
+            log.warning(f"Auto-Discovery: IPAM apply failed for {cidr}: {e}")
+
+    # Host-scan-only subnet: nothing more to do — return now.
+    if not do_discovery:
+        if not host_scan_done:
+            _commit_last_scan_ts(sid)
+        return stats
+
     if not allowed_results:
-        _commit_last_scan_ts(sid)
+        if not host_scan_done:
+            _commit_last_scan_ts(sid)
         return stats
 
     # First-scan cap.
@@ -522,7 +567,8 @@ def _scan_subnet(subnet: dict) -> dict:
                 pass
             # We DO update last_auto_scan_ts so the settings UI shows "last scan"
             # even when capped — admins can tell the daemon is running.
-            _commit_last_scan_ts(sid)
+            if not host_scan_done:
+                _commit_last_scan_ts(sid)
             return stats
 
     # Build device specs.
@@ -548,7 +594,8 @@ def _scan_subnet(subnet: dict) -> dict:
     device_specs = _build_device_specs(allowed_results, group, use_ptr,
                                        cidr=cidr, site=_subnet_site)
     if not device_specs:
-        _commit_last_scan_ts(sid)
+        if not host_scan_done:
+            _commit_last_scan_ts(sid)
         return stats
 
     # Pre-mute brand-new Discovery groups so freshly-found devices don't
@@ -588,7 +635,8 @@ def _scan_subnet(subnet: dict) -> dict:
     if created and int(_settings.get("auto_discover_alert_on_new", 0) or 0):
         _emit_new_device_alerts(created, cidr)
 
-    _commit_last_scan_ts(sid)
+    if not host_scan_done:
+        _commit_last_scan_ts(sid)
     return stats
 
 

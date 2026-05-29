@@ -26,7 +26,8 @@ _SUBNET_COLS = ("id, cidr, name, created_by, created_at, "
                 "last_auto_scan_ts, "
                 "COALESCE(dns_server,'')         AS dns_server, "
                 "COALESCE(site,'')               AS site, "
-                "COALESCE(vlan,0)                AS vlan")
+                "COALESCE(vlan,0)                AS vlan, "
+                "COALESCE(auto_host_scan,0)      AS auto_host_scan")
 
 
 def _fmt_ts(v) -> str:
@@ -51,7 +52,8 @@ def _row_to_subnet_pg(r) -> dict:
             "last_auto_scan_ts":   _fmt_ts(r.get("last_auto_scan_ts")),
             "dns_server":          (r.get("dns_server") or ""),
             "site":                (r.get("site") or ""),
-            "vlan":                int(r.get("vlan") or 0)}
+            "vlan":                int(r.get("vlan") or 0),
+            "auto_host_scan":      int(r.get("auto_host_scan") or 0)}
 
 
 def _row_to_subnet_sqlite(r) -> dict:
@@ -62,7 +64,8 @@ def _row_to_subnet_sqlite(r) -> dict:
             "last_auto_scan_ts":   _fmt_ts(r[7]),
             "dns_server":          (r[8] or "") if len(r) > 8 else "",
             "site":                (r[9] or "") if len(r) > 9 else "",
-            "vlan":                int(r[10] or 0) if len(r) > 10 else 0}
+            "vlan":                int(r[10] or 0) if len(r) > 10 else 0,
+            "auto_host_scan":      int(r[11] or 0) if len(r) > 11 else 0}
 
 
 def db_list_subnets() -> list:
@@ -142,6 +145,9 @@ _SUBNET_UPDATABLE_FIELDS = {
     # so the user gets a stable result ("invalid -> untagged" is recoverable;
     # silent drop leaves the previous VLAN in place which is surprising).
     "vlan":                ("INT_RANGE", (0, 4094)),
+    # Auto-host-scan (v1.x+) — independent of auto_discover; toggled per subnet
+    # so the discovery loop knows whether to run the IPAM-only sweep for it.
+    "auto_host_scan":      ("INT",     None),
 }
 
 
@@ -597,6 +603,224 @@ def db_upsert_allocation(subnet_id: int, ip: str, name: str, user: str,
                       f"(subnet={subnet_id}, device_id={device_id!r}, kind={kind_log})")
         except Exception as e:
             log.error(f"IPAM upsert allocation error ({ip} subnet={subnet_id}): {e}")
+        finally:
+            con.close()
+    _db_enqueue(_do)
+
+
+def db_search_allocations(q: str, limit: int = 50) -> list:
+    """Cross-subnet allocation search for the Ctrl+K palette.
+
+    Matches on IP (prefix), name (substring case-insensitive), and dns_name
+    (substring case-insensitive). Joins ipam_subnets so the result rows carry
+    the subnet's id/cidr/name — the UI needs that to navigate from a palette
+    hit straight to the right subnet view.
+
+    `limit` is hard-capped at 200 to keep the response cheap on big inventories.
+    """
+    q = (q or "").strip()
+    if not q:
+        return []
+    try:
+        limit = max(1, min(200, int(limit)))
+    except (TypeError, ValueError):
+        limit = 50
+    like = f"%{q.lower()}%"
+    # IP prefix match — most lookups start with the first octets.
+    ip_like = f"{q}%"
+
+    if is_pg():
+        from db.pg_pool import pg_cursor
+        try:
+            with pg_cursor('main') as cur:
+                cur.execute(
+                    """SELECT a.ip, a.name, a.modified_by, a.modified_at, a.device_id,
+                              a.dns_name, COALESCE(a.kind,'') AS kind,
+                              s.id   AS subnet_id, s.cidr AS subnet_cidr,
+                              s.name AS subnet_name
+                       FROM ip_allocations a
+                       JOIN ipam_subnets   s ON s.id = a.subnet_id
+                       WHERE a.ip LIKE %s
+                          OR LOWER(a.name)     LIKE %s
+                          OR LOWER(a.dns_name) LIKE %s
+                       ORDER BY a.ip
+                       LIMIT %s""",
+                    (ip_like, like, like, limit)
+                )
+                return [
+                    {"ip": r["ip"], "name": r["name"] or "",
+                     "dns_name": r["dns_name"] or "",
+                     "device_id": r["device_id"] or "",
+                     "kind": r.get("kind") or "",
+                     "modified_by": r["modified_by"] or "",
+                     "modified_at": r["modified_at"] or 0,
+                     "subnet_id":   r["subnet_id"],
+                     "subnet_cidr": r["subnet_cidr"],
+                     "subnet_name": r["subnet_name"] or ""}
+                    for r in cur.fetchall()
+                ]
+        except Exception as e:
+            log.error(f"IPAM search error (q={q!r}): {e}")
+            return []
+
+    con = sqlite3.connect(DB_PATH, timeout=10)
+    try:
+        rows = con.execute(
+            """SELECT a.ip, a.name, a.modified_by, a.modified_at, a.device_id,
+                      a.dns_name, COALESCE(a.kind,'') AS kind,
+                      s.id, s.cidr, s.name
+               FROM ip_allocations a
+               JOIN ipam_subnets   s ON s.id = a.subnet_id
+               WHERE a.ip LIKE ?
+                  OR LOWER(a.name)     LIKE ?
+                  OR LOWER(a.dns_name) LIKE ?
+               ORDER BY a.ip
+               LIMIT ?""",
+            (ip_like, like, like, limit)
+        ).fetchall()
+        return [
+            {"ip": r[0], "name": r[1] or "",
+             "dns_name": r[5] or "",
+             "device_id": r[4] or "",
+             "kind": r[6] or "",
+             "modified_by": r[2] or "",
+             "modified_at": r[3] or 0,
+             "subnet_id":   r[7],
+             "subnet_cidr": r[8],
+             "subnet_name": r[9] or ""}
+            for r in rows
+        ]
+    except Exception as e:
+        log.error(f"IPAM search error (q={q!r}): {e}")
+        return []
+    finally:
+        con.close()
+
+
+def apply_subnet_scan_results(subnet_id: int, results: list, user: str) -> dict:
+    """Write the alive IPs from a finished discovery scan into ip_allocations
+    and flip previously-discovered IPs that didn't respond this round to
+    kind='stale'. Never clobbers human-managed entries.
+
+    Used by:
+      • routes/ipam.py — manual "Scan hosts" button
+      • monitoring/auto_discovery.py — scheduled auto-host-scan flow
+
+    `results` is the list returned by monitoring/subnet_discovery.get_scan(),
+    each row having at least {ip, hostname}. Returns a stats dict
+    {alive, upserted, skipped, staled} so callers can log a summary.
+    """
+    import time as _t
+    # Kinds that mean 'user has touched this' — discovery must not overwrite.
+    _PROTECTED_KINDS = {'gateway', 'reserved', 'conflict', 'switch', 'backbone', 'core'}
+    _DISCOVERY_KIND  = 'discovered'
+    _DISCOVERY_USER  = 'discovery'
+
+    existing = db_get_allocations(subnet_id) or {}
+    alive_set = set()
+    upserted = 0
+    skipped  = 0
+    for row in results:
+        ip = (row.get('ip') or '').strip()
+        if not ip:
+            continue
+        alive_set.add(ip)
+        hostname = (row.get('hostname') or '').strip()
+        cur = existing.get(ip) or {}
+        cur_kind  = (cur.get('kind') or '').strip().lower()
+        cur_name  = (cur.get('name') or '').strip()
+        cur_devid = (cur.get('device_id') or '').strip()
+        cur_modby = (cur.get('modified_by') or '').strip()
+        if cur_devid:
+            skipped += 1  # already monitored — leave alone
+            continue
+        if cur_kind in _PROTECTED_KINDS:
+            skipped += 1
+            continue
+        # Manual entry: non-empty name set by a real user (not by discovery
+        # or auto-discovery), and not yet tagged as discovered/stale.
+        if cur_name and cur_modby and cur_modby != _DISCOVERY_USER \
+                and cur_kind not in (_DISCOVERY_KIND, 'stale'):
+            skipped += 1
+            continue
+        new_name = hostname or cur_name or ''
+        db_upsert_allocation(subnet_id, ip, new_name, _DISCOVERY_USER,
+                             device_id='', kind=_DISCOVERY_KIND)
+        upserted += 1
+    # Stale pass — previously-discovered IPs that didn't respond this round.
+    # db_mark_allocations_stale is SQL-protected against clobbering monitored
+    # or user-tagged rows, so this is safe even with a stale `existing` view.
+    stale_candidates = [
+        ip for ip, a in existing.items()
+        if ip not in alive_set
+        and (a.get('kind') or '').strip().lower() == _DISCOVERY_KIND
+    ]
+    if stale_candidates:
+        db_mark_allocations_stale(subnet_id, stale_candidates)
+    # Stamp the subnet's last-scan timestamp regardless of trigger.
+    try:
+        db_set_subnet_last_scan(subnet_id, _t.strftime("%Y-%m-%d %H:%M:%S"))
+    except Exception as e:
+        log.warning(f"IPAM scan apply: failed to stamp last_scan_ts on subnet={subnet_id}: {e}")
+    return {"alive":    len(alive_set),
+            "upserted": upserted,
+            "skipped":  skipped,
+            "staled":   len(stale_candidates)}
+
+
+def db_mark_allocations_stale(subnet_id: int, ips: list) -> None:
+    """Flip a batch of discovered allocations to kind='stale' without bumping
+    modified_at — preserving the timestamp as "last time this IP was seen
+    alive." Only affects rows whose current kind is 'discovered' or already
+    'stale'; rows with user-set tags (gateway/reserved/...) or a device_id
+    are skipped at the SQL level so we never clobber human metadata.
+
+    `ips` is a list of IP strings (str). No-op on empty list. Enqueued write.
+    """
+    if not ips:
+        return
+    def _do():
+        if is_pg():
+            from db.pg_pool import pg_cursor
+            try:
+                with pg_cursor('main') as cur:
+                    cur.execute(
+                        "UPDATE ip_allocations SET kind='stale' "
+                        "WHERE subnet_id=%s "
+                        "  AND ip = ANY(%s) "
+                        "  AND COALESCE(device_id,'')='' "
+                        "  AND COALESCE(kind,'') IN ('discovered','')",
+                        (subnet_id, list(ips))
+                    )
+                    log.debug(f"IPAM mark stale: subnet={subnet_id} affected={cur.rowcount} "
+                              f"requested={len(ips)}")
+            except Exception as e:
+                log.error(f"IPAM mark stale error (subnet={subnet_id}): {e}")
+            return
+
+        con = sqlite3.connect(DB_PATH, timeout=10)
+        try:
+            # SQLite has no ANY(); chunk the IN-list so a /16 sweep doesn't
+            # exceed the variable limit (default 999).
+            CHUNK = 500
+            affected = 0
+            for i in range(0, len(ips), CHUNK):
+                chunk = ips[i:i+CHUNK]
+                ph = ",".join("?" * len(chunk))
+                cur = con.execute(
+                    f"UPDATE ip_allocations SET kind='stale' "
+                    f"WHERE subnet_id=? "
+                    f"  AND ip IN ({ph}) "
+                    f"  AND COALESCE(device_id,'')='' "
+                    f"  AND COALESCE(kind,'') IN ('discovered','')",
+                    (subnet_id, *chunk)
+                )
+                affected += cur.rowcount
+            con.commit()
+            log.debug(f"IPAM mark stale: subnet={subnet_id} affected={affected} "
+                      f"requested={len(ips)}")
+        except Exception as e:
+            log.error(f"IPAM mark stale error (subnet={subnet_id}): {e}")
         finally:
             con.close()
     _db_enqueue(_do)

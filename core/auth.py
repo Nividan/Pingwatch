@@ -949,6 +949,76 @@ def auth_check_role(token: str):
     return s.get("role", "viewer")
 
 
+# ── API token auth (Bearer; scripts / CI / Terraform) ────────────
+#
+# Kept separate from _SESSIONS because tokens have different invalidation
+# semantics: a fixed `expires_at` (or never), no sliding TTL on use, and
+# revocation by row update. The cache TTL caps revoke-propagation latency
+# without forcing a DB read on every request.
+_API_TOKENS: dict = {}    # raw_token -> {username, role, scope, id, expires_at, token_hash, cached_at}
+_API_TOKENS_LOCK = threading.Lock()
+_API_TOKEN_CACHE_TTL = 300   # seconds — bounds how long a revoke takes to take effect
+
+
+def auth_check_api_token(token: str):
+    """Validate a Bearer API token. Returns {username, role, scope, id} or None.
+
+    Cache → DB-by-hash. On a DB hit the result is cached for
+    ``_API_TOKEN_CACHE_TTL`` and ``last_used_at`` is touched (fire-and-forget).
+    Revoked or expired tokens never populate the cache.
+    """
+    from db.api_tokens import db_get_api_token_by_hash, db_touch_api_token_last_used
+    if not token or not token.startswith("pw_"):
+        return None
+    now = time.time()
+    with _API_TOKENS_LOCK:
+        c = _API_TOKENS.get(token)
+    if c and (now - c["cached_at"]) < _API_TOKEN_CACHE_TTL:
+        # Token's own expires_at is authoritative even on a cache hit.
+        if c.get("expires_at") is not None and c["expires_at"] < now:
+            with _API_TOKENS_LOCK:
+                _API_TOKENS.pop(token, None)
+            return None
+        return {k: c[k] for k in ("username", "role", "scope", "id")}
+    # Cache miss or stale — go to the DB.
+    h = _hash_token(token)
+    try:
+        row = db_get_api_token_by_hash(h)
+    except Exception as e:
+        log.error(f"API token lookup error: {type(e).__name__}: {e}")
+        return None
+    if not row:
+        with _API_TOKENS_LOCK:
+            _API_TOKENS.pop(token, None)
+        return None
+    entry = {"username": row["username"], "role": row["role"] or "viewer",
+             "scope": row["scope"], "id": row["id"],
+             "expires_at": row["expires_at"], "token_hash": h,
+             "cached_at": now}
+    with _API_TOKENS_LOCK:
+        _API_TOKENS[token] = entry
+    # Slide last_used_at forward — fire-and-forget so a write failure can
+    # never block authentication.
+    try:
+        db_touch_api_token_last_used(row["id"])
+    except Exception:
+        pass
+    return {k: entry[k] for k in ("username", "role", "scope", "id")}
+
+
+def auth_evict_api_token_hash(token_hash: str):
+    """Drop cached entries for a revoked token (matched by hash). Called
+    right after db_revoke_api_token so the next request misses the cache
+    and goes straight to the DB, which now reports revoked_at."""
+    if not token_hash:
+        return
+    with _API_TOKENS_LOCK:
+        victims = [t for t, e in _API_TOKENS.items()
+                   if e.get("token_hash") == token_hash]
+        for t in victims:
+            _API_TOKENS.pop(t, None)
+
+
 # ── TOTP (RFC 6238 — Google Authenticator compatible) ────────────
 
 # Pending TOTP challenges keyed by short-lived id. Issued on POST /api/login when
