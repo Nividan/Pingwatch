@@ -1244,7 +1244,14 @@ function _drawConnections(canvasEl) {
         // One line per distinct port pair — verticals spread along the parent
         // bottom + child top so each "port" is plainly visible; trunk Y also
         // staggers by a few pixels so the horizontal segments don't merge.
-        const groups = _portGroups(c.mappings);
+        //
+        // Exception: in busy hierarchical fan-outs (N>2 children), the per-port
+        // multiplier blows up — 4 children × 6 ports each = 24 lines in one
+        // trunk band. Collapse to a single representative line per child here.
+        // Multi-port viz remains intact for peer connections (N ≤ 2 like
+        // BSLAB_TOR ↔ EX-2200) where the parallel lines are the signal.
+        const allGroups = _portGroups(c.mappings);
+        const groups = (N > 2 && allGroups.length > 1) ? [allGroups[0]] : allGroups;
         const Np = groups.length;
         const maxSpread = Math.min(pRect.width, r.width) * 0.4;
         const portStep = Np > 1 ? Math.min(8, maxSpread / (Np - 1)) : 0;
