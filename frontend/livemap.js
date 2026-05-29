@@ -1147,8 +1147,28 @@ function _drawConnections(canvasEl) {
       const maxY = _snap4(nearestChildTop - 6);
       if (trunkY > maxY) trunkY = maxY;
 
+      // ── Visual-density gates ─────────────────────────────────────────
+      // When a parent has many children OR they're spread across most of the
+      // canvas, the unifying "trunk bus" becomes noise rather than help, and
+      // N children all sharing one trunkY collapses into one thick bar. Two
+      // complementary moves:
+      //   • busSuppressed  → drop the underlay; it's not unifying anything.
+      //   • childLaneStep  → give each child its own Y row in the trunk band
+      //                       so N horizontals read as N readable lanes.
+      const trunkSpan   = trunkRight - trunkLeft;
+      const wideSpread  = trunkSpan > cRect.width * 0.5;
+      const busSuppressed = N > 2 || wideSpread;
+      let childLaneStep = (N > 2) ? 4 : 0;
+      // Don't push lanes past the available vertical band (py → nearestChildTop).
+      // Shrink the step if the full spread wouldn't fit.
+      const availableBand = (nearestChildTop - 6) - (py + 8);
+      if (childLaneStep > 0 && childLaneStep * (N - 1) > availableBand) {
+        childLaneStep = Math.max(0, availableBand / (N - 1));
+      }
+      const childYStart = -((N - 1) * childLaneStep) / 2;
+
       // Trunk underlay
-      if (N > 1 && trunkRight - trunkLeft > 4) {
+      if (!busSuppressed && N > 1 && trunkSpan > 4) {
         const tierCounts = {};
         trunkKids.forEach(function(c) { tierCounts[c.tier] = (tierCounts[c.tier] || 0) + 1; });
         const dominantTier = Object.keys(tierCounts).sort(function(a, b) {
@@ -1165,7 +1185,7 @@ function _drawConnections(canvasEl) {
         svg.appendChild(bus);
       }
 
-      trunkKids.forEach(function(c) {
+      trunkKids.forEach(function(c, ki) {
         const r = c.childEl.getBoundingClientRect();
         const cx = _snap4(r.left + r.width / 2 - cRect.left);
         const cy = r.top - cRect.top;
@@ -1173,23 +1193,27 @@ function _drawConnections(canvasEl) {
         const style = _CONN_STYLES[c.tier] || _CONN_STYLES.other;
         const longHaul = Math.abs(cx - entryX) > LONG_HAUL_PX;
 
+        // This child's own Y row inside the trunk band — separates the N
+        // horizontals so they don't pile up at a single trunkY.
+        const childBaseTrunkY = trunkY + childYStart + ki * childLaneStep;
+
         // One line per distinct port pair — verticals spread along the parent
         // bottom + child top so each "port" is plainly visible; trunk Y also
         // staggers by a few pixels so the horizontal segments don't merge.
         const groups = _portGroups(c.mappings);
-        const N = groups.length;
+        const Np = groups.length;
         const maxSpread = Math.min(pRect.width, r.width) * 0.4;
-        const portStep = N > 1 ? Math.min(8, maxSpread / (N - 1)) : 0;
-        const startOff = -((N - 1) * portStep) / 2;
-        const yStagger = N > 1 ? 3 : 0;
-        const yStart   = -((N - 1) * yStagger) / 2;
+        const portStep = Np > 1 ? Math.min(8, maxSpread / (Np - 1)) : 0;
+        const startOff = -((Np - 1) * portStep) / 2;
+        const yStagger = Np > 1 ? 3 : 0;
+        const yStart   = -((Np - 1) * yStagger) / 2;
 
         groups.forEach(function(grp, k) {
           const dx = startOff + k * portStep;
           const dy = yStart   + k * yStagger;
           const cxK     = cx + dx;
           const entryXK = entryX + dx;
-          const trunkYK = trunkY + dy;
+          const trunkYK = childBaseTrunkY + dy;
           const d = 'M ' + cxK + ' ' + cy +
                     ' V ' + trunkYK +
                     ' H ' + entryXK +
