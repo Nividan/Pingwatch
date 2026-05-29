@@ -324,7 +324,7 @@ function _renderApiTokenTable(tokens) {
       <td style="white-space:nowrap;color:var(--text3);font-size:11px">${_apiTokFmtTs(t.created_at)}</td>
       <td style="white-space:nowrap;color:var(--text3);font-size:11px">${t.last_used_at ? _apiTokFmtTs(t.last_used_at) : 'never'}</td>
       <td style="white-space:nowrap;color:var(--text3);font-size:11px">${t.expires_at ? _apiTokFmtTs(t.expires_at) : 'never'}</td>
-      <td style="text-align:right"><button class="btn-s" style="font-size:11px;padding:4px 10px;color:var(--down)" onclick="revokeApiToken(${t.id}, ${JSON.stringify(t.name||'')})">Revoke</button></td>
+      <td style="text-align:right"><button class="btn-s" style="font-size:11px;padding:4px 10px;color:var(--down)" onclick="revokeApiToken(${t.id}, ${esc(JSON.stringify(t.name||''))})">Revoke</button></td>
     </tr>`).join('');
   return `<table class="tbl" style="width:100%;font-size:12px">
       <thead><tr>
