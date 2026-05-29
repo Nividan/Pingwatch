@@ -1154,39 +1154,50 @@ function _drawConnections(canvasEl) {
       const trunkLeft  = Math.min(Math.min.apply(null, xs), Math.min.apply(null, entryXs));
       const trunkRight = Math.max(Math.max.apply(null, xs), Math.max.apply(null, entryXs));
 
-      // Lane: lowest Y-slot in this parent-row band whose X-span doesn't
-      // overlap an already-placed trunk — so sibling trunks never stack on the
-      // same pixel row. Band groups parents at a near-identical bottom edge.
-      const band = Math.round(py / 6);
-      let lane = 0;
-      while (placedTrunks.some(function(t) {
-        return t.band === band && t.lane === lane &&
-               !(trunkRight < t.left - 6 || trunkLeft > t.right + 6);
-      })) lane++;
-      placedTrunks.push({ band: band, lane: lane, left: trunkLeft, right: trunkRight });
-      let trunkY = _snap4(py + Math.max(8, Math.min(22, gap / 2)) + lane * 8);
-      const maxY = _snap4(nearestChildTop - 6);
-      if (trunkY > maxY) trunkY = maxY;
-
-      // ── Visual-density gates ─────────────────────────────────────────
-      // When a parent has many children OR they're spread across most of the
-      // canvas, the unifying "trunk bus" becomes noise rather than help, and
-      // N children all sharing one trunkY collapses into one thick bar. Two
-      // complementary moves:
+      // ── Visual-density gates (computed first so lane placement knows the
+      // Y-span this trunk needs) ───────────────────────────────────────
       //   • busSuppressed  → drop the underlay; it's not unifying anything.
-      //   • childLaneStep  → give each child its own Y row in the trunk band
-      //                       so N horizontals read as N readable lanes.
+      //   • childLaneStep  → give each child its own Y row in the trunk band.
       const trunkSpan   = trunkRight - trunkLeft;
       const wideSpread  = trunkSpan > cRect.width * 0.5;
       const busSuppressed = N > 2 || wideSpread;
       let childLaneStep = (N > 2) ? 4 : 0;
-      // Don't push lanes past the available vertical band (py → nearestChildTop).
-      // Shrink the step if the full spread wouldn't fit.
       const availableBand = (nearestChildTop - 6) - (py + 8);
       if (childLaneStep > 0 && childLaneStep * (N - 1) > availableBand) {
         childLaneStep = Math.max(0, availableBand / (N - 1));
       }
-      const childYStart = -((N - 1) * childLaneStep) / 2;
+      const halfSpread = ((N - 1) * childLaneStep) / 2;
+
+      // Lane: pick lowest trunkY whose [trunkY±halfSpread±PAD] band doesn't
+      // overlap an already-placed trunk whose X-range overlaps this one.
+      // The previous lane-as-integer scheme (lane * 8 px) ignored sub-lane
+      // spread, so two N=5 parents at adjacent lanes ended up with their
+      // ±8 px sub-lanes treading on each other in Y. Tracking actual Y-bands
+      // removes that bleed — adjacent trunks always get a clean 4 px gutter.
+      const PAD = 4;
+      const maxY = _snap4(nearestChildTop - 6);
+      const baseY = py + Math.max(8, Math.min(22, gap / 2));
+      let trunkY = _snap4(baseY);
+      for (let guard = 0; guard < 32; guard++) {
+        const myTop = trunkY - halfSpread - PAD;
+        const myBot = trunkY + halfSpread + PAD;
+        const conflict = placedTrunks.find(function(t) {
+          if (trunkRight < t.left - 6 || trunkLeft > t.right + 6) return false;
+          return !(myBot < t.top || myTop > t.bot);
+        });
+        if (!conflict) break;
+        trunkY = _snap4(conflict.bot + PAD + halfSpread + 1);
+        if (trunkY > maxY) break;
+      }
+      if (trunkY > maxY) trunkY = maxY;
+
+      placedTrunks.push({
+        top:   trunkY - halfSpread - PAD,
+        bot:   trunkY + halfSpread + PAD,
+        left:  trunkLeft,
+        right: trunkRight,
+      });
+      const childYStart = -halfSpread;
 
       // Trunk underlay
       if (!busSuppressed && N > 1 && trunkSpan > 4) {
