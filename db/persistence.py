@@ -700,6 +700,15 @@ def _pg_load(state):
 
     db_load_anomaly_baselines(state)
 
+    # Re-hydrate _alerted_down / _threshold_state from unresolved flap_log rows
+    # so post-restart probes don't fire duplicate 'down'/'threshold_*' flap
+    # entries for sensors that were already in those states pre-restart.
+    try:
+        from db.events import db_load_unresolved_flap_state
+        db_load_unresolved_flap_state(state)
+    except Exception as _e:
+        log.error(f"db_load_unresolved_flap_state hook error: {_e}")
+
     for did in list(state.devices):
         state.start_device(did)
     log.info("Auto-started all sensors.")
@@ -961,6 +970,15 @@ def db_load(state):
             except Exception: pass
 
     db_load_anomaly_baselines(state)
+
+    # Re-hydrate _alerted_down / _threshold_state from unresolved flap_log rows
+    # so post-restart probes don't fire duplicate 'down'/'threshold_*' flap
+    # entries for sensors that were already in those states pre-restart.
+    try:
+        from db.events import db_load_unresolved_flap_state
+        db_load_unresolved_flap_state(state)
+    except Exception as _e:
+        log.error(f"db_load_unresolved_flap_state hook error: {_e}")
 
     for did in list(state.devices):
         state.start_device(did)

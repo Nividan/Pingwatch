@@ -624,7 +624,7 @@ function _renderSiteTree(name, tree) {
     const tagCls   = opts.tagCls || cls;
     const rowAlign = opts.center ? ' center' : ' spread';
     const trailing = opts.trailing || '';
-    return '<div class="sd-tier">' +
+    return '<div class="sd-tier sd-tier-' + cls + '">' +
              '<span class="tier-tag ' + tagCls + '">' + esc(label) + '</span>' +
              '<div class="sd-tier-row' + rowAlign + '">' +
                items.map(opts.render).join('') +

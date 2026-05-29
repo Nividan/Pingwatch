@@ -712,6 +712,11 @@ body {
   padding-left: 110px;             /* leave room for the tier-tag column */
   min-height: 60px;
 }
+/* Hypervisor → VM trunk band carries the densest fan-out (one hypervisor
+   often feeds 3–5 VM clusters with multiple port lines each). The default
+   30 px canvas gap cramps the routing band; widen specifically here so the
+   per-child sub-lanes have room to read as distinct rails. */
+.sd-tier-vm { margin-top: 20px; }
 .sd-tier-row {
   display: flex; flex-wrap: wrap; gap: 12px;
   /* flex-start lets cluster cards size to their content. With stretch,
