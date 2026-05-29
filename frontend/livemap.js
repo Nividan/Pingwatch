@@ -1131,11 +1131,12 @@ function _drawConnections(canvasEl) {
       const pBotWidth = Math.max(0, pBotRight - pBotLeft);
 
       // When children span much wider than the parent (e.g. BladeCenter feeding
-      // 5 hypervisors that fill the canvas), cramming N entries into a 40-px
+      // 4 hypervisors that fill the canvas), cramming N entries into a 40-px
       // fan under the parent forces N long horizontals across the trunk band.
-      // Instead, align each entry X with its child X (clamped to the parent
-      // bottom edge) so each link becomes a near-vertical drop. When children
-      // sit tight under the parent, keep the small symmetric fan as before.
+      // Instead, rank children by X and distribute entry-Xs evenly across the
+      // parent's bottom edge: leftmost child gets leftmost exit, rightmost
+      // gets rightmost. When children sit tight under the parent, keep the
+      // small symmetric fan as before.
       const childSpan = N > 1 ? (Math.max.apply(null, xs) - Math.min.apply(null, xs)) : 0;
       const wideFan   = N > 1 && childSpan > pBotWidth * 0.6;
 
@@ -1145,9 +1146,31 @@ function _drawConnections(canvasEl) {
         fanStart = pCenterX - fanWidth / 2;
         fanStep  = fanWidth / (N - 1);
       }
+
+      // wideFan rank table: original index → 0..N-1 in X-sort order. Built
+      // once so the forEach below stays O(N). The previous scheme — clamp
+      // each child's X to [pBotLeft, pBotRight] — collapsed entries onto the
+      // same edge whenever multiple siblings sat on the same side of the
+      // parent (BladeCenter has 4 children spread across the canvas but only
+      // an 80-px bottom edge; both children to the left of the parent both
+      // clamped to pBotLeft → duplicate exit points → visible "thick band"
+      // where two trunks rode the same X out of the parent). Evenly-spaced
+      // ranks guarantee distinct exit Xs while preserving topological order,
+      // and the layout reflows correctly when groups are added or removed.
+      let wideRankOf = null;
+      let wideStep = 0;
+      if (N > 1 && wideFan) {
+        wideRankOf = new Array(N);
+        trunkKids
+          .map(function(_c, i) { return i; })
+          .sort(function(a, b) { return xs[a] - xs[b]; })
+          .forEach(function(origIdx, rank) { wideRankOf[origIdx] = rank; });
+        wideStep = pBotWidth / (N - 1);
+      }
+
       trunkKids.forEach(function(c, i) {
         if (N === 1) c._entryX = pCenterX;
-        else if (wideFan) c._entryX = _snap4(Math.max(pBotLeft, Math.min(pBotRight, xs[i])));
+        else if (wideFan) c._entryX = _snap4(pBotLeft + wideRankOf[i] * wideStep);
         else c._entryX = _snap4(fanStart + i * fanStep);
       });
       const entryXs = trunkKids.map(function(c) { return c._entryX; });
