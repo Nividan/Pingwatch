@@ -1117,17 +1117,38 @@ function _drawConnections(canvasEl) {
       const gap = nearestChildTop - py;
 
       const N = trunkKids.length;
-      const fanWidth = N <= 1 ? 0
-        : Math.min(pRect.width * 0.6, 80, 8 * (N - 1) + 8);
-      const fanStart = pCenterX - fanWidth / 2;
-      const fanStep  = N > 1 ? fanWidth / (N - 1) : 0;
-      trunkKids.forEach(function(c, i) {
-        c._entryX = (N === 1) ? pCenterX : _snap4(fanStart + i * fanStep);
-      });
 
+      // Child centers along X — computed up front so the fan-out can align
+      // entry points to actual child positions when they're widely spread.
       const xs = trunkKids.map(function(c) {
         const r = c.childEl.getBoundingClientRect();
         return _snap4(r.left + r.width / 2 - cRect.left);
+      });
+
+      // Parent bottom-edge bounds (slight inset so verticals don't kiss corners).
+      const pBotLeft  = _snap4(pRect.left  - cRect.left + 6);
+      const pBotRight = _snap4(pRect.right - cRect.left - 6);
+      const pBotWidth = Math.max(0, pBotRight - pBotLeft);
+
+      // When children span much wider than the parent (e.g. BladeCenter feeding
+      // 5 hypervisors that fill the canvas), cramming N entries into a 40-px
+      // fan under the parent forces N long horizontals across the trunk band.
+      // Instead, align each entry X with its child X (clamped to the parent
+      // bottom edge) so each link becomes a near-vertical drop. When children
+      // sit tight under the parent, keep the small symmetric fan as before.
+      const childSpan = N > 1 ? (Math.max.apply(null, xs) - Math.min.apply(null, xs)) : 0;
+      const wideFan   = N > 1 && childSpan > pBotWidth * 0.6;
+
+      let fanStart = pCenterX, fanStep = 0;
+      if (N > 1 && !wideFan) {
+        const fanWidth = Math.min(pRect.width * 0.6, 80, 8 * (N - 1) + 8);
+        fanStart = pCenterX - fanWidth / 2;
+        fanStep  = fanWidth / (N - 1);
+      }
+      trunkKids.forEach(function(c, i) {
+        if (N === 1) c._entryX = pCenterX;
+        else if (wideFan) c._entryX = _snap4(Math.max(pBotLeft, Math.min(pBotRight, xs[i])));
+        else c._entryX = _snap4(fanStart + i * fanStep);
       });
       const entryXs = trunkKids.map(function(c) { return c._entryX; });
       const trunkLeft  = Math.min(Math.min.apply(null, xs), Math.min.apply(null, entryXs));
