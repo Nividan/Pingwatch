@@ -11,6 +11,7 @@ const _LM_TIER_OPTIONS = [
   {value: 'firewall',    label: 'Firewall'},
   {value: 'core_switch', label: 'Core Switch'},
   {value: 'switch',      label: 'Access Switch'},
+  {value: 'ap',          label: 'Access Point'},
   {value: 'chassis',     label: 'Chassis / Enclosure'},
   {value: 'hypervisor',  label: 'Hypervisor / Server'},
   {value: 'vm',          label: 'VM'},
@@ -18,13 +19,17 @@ const _LM_TIER_OPTIONS = [
   {value: 'other',       label: 'Other'},
 ];
 /** Build option HTML for the tier dropdown. `selected` is the currently
- *  chosen value (or '' for auto-detect). */
-function _lmTierOptionsHtml(selected) {
+ *  chosen value (or '' for the empty option). `emptyLabel` overrides the
+ *  first option's label — per-group uses "— Auto-detect from name —" (the
+ *  default), per-device uses "— None —" (override falls through to group/regex).
+ */
+function _lmTierOptionsHtml(selected, emptyLabel) {
   const sel = String(selected == null ? '' : selected);
   return _LM_TIER_OPTIONS.map(function(o) {
+    const lbl = (o.value === '' && emptyLabel) ? emptyLabel : o.label;
     return '<option value="' + o.value + '"' +
            (o.value === sel ? ' selected' : '') +
-           '>' + o.label + '</option>';
+           '>' + lbl + '</option>';
   }).join('');
 }
 

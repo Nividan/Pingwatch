@@ -93,6 +93,7 @@ const ICONS = {
   fw:     '<svg class="dev-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 2 4 6v6c0 5 3.5 9 8 10 4.5-1 8-5 8-10V6l-8-4z"/></svg>',
   core:   '<svg class="dev-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="7" width="18" height="10" rx="1"/><circle cx="7"  cy="12" r="0.9" fill="currentColor"/><circle cx="11" cy="12" r="0.9" fill="currentColor"/><circle cx="15" cy="12" r="0.9" fill="currentColor"/><circle cx="19" cy="12" r="0.9" fill="currentColor"/><path d="M3 11h18"/></svg>',
   sw:     '<svg class="dev-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="9" width="18" height="6" rx="1"/><circle cx="7" cy="12" r="0.7" fill="currentColor"/><circle cx="11" cy="12" r="0.7" fill="currentColor"/><circle cx="15" cy="12" r="0.7" fill="currentColor"/><circle cx="19" cy="12" r="0.7" fill="currentColor"/></svg>',
+  ap:     '<svg class="dev-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M5 11a10 10 0 0 1 14 0"/><path d="M8 14a6 6 0 0 1 8 0"/><path d="M10.5 17a3 3 0 0 1 3 0"/><circle cx="12" cy="19.5" r="0.9" fill="currentColor"/></svg>',
   hyp:    '<svg class="cluster-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="4" width="18" height="6" rx="1"/><rect x="3" y="14" width="18" height="6" rx="1"/><circle cx="6.5" cy="7" r="0.6" fill="currentColor"/><circle cx="6.5" cy="17" r="0.6" fill="currentColor"/></svg>',
   chassis:'<svg class="cluster-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="3" width="18" height="18" rx="1"/><path d="M3 9h18M3 15h18M9 3v18M15 3v18"/></svg>',
   vm:     '<svg class="cluster-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="4" y="4" width="16" height="14" rx="1"/><path d="M9 21h6M12 18v3"/></svg>',
@@ -612,6 +613,7 @@ function _renderSiteTree(name, tree) {
   const fws   = tree.firewalls     || [];
   const cores = tree.core_switches || [];
   const sws   = tree.switches      || [];
+  const aps   = tree.access_points || [];
   const chs   = tree.chassis       || [];
   const hyps  = tree.hypervisors   || [];
   const vms   = tree.vm_clusters   || [];
@@ -645,6 +647,9 @@ function _renderSiteTree(name, tree) {
   }
   function _swRow(d) {
     return _devCard(d, { icon: ICONS.sw, tier: 'switch' });
+  }
+  function _apRow(d) {
+    return _devCard(d, { icon: ICONS.ap, tier: 'ap' });
   }
   function _chsRow(c) {
     return _clusterCard(c, { icon: ICONS.chassis, tier: 'chassis' });
@@ -685,6 +690,7 @@ function _renderSiteTree(name, tree) {
           tierRow('fw',   'FIREWALL',         fws,   { render: _fwRow,   center: true }) +
           tierRow('core', 'CORE SWITCH',      cores, { render: _coreRow, center: false }) +
           tierRow('sw',   'ACCESS SWITCHES',  sws,   { render: _swRow,   center: false }) +
+          tierRow('ap',   'ACCESS POINTS',    aps,   { render: _apRow,   center: false }) +
           tierRow('chs',  'CHASSIS',          chs,   { render: _chsRow }) +
           tierRow('hyp',  'HYPERVISORS',      hyps,  { render: _hypRow, trailing: ipmiTrailing }) +
           tierRow('vm',   'VM CLUSTERS',      vms,   { render: _vmRow }) +
@@ -735,6 +741,7 @@ const _CONN_STYLES = {
   'firewall':    { color: 'var(--gold)',    dashed: false }, // → WAN/ISP (yellow)
   'core_switch': { color: 'var(--accent2)', dashed: false }, // → FW (cyan)
   'switch':      { color: 'var(--accent2)', dashed: false }, // → CORE/FW (cyan)
+  'ap':          { color: 'var(--accent2)', dashed: false }, // → SW (cyan)
   'chassis':     { color: 'var(--accent2)', dashed: false }, // → SW (cyan)
   'hypervisor':  { color: 'var(--up)',      dashed: false }, // → SW/CHS (lime)
   'vm':          { color: 'var(--accent2)', dashed: false }, // → HYP (cyan)
@@ -747,8 +754,8 @@ const _CONN_STYLES = {
 // routing so they don't run straight through the intervening row's cards.
 // IPMI shares the hypervisor row's index since it renders trailing in it.
 const _TIER_INDEX = {
-  isp: 0, wan_switch: 1, firewall: 2, core_switch: 3, switch: 4,
-  chassis: 5, hypervisor: 6, ipmi: 6, vm: 7, other: 8,
+  isp: 0, wan_switch: 1, firewall: 2, core_switch: 3, switch: 4, ap: 5,
+  chassis: 6, hypervisor: 7, ipmi: 7, vm: 8, other: 9,
 };
 
 function _cardLabel(el) {
@@ -961,21 +968,34 @@ function _drawConnections(canvasEl) {
     svg.appendChild(dot);
   }
 
-  // Group a child entry's mappings by (lport, rport) so each distinct physical
-  // link gets its own line — LACP bundles / dual-NIC pairs render as parallel
-  // wires hitting different X-or-Y slots on the card edges instead of stacking
-  // on top of each other. All-blank port pairs collapse into ONE group so a
-  // child with no port info still draws a single line (no regression for the
-  // common case).
+  // Group a child entry's mappings into one line per physical link.
+  //
+  // Primary key: (from, lport, rport) — distinguishes both LACP / dual-NIC
+  // pairs on a single device AND distinct devices inside a cluster card
+  // (e.g. 4 ESXi cells each cabling to the same switch → 4 visible lines).
+  //
+  // Cap: when the primary key would draw more than MAX_PORT_LINES (a 27-cell
+  // VM cluster all blank-uplinking to one parent), collapse to (lport, rport)
+  // so the canvas doesn't dissolve into a stack of parallel hairlines. The
+  // tooltip still shows every individual mapping via elementsFromPoint.
+  const MAX_PORT_LINES = 12;
   function _portGroups(mappings) {
     if (!mappings || !mappings.length) return [[]];
-    const groups = new Map();
+    const fine = new Map();
+    mappings.forEach(function(m) {
+      const key = (m.from || '') + '|' + (m.lport || '') + '|' + (m.rport || '');
+      if (!fine.has(key)) fine.set(key, []);
+      fine.get(key).push(m);
+    });
+    if (fine.size <= MAX_PORT_LINES) return Array.from(fine.values());
+    // Too noisy — fall back to one line per distinct port pair only.
+    const coarse = new Map();
     mappings.forEach(function(m) {
       const key = (m.lport || '') + '|' + (m.rport || '');
-      if (!groups.has(key)) groups.set(key, []);
-      groups.get(key).push(m);
+      if (!coarse.has(key)) coarse.set(key, []);
+      coarse.get(key).push(m);
     });
-    return Array.from(groups.values());
+    return Array.from(coarse.values());
   }
 
   // Card-rect index (canvas-relative) for skip-tier cross-detection. A skip

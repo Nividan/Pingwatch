@@ -786,18 +786,22 @@ def handle(h, method, path, body):
         return True
 
     # ── /api/device/{did}/role PUT ─────────────────────────────────
-    # Topology role tag for NTM Live auto-links. Whitelist: '', 'switch',
-    # 'gateway', 'backbone'. Persisted on ip_allocations.kind for the device's
-    # host IP (one row per matching subnet). Silent no-op if host isn't a
-    # plain IP or no IPAM subnet covers it.
+    # Topology role tag for NTM Live auto-links. Whitelist = the full Live
+    # Map tier set (mirrors the per-group dropdown) PLUS the legacy IPAM-style
+    # aliases ('backbone', 'core', 'gateway') so previously-written values
+    # remain settable from automation/scripts without a data migration.
+    # Persisted on ip_allocations.kind for the device's host IP (one row per
+    # matching subnet). Silent no-op if host isn't a plain IP or no IPAM
+    # subnet covers it.
     m_role = _RE_DEVICE_ROLE.match(path)
     if m_role and method == "PUT":
         user, _ = h._require("operator")
         if not user: return True
         did_r = m_role.group(1)
         role  = (body.get("role") or "").strip().lower()
-        if role not in ("", "switch", "backbone", "core", "gateway"):
-            h._json(400, {"error": "role must be one of: switch, backbone, core, gateway, or empty"})
+        from monitoring.site_tree import _ROLE_TO_TIER
+        if role != "" and role not in _ROLE_TO_TIER:
+            h._json(400, {"error": "invalid role"})
             return True
         with STATE._lock:
             devr = STATE.devices.get(did_r)

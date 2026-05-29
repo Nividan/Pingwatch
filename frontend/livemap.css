@@ -774,6 +774,7 @@ body {
 .tier-tag.fw   { color: var(--down);    border-color: var(--down);    }
 .tier-tag.core { color: var(--accent2); border-color: var(--accent2); }
 .tier-tag.sw   { color: var(--accent);  border-color: var(--accent);  }
+.tier-tag.ap   { color: var(--up);      border-color: var(--up);      }
 .tier-tag.chs  { color: var(--gold);    border-color: var(--gold);    }
 .tier-tag.hyp  { color: var(--accent2); border-color: var(--accent2); }
 .tier-tag.vm   { color: var(--accent);  border-color: var(--accent);  }

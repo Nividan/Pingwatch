@@ -19,13 +19,7 @@ function openAddDevice(){
       <div class="fr"><label class="fl">Group</label>
         <input type="text" id="ad-g" placeholder="Default Group" autocomplete="off"/></div>
       <div class="fr"><label class="fl">Topology Role <span style="color:var(--text3);font-weight:400;font-size:11px">(optional — anchors auto-links on the NTM Live map)</span></label>
-        <select id="ad-role">
-          <option value="" selected>— None —</option>
-          <option value="switch">Switch (access — subnet members fan to it)</option>
-          <option value="backbone">Backbone (aggregation — between switches and core)</option>
-          <option value="core">Core (central L3 — between backbones and gateway)</option>
-          <option value="gateway">Gateway (edge / firewall — site exit)</option>
-        </select></div>
+        <select id="ad-role">${_lmTierOptionsHtml('', '— None —')}</select></div>
       <details class="dev-creds" style="margin-top:10px">
         <summary style="cursor:pointer;color:var(--text2);font-size:13px;font-weight:500;user-select:none">Default Credentials <span style="color:var(--text3);font-weight:400">(optional — pre-fills new sensors)</span></summary>
         <div style="margin-top:8px;display:flex;flex-direction:column;gap:8px">
@@ -263,13 +257,7 @@ function openEditDevice(did){
           </div>
           <div class="fr">
             <label class="fl">Topology Role <span style="color:var(--text3);font-weight:400;font-size:11px">(optional)</span></label>
-            <select id="ed-role" data-orig="">
-              <option value="">— None —</option>
-              <option value="switch">Switch (access)</option>
-              <option value="backbone">Backbone (aggregation)</option>
-              <option value="core">Core (central L3)</option>
-              <option value="gateway">Gateway (edge / firewall)</option>
-            </select>
+            <select id="ed-role" data-orig="">${_lmTierOptionsHtml('', '— None —')}</select>
           </div>
         </div>
         <div class="fr" style="margin-top:8px">
