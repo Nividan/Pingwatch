@@ -1250,8 +1250,15 @@ function _drawConnections(canvasEl) {
         // trunk band. Collapse to a single representative line per child here.
         // Multi-port viz remains intact for peer connections (N ≤ 2 like
         // BSLAB_TOR ↔ EX-2200) where the parallel lines are the signal.
+        // When collapsing, the hit-test still carries every port pair so the
+        // hover tooltip shows the full list (the visual line is reduced, not
+        // the underlying data — collapsing should never hide information).
         const allGroups = _portGroups(c.mappings);
-        const groups = (N > 2 && allGroups.length > 1) ? [allGroups[0]] : allGroups;
+        const collapsed = N > 2 && allGroups.length > 1;
+        const groups = collapsed ? [allGroups[0]] : allGroups;
+        const hitMappings = collapsed
+          ? allGroups.reduce(function(acc, g) { return acc.concat(g); }, [])
+          : null;
         const Np = groups.length;
         const maxSpread = Math.min(pRect.width, r.width) * 0.4;
         const portStep = Np > 1 ? Math.min(8, maxSpread / (Np - 1)) : 0;
@@ -1269,7 +1276,7 @@ function _drawConnections(canvasEl) {
                     ' V ' + trunkYK +
                     ' H ' + entryXK +
                     ' V ' + py;
-          _appendHit(d, parentLabel, c.childEl, grp);
+          _appendHit(d, parentLabel, c.childEl, hitMappings || grp);
           _appendLine(d, style, longHaul);
           _appendNotch(cxK,     cy, style.color, longHaul);
           _appendNotch(entryXK, py, style.color, longHaul);
