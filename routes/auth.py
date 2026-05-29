@@ -216,10 +216,11 @@ def handle(h, method, path, body):
 
     # ── /api/me ───────────────────────────────────────────────────
     if path == "/api/me" and method == "GET":
-        token = h._get_token()
-        user  = auth_check(token)
+        # Route through _auth_principal so Bearer API tokens authenticate the
+        # same as cookie sessions. The previous cookie-only auth_check() call
+        # rejected every token holder with 401.
+        user, role, scope, kind = h._auth_principal()
         if user:
-            role    = auth_check_role(token) or "viewer"
             profile = _get_user_profile(user)
             try:
                 from db.users import db_get_totp
@@ -231,7 +232,11 @@ def handle(h, method, path, body):
                           "email":            profile.get("email", ""),
                           "theme_preference": profile.get("theme_preference", "dark"),
                           "totp_enabled":     _totp_enabled,
-                          "session_ttl": int(_settings.get("session_ttl", 86400))})
+                          "session_ttl":      int(_settings.get("session_ttl", 86400)),
+                          # Hints so token-driven clients can self-detect what
+                          # they're authenticated as. Sessions always get 'full'.
+                          "auth_kind":        kind,
+                          "scope":            scope})
         else:
             h._json(401, {"error": "unauthorized"})
         return True

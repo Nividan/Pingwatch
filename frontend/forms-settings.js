@@ -362,7 +362,7 @@ function openCreateApiToken() {
       </div>
       <div class="mbdy">
         <div class="fr"><label class="fl">Name</label>
-          <input id="apiTok-name" placeholder="e.g. ci-readonly, terraform-prod" maxlength="100"/>
+          <input type="text" id="apiTok-name" placeholder="e.g. ci-readonly, terraform-prod" maxlength="100"/>
           <div class="fh">A human label so you can tell tokens apart in the list.</div>
         </div>
         <div class="fr"><label class="fl">Scope</label>
@@ -434,7 +434,7 @@ function _apiTokenReveal(meta) {
           If you lose it, revoke this entry and generate a new one.
         </div>
         <div style="display:flex;gap:6px;align-items:center">
-          <input id="apiTok-reveal-val" readonly value="${esc(tok)}"
+          <input type="text" id="apiTok-reveal-val" readonly value="${esc(tok)}"
                  style="flex:1;font-family:'JetBrains Mono',monospace;font-size:12px;background:var(--bg3);color:var(--accent2);padding:8px"/>
           <button class="btn-p" style="padding:7px 14px" onclick="_apiTokenCopy()">Copy</button>
         </div>
