@@ -110,6 +110,26 @@ def pg_create_main_schema(cur):
         except Exception:
             pass
 
+    # Bearer-token auth for scripts / CI / Terraform. token_hash is SHA-256
+    # of the plaintext token (plaintext never stored). scope gates HTTP
+    # method: 'read' = GET/HEAD/OPTIONS only, 'full' = any.
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS api_tokens (
+            id           SERIAL PRIMARY KEY,
+            token_hash   TEXT NOT NULL UNIQUE,
+            name         TEXT NOT NULL,
+            username     TEXT NOT NULL,
+            scope        TEXT NOT NULL CHECK (scope IN ('read','full')),
+            created_at   DOUBLE PRECISION NOT NULL,
+            expires_at   DOUBLE PRECISION,
+            last_used_at DOUBLE PRECISION,
+            revoked_at   DOUBLE PRECISION
+        )""")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_api_tokens_user "
+                "ON api_tokens(username)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_api_tokens_hash "
+                "ON api_tokens(token_hash)")
+
     cur.execute("""
         CREATE TABLE IF NOT EXISTS devices (
             did                      TEXT PRIMARY KEY,

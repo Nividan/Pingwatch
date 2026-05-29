@@ -30,7 +30,7 @@ except Exception:
     _TRAY = False
 
 import core.settings as _settings
-from core.auth       import auth_check, auth_check_role
+from core.auth       import auth_check, auth_check_role, auth_check_api_token
 from core.config     import BIND, DB_PATH, LOGS_DB_PATH, FRONTEND_DIR, PORT, SYS, TLS_PORT_DEFAULT, _RE_DB_IMPORT
 from core.logger     import log
 from monitoring.network_map import init_topo_db, migrate_topo_from_file
@@ -191,27 +191,79 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 return p[8:]
         return None
 
+    def _get_bearer(self):
+        """Extract a pw_-prefixed API token from `Authorization: Bearer`."""
+        hdr = self.headers.get("Authorization", "")
+        if hdr.startswith("Bearer "):
+            tok = hdr[7:].strip()
+            if tok.startswith("pw_"):
+                return tok
+        return None
+
+    def _auth_principal(self):
+        """Resolve (username, role, scope, kind) for cookie OR bearer auth.
+
+        kind ∈ {'session', 'api_token'}; sessions always carry an implicit
+        'full' scope. Returns (None, None, None, None) on miss — callers
+        issue the 401. Cookie auth is tried first so the SPA path is
+        unchanged when both are somehow present.
+        """
+        tok = self._get_token()
+        if tok:
+            user = auth_check(tok)
+            if user:
+                return user, auth_check_role(tok) or "viewer", "full", "session"
+        btok = self._get_bearer()
+        if btok:
+            info = auth_check_api_token(btok)
+            if info:
+                return (info["username"], info["role"],
+                        info["scope"], "api_token")
+        return None, None, None, None
+
     def _auth(self):
-        """Return username if authenticated, else send 401 and return None."""
-        user = auth_check(self._get_token())
+        """Return username if authenticated, else send 401 and return None.
+
+        API tokens cannot subscribe to /events — EventSource has no way to
+        send Authorization headers, so we reject upfront with 400 instead
+        of letting the auth handshake silently fail.
+        """
+        user, _role, _scope, kind = self._auth_principal()
         if not user:
             self._json(401, {"error": "unauthorized"})
+            return None
+        if kind == "api_token" and self.path.startswith("/events"):
+            self._json(400, {"error": "SSE requires cookie session"})
+            return None
         return user
 
     def _auth_role(self):
         """Return (username, role) or (None, None) after sending 401."""
-        user = auth_check(self._get_token())
+        user, role, _scope, _kind = self._auth_principal()
         if not user:
             self._json(401, {"error": "unauthorized"}); return None, None
-        role = auth_check_role(self._get_token()) or "viewer"
         return user, role
 
     def _require(self, min_role="viewer"):
-        """Return (username, role) if user meets min_role, else send error."""
-        user, role = self._auth_role()
-        if not user: return None, None
+        """Return (username, role) if the principal meets `min_role`.
+
+        Adds two API-token gates on top of the role check:
+          • Scope:  a 'read' token can use only GET / HEAD / OPTIONS.
+          • SSE:    /events is rejected for tokens (see _auth comment).
+        Cookie sessions bypass both gates (implicit 'full' scope).
+        """
+        user, role, scope, kind = self._auth_principal()
+        if not user:
+            self._json(401, {"error": "unauthorized"}); return None, None
         if _ROLE_RANK.get(role, 0) < _ROLE_RANK.get(min_role, 0):
             self._json(403, {"error": f"Requires {min_role} role"}); return None, None
+        if kind == "api_token":
+            if scope == "read" and self.command not in ("GET", "HEAD", "OPTIONS"):
+                self._json(403, {"error": "read-only token cannot perform writes"})
+                return None, None
+            if self.path.startswith("/events"):
+                self._json(400, {"error": "SSE requires cookie session"})
+                return None, None
         return user, role
 
     def _send_with_cookie(self, code, data, cookie):
@@ -418,11 +470,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 return
 
         # ── API routes ────────────────────────────────────────────
-        from routes import tls as _tls_mod, ipam, ldap as _ldap_mod, radius as _radius_mod, alert_profiles as _alert_profiles_mod, alert_events as _alert_events_mod, maintenance_windows as _maint_mod, groups as _groups_mod, discovery as _disc_mod, licenses as _lic_mod, reports as _reports_mod, saml as _saml_mod, oidc as _oidc_mod, imports as _imports_mod, auto_discovery as _ad_mod, diagnostics as _diag_mod, sites as _sites_mod, livemap as _livemap_mod
+        from routes import tls as _tls_mod, ipam, ldap as _ldap_mod, radius as _radius_mod, alert_profiles as _alert_profiles_mod, alert_events as _alert_events_mod, maintenance_windows as _maint_mod, groups as _groups_mod, discovery as _disc_mod, licenses as _lic_mod, reports as _reports_mod, saml as _saml_mod, oidc as _oidc_mod, imports as _imports_mod, auto_discovery as _ad_mod, diagnostics as _diag_mod, sites as _sites_mod, livemap as _livemap_mod, api_tokens as _api_tokens_mod
         # _imports_mod handles GET only for the Import Subnets CSV template
         # (every other import endpoint is POST). Adding it to the GET dispatch
         # list lets the template download <a href> resolve.
-        for mod in (auth, devices, monitoring, settings, topology, export, backups, ipam, _ldap_mod, _radius_mod, _tls_mod, _alert_profiles_mod, _alert_events_mod, _maint_mod, _groups_mod, _disc_mod, _lic_mod, _reports_mod, _saml_mod, _oidc_mod, _imports_mod, _ad_mod, _diag_mod, _sites_mod, _livemap_mod):
+        for mod in (auth, devices, monitoring, settings, topology, export, backups, ipam, _ldap_mod, _radius_mod, _tls_mod, _alert_profiles_mod, _alert_events_mod, _maint_mod, _groups_mod, _disc_mod, _lic_mod, _reports_mod, _saml_mod, _oidc_mod, _imports_mod, _ad_mod, _diag_mod, _sites_mod, _livemap_mod, _api_tokens_mod):
             if mod.handle(self, 'GET', p, {}):
                 return
 
@@ -447,8 +499,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
         body = self._body()
         if body is None: return
 
-        from routes import ipam, ldap as _ldap_mod, radius as _radius_mod, alert_profiles as _alert_profiles_mod, alert_events as _alert_events_mod, maintenance_windows as _maint_mod, groups as _groups_mod, discovery as _disc_mod, licenses as _lic_mod, reports as _reports_mod, saml as _saml_mod, oidc as _oidc_mod, imports as _imports_mod, auto_discovery as _ad_mod, diagnostics as _diag_mod, sites as _sites_mod
-        for mod in (auth, devices, monitoring, settings, topology, export, backups, ipam, _ldap_mod, _radius_mod, _tls_mod, _alert_profiles_mod, _alert_events_mod, _maint_mod, _groups_mod, _disc_mod, _lic_mod, _reports_mod, _saml_mod, _oidc_mod, _imports_mod, _ad_mod, _diag_mod, _sites_mod):
+        from routes import ipam, ldap as _ldap_mod, radius as _radius_mod, alert_profiles as _alert_profiles_mod, alert_events as _alert_events_mod, maintenance_windows as _maint_mod, groups as _groups_mod, discovery as _disc_mod, licenses as _lic_mod, reports as _reports_mod, saml as _saml_mod, oidc as _oidc_mod, imports as _imports_mod, auto_discovery as _ad_mod, diagnostics as _diag_mod, sites as _sites_mod, api_tokens as _api_tokens_mod
+        for mod in (auth, devices, monitoring, settings, topology, export, backups, ipam, _ldap_mod, _radius_mod, _tls_mod, _alert_profiles_mod, _alert_events_mod, _maint_mod, _groups_mod, _disc_mod, _lic_mod, _reports_mod, _saml_mod, _oidc_mod, _imports_mod, _ad_mod, _diag_mod, _sites_mod, _api_tokens_mod):
             if mod.handle(self, 'POST', p, body):
                 return
 
@@ -497,8 +549,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
         from routes import auth, devices, topology, backups
         p = urlparse(self.path).path
 
-        from routes import ipam, alert_profiles as _alert_profiles_mod, maintenance_windows as _maint_mod, groups as _groups_mod, discovery as _disc_mod, licenses as _lic_mod, reports as _reports_mod, sites as _sites_mod
-        for mod in (auth, devices, topology, backups, ipam, _alert_profiles_mod, _maint_mod, _groups_mod, _disc_mod, _lic_mod, _reports_mod, _sites_mod):
+        from routes import ipam, alert_profiles as _alert_profiles_mod, maintenance_windows as _maint_mod, groups as _groups_mod, discovery as _disc_mod, licenses as _lic_mod, reports as _reports_mod, sites as _sites_mod, api_tokens as _api_tokens_mod
+        for mod in (auth, devices, topology, backups, ipam, _alert_profiles_mod, _maint_mod, _groups_mod, _disc_mod, _lic_mod, _reports_mod, _sites_mod, _api_tokens_mod):
             if mod.handle(self, 'DELETE', p, {}):
                 return
 

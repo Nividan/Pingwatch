@@ -4,6 +4,62 @@ Detailed implementation notes for every shipped feature. For the high-level road
 
 ---
 
+## v1.1 — REST API tokens & dedicated API doc
+
+Scoped Bearer-token authentication for scripts, CI, and Terraform — running alongside the existing browser cookie session, never replacing it. The full REST API reference moves out of DEVELOPER.md into its own [API.md](API.md).
+
+### Bearer-token authentication
+
+New `Authorization: Bearer pw_<token>` header path coexists with the cookie-session path inside a single resolver. A request is identified as either a `session` (implicit `full` scope) or an `api_token` (explicit `read` / `full` scope), and the rest of the stack treats them identically — same RBAC role check, same audit pipeline.
+
+**Token shape.** `pw_` + `secrets.token_hex(32)` → 67 chars (visually distinct from session cookies). Plaintext is **shown once** in the create response; the DB stores only the SHA-256 hash (`_hash_token` in [core/auth.py](core/auth.py)). There is no recover-token flow — lose it and you revoke + regenerate.
+
+**Scopes — method-based, enforced centrally.** Audit of every route module confirmed all mutating handlers use POST / PUT / PATCH / DELETE. A `read` token is therefore restricted in one place — `_require()` in [server.py](server.py) — to `GET / HEAD / OPTIONS`. No per-route declarations needed.
+
+**SSE.** `EventSource` can't send custom headers, so an API token hitting `/events` is rejected with `400 {"error": "SSE requires cookie session"}` rather than failing the auth handshake silently. The block lives in both [`_auth()` and `_require()`](server.py) since `/events` calls `_auth` directly.
+
+**Cache.** New `_API_TOKENS` dict + lock in [core/auth.py](core/auth.py) mirrors the `_SESSIONS` pattern but with different invalidation semantics (fixed `expires_at`, no sliding TTL). Cache TTL = 300s — that's how long revocation takes to propagate. Revoke explicitly evicts matching entries by hash via `auth_evict_api_token_hash()`.
+
+### Database
+
+New `api_tokens` table — dual SQLite ([db/core.py](db/core.py)) + PostgreSQL ([db/pg_schema.py](db/pg_schema.py)):
+
+```sql
+api_tokens(id PK, token_hash UNIQUE, name, username, scope CHECK('read','full'),
+           created_at, expires_at NULL, last_used_at, revoked_at NULL)
+```
+
+with indexes on `username` and `token_hash`. CRUD lives in [db/api_tokens.py](db/api_tokens.py) using the existing `db.helpers` abstraction (one path, branches on `is_pg()` internally). Re-exported through [db/__init__.py](db/__init__.py).
+
+### Routes — `routes/api_tokens.py`
+
+Admin-only management endpoints, registered in the GET / POST / DELETE dispatch lists in [server.py](server.py):
+
+- `GET /api/tokens` — list (no plaintext, no hash). `?user=<name>` filters.
+- `POST /api/tokens` — `{name, scope, expires_at?}` → `201 {id, token: "pw_..."}` *(plaintext returned exactly once)*.
+- `DELETE /api/tokens/{id}` — revoke (sets `revoked_at`, evicts cache).
+
+A token-cannot-create-token rule blocks `POST /api/tokens` when the caller is itself an API token. Audit logs record `api_token_create` and `api_token_revoke` via [`db_log_audit`](db/audit.py); individual API calls are **not** audited (would be noise).
+
+### Frontend — Settings → API Tokens tab
+
+New `apitokens` admin-only tab in [frontend/forms-settings.js](frontend/forms-settings.js), wired into the Identity section after Users / Groups. Mirrors the Users-tab pattern: list table (Name · Owner · Scope · Created · Last used · Expires · [Revoke]) plus a "Generate Token" modal.
+
+**One-time reveal.** The create response surfaces the plaintext in a dedicated modal with a copy-to-clipboard button, a warning that this is the only time the value will be shown, and a sample `curl` command using `location.origin`. Closing the modal removes the plaintext from the DOM permanently.
+
+### Documentation
+
+- New [API.md](API.md) at the repo root — feature-grouped REST reference with a "Getting started" preamble (create + use + revoke), an "Authentication" section explaining session vs. token + scope semantics, an SSE caveat, and an error-envelope convention. Token creation lives at the top of the "Authentication & API tokens" section so curl examples for any later endpoint can assume a token in hand.
+- [DEVELOPER.md](DEVELOPER.md) lines 694–975 (the previous in-tree API tables) are replaced with a 3-line pointer stub to API.md. The architecture, schema, and contributor notes around it are unchanged.
+
+### Verified
+
+End-to-end backend test (synthetic SQLite DB + monkeypatched STATE) covers: create → auth check → unknown-token rejection → non-bearer rejection → list filters → revoke-with-cache-eviction → expired-token rejection. **9/9 pass.**
+
+**Files**: [db/api_tokens.py](db/api_tokens.py), [db/core.py](db/core.py), [db/pg_schema.py](db/pg_schema.py), [db/__init__.py](db/__init__.py), [core/auth.py](core/auth.py), [server.py](server.py), [routes/api_tokens.py](routes/api_tokens.py), [frontend/forms-settings.js](frontend/forms-settings.js), [API.md](API.md), [DEVELOPER.md](DEVELOPER.md).
+
+---
+
 ## v1.0 — New UI Design
 
 Major visual refresh based on a hi-fi design prototype exported from claude.ai/design (see [MIGRATION_NOTES.md](MIGRATION_NOTES.md) for the full handoff history). Backend behavior is unchanged except for one additive endpoint (Active Sessions). All view-container IDs, RBAC class hooks, localStorage keys, and JSON contracts at `/api/*` are preserved.
