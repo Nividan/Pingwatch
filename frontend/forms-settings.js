@@ -293,7 +293,7 @@ function _buildSettingsTab_apitokens() {
   return `<div class="mbdy stab-fade" id="stab-apitokens" style="display:none;overflow-y:auto;flex:1">
       <div class="alrt-panel-hdr" style="margin-bottom:10px">
         <span style="color:var(--text3);font-size:12px">
-          Bearer tokens for scripts, CI, and Terraform. Read-only tokens accept GET requests only; full tokens can do anything the owning user can. See <a href="/API.md" target="_blank" style="color:var(--accent)">API.md</a> for usage.
+          Bearer tokens for scripts, CI, and Terraform. Read-only tokens accept GET requests only; full tokens can do anything the owning user can. See <a href="https://github.com/Nividan/Pingwatch/blob/main/API.md" target="_blank" rel="noopener" style="color:var(--accent)">API.md</a> for usage.
         </span>
         <button class="btn-p rbac-admin" style="font-size:12px;padding:5px 12px" onclick="openCreateApiToken()">＋ Generate Token</button>
       </div>

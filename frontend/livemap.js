@@ -961,6 +961,23 @@ function _drawConnections(canvasEl) {
     svg.appendChild(dot);
   }
 
+  // Group a child entry's mappings by (lport, rport) so each distinct physical
+  // link gets its own line — LACP bundles / dual-NIC pairs render as parallel
+  // wires hitting different X-or-Y slots on the card edges instead of stacking
+  // on top of each other. All-blank port pairs collapse into ONE group so a
+  // child with no port info still draws a single line (no regression for the
+  // common case).
+  function _portGroups(mappings) {
+    if (!mappings || !mappings.length) return [[]];
+    const groups = new Map();
+    mappings.forEach(function(m) {
+      const key = (m.lport || '') + '|' + (m.rport || '');
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push(m);
+    });
+    return Array.from(groups.values());
+  }
+
   // Card-rect index (canvas-relative) for skip-tier cross-detection. A skip
   // link only diverts to a side-channel when its straight vertical would
   // actually pass through some OTHER card — clean drops stay straight.
@@ -1027,20 +1044,33 @@ function _drawConnections(canvasEl) {
       const cSideX = _snap4((parentIsLeft ? r.left      : r.right    ) - cRect.left);
       const pMidY  = _snap4((pRect.top + pRect.bottom) / 2 - cRect.top);
       const cMidY  = _snap4((r.top      + r.bottom)      / 2 - cRect.top);
-      // Z-shape with the vertical step in the middle of the gap. Drops to
-      // straight H when the two centers are at the same Y.
-      const midX = _snap4((pSideX + cSideX) / 2);
-      const d = (Math.abs(pMidY - cMidY) < 4)
-        ? 'M ' + pSideX + ' ' + pMidY + ' H ' + cSideX
-        : 'M ' + pSideX + ' ' + pMidY +
-          ' H ' + midX +
-          ' V ' + cMidY +
-          ' H ' + cSideX;
+      const midX   = _snap4((pSideX + cSideX) / 2);
       const longHaul = Math.abs(cSideX - pSideX) > LONG_HAUL_PX;
-      _appendHit(d, parentLabel, c.childEl, c.mappings);
-      _appendLine(d, style, longHaul);
-      _appendNotch(pSideX, pMidY, style.color, longHaul);
-      _appendNotch(cSideX, cMidY, style.color, longHaul);
+
+      // One line per distinct (lport, rport) — parallel along the side edges
+      // so LACP / dual-NIC bundles read as separate wires. Step fits inside
+      // 50 % of the shorter card's height so multiple ports never overflow.
+      const groups = _portGroups(c.mappings);
+      const N = groups.length;
+      const cardH = Math.min(pRect.bottom - pRect.top, r.bottom - r.top);
+      const portStep = N > 1 ? Math.min(8, (cardH * 0.5) / (N - 1)) : 0;
+      const startOff = -((N - 1) * portStep) / 2;
+
+      groups.forEach(function(grp, k) {
+        const dy = startOff + k * portStep;
+        const pY = pMidY + dy;
+        const cY = cMidY + dy;
+        const d = (Math.abs(pY - cY) < 4)
+          ? 'M ' + pSideX + ' ' + pY + ' H ' + cSideX
+          : 'M ' + pSideX + ' ' + pY +
+            ' H ' + midX +
+            ' V ' + cY +
+            ' H ' + cSideX;
+        _appendHit(d, parentLabel, c.childEl, grp);
+        _appendLine(d, style, longHaul);
+        _appendNotch(pSideX, pY, style.color, longHaul);
+        _appendNotch(cSideX, cY, style.color, longHaul);
+      });
     });
 
     // ── Below-row routing (laned trunk + skip-tier side-channels) ──
@@ -1122,14 +1152,33 @@ function _drawConnections(canvasEl) {
         const entryX = c._entryX;
         const style = _CONN_STYLES[c.tier] || _CONN_STYLES.other;
         const longHaul = Math.abs(cx - entryX) > LONG_HAUL_PX;
-        const d = 'M ' + cx + ' ' + cy +
-                  ' V ' + trunkY +
-                  ' H ' + entryX +
-                  ' V ' + py;
-        _appendHit(d, parentLabel, c.childEl, c.mappings);
-        _appendLine(d, style, longHaul);
-        _appendNotch(cx,     cy, style.color, longHaul);
-        _appendNotch(entryX, py, style.color, longHaul);
+
+        // One line per distinct port pair — verticals spread along the parent
+        // bottom + child top so each "port" is plainly visible; trunk Y also
+        // staggers by a few pixels so the horizontal segments don't merge.
+        const groups = _portGroups(c.mappings);
+        const N = groups.length;
+        const maxSpread = Math.min(pRect.width, r.width) * 0.4;
+        const portStep = N > 1 ? Math.min(8, maxSpread / (N - 1)) : 0;
+        const startOff = -((N - 1) * portStep) / 2;
+        const yStagger = N > 1 ? 3 : 0;
+        const yStart   = -((N - 1) * yStagger) / 2;
+
+        groups.forEach(function(grp, k) {
+          const dx = startOff + k * portStep;
+          const dy = yStart   + k * yStagger;
+          const cxK     = cx + dx;
+          const entryXK = entryX + dx;
+          const trunkYK = trunkY + dy;
+          const d = 'M ' + cxK + ' ' + cy +
+                    ' V ' + trunkYK +
+                    ' H ' + entryXK +
+                    ' V ' + py;
+          _appendHit(d, parentLabel, c.childEl, grp);
+          _appendLine(d, style, longHaul);
+          _appendNotch(cxK,     cy, style.color, longHaul);
+          _appendNotch(entryXK, py, style.color, longHaul);
+        });
       });
     }
 
@@ -1140,16 +1189,29 @@ function _drawConnections(canvasEl) {
       const cy = r.top - cRect.top;
       const pY = _snap4(py);
       const style = _CONN_STYLES[c.tier] || _CONN_STYLES.other;
+
+      // Distinct port pairs render as parallel skip lines on both routes.
+      const groups = _portGroups(c.mappings);
+      const N = groups.length;
+      const maxSpread = Math.min(pRect.width, r.width) * 0.4;
+      const portStep = N > 1 ? Math.min(8, maxSpread / (N - 1)) : 0;
+      const startOff = -((N - 1) * portStep) / 2;
+
       // Reordering usually parks the child under its parent, so a straight
       // vertical clears every intervening card — keep it straight when so.
       if (!_verticalCrossesCard(cx, pY, cy, c.childEl, parentEl)) {
-        const d = 'M ' + cx + ' ' + cy + ' V ' + pY +
-                  (Math.abs(cx - pCenterX) > 2 ? ' H ' + _snap4(pCenterX) : '');
-        const longHaul = Math.abs(cx - pCenterX) > LONG_HAUL_PX;
-        _appendHit(d, parentLabel, c.childEl, c.mappings);
-        _appendLine(d, style, longHaul);
-        _appendNotch(cx, cy, style.color, longHaul);
-        _appendNotch(_snap4(pCenterX), pY, style.color, longHaul);
+        groups.forEach(function(grp, k) {
+          const dx = startOff + k * portStep;
+          const cxK = cx + dx;
+          const pX  = _snap4(pCenterX + dx);
+          const d = 'M ' + cxK + ' ' + cy + ' V ' + pY +
+                    (Math.abs(cxK - pX) > 2 ? ' H ' + pX : '');
+          const longHaul = Math.abs(cxK - pX) > LONG_HAUL_PX;
+          _appendHit(d, parentLabel, c.childEl, grp);
+          _appendLine(d, style, longHaul);
+          _appendNotch(cxK, cy, style.color, longHaul);
+          _appendNotch(pX,  pY, style.color, longHaul);
+        });
         return;
       }
       // Blocked → run up a side gutter on the nearer canvas edge, with its own
@@ -1166,15 +1228,24 @@ function _drawConnections(canvasEl) {
       // absolutely-positioned tier-tag labels so it never crosses them.
       const gutterX = _snap4(leftSide ? (8 + glane * 9)
                                       : (cRect.width - 12 - glane * 9));
-      const d = 'M ' + cx + ' ' + cy +
-                ' V ' + _snap4(cy - 6) +
-                ' H ' + gutterX +
-                ' V ' + pY +
-                ' H ' + _snap4(pCenterX);
-      _appendHit(d, parentLabel, c.childEl, c.mappings);
-      _appendLine(d, style, true);   // long-haul styling (dimmed, slower dash)
-      _appendNotch(cx, cy, style.color, true);
-      _appendNotch(_snap4(pCenterX), pY, style.color, true);
+      // Port sub-spread inside the gutter lane (tighter — 3px steps).
+      const gPortStep = N > 1 ? 3 : 0;
+      const gStart    = -((N - 1) * gPortStep) / 2;
+      groups.forEach(function(grp, k) {
+        const dx = gStart + k * gPortStep;
+        const cxK = cx + dx;
+        const gx  = gutterX + dx;
+        const pX  = _snap4(pCenterX + dx);
+        const d = 'M ' + cxK + ' ' + cy +
+                  ' V ' + _snap4(cy - 6) +
+                  ' H ' + gx +
+                  ' V ' + pY +
+                  ' H ' + pX;
+        _appendHit(d, parentLabel, c.childEl, grp);
+        _appendLine(d, style, true);   // long-haul styling (dimmed, slower dash)
+        _appendNotch(cxK, cy, style.color, true);
+        _appendNotch(pX,  pY, style.color, true);
+      });
     });
   });
 
