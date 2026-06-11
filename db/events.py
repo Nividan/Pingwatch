@@ -668,6 +668,7 @@ def db_load_unresolved_flap_state(state):
         except Exception:
             return None
 
+    log.info("db_load_unresolved_flap_state: scanning flap_log for unresolved entries...")
     rows = []
     if is_pg():
         from db.pg_pool import pg_cursor
@@ -702,6 +703,7 @@ def db_load_unresolved_flap_state(state):
             return
         finally:
             if con: con.close()
+    log.info(f"db_load_unresolved_flap_state: found {len(rows)} unresolved flap_log row(s)")
 
     # Aggregate per (did, sid): note which categories matched + earliest ts each.
     # ts may be unparseable; track presence-of-row separately from the epoch.
@@ -728,27 +730,43 @@ def db_load_unresolved_flap_state(state):
             slot["warn_ts"] = _earlier(slot["warn_ts"], ts_epoch)
 
     restored = 0
+    skipped_no_device = 0
+    skipped_no_sensor = 0
     for (did, sid), slot in by_sensor.items():
         dev = state.devices.get(did)
-        if not dev: continue
+        if not dev:
+            skipped_no_device += 1
+            log.warning(f"flap_log references missing device did={did} sid={sid} — skipping restore")
+            continue
         s = dev.sensors.get(sid)
-        if not s: continue
+        if not s:
+            skipped_no_sensor += 1
+            log.warning(f"flap_log references missing sensor did={did} sid={sid} (device exists) — skipping restore")
+            continue
+        flags = []
         if slot["down"]:
             s._alerted_down = True
             if slot["down_ts"]:
                 s._down_since_ts = slot["down_ts"]
+            flags.append("down")
         # Threshold: crit takes precedence over warn (matches escalation logic).
         if slot["crit"]:
             s._threshold_state = "crit"
             if slot["crit_ts"]:
                 s._threshold_triggered_ts = slot["crit_ts"]
+            flags.append("crit")
         elif slot["warn"]:
             s._threshold_state = "warn"
             if slot["warn_ts"]:
                 s._threshold_triggered_ts = slot["warn_ts"]
-        restored += 1
-    if restored:
-        log.info(f"Restored unresolved flap state for {restored} sensor(s).")
+            flags.append("warn")
+        if flags:
+            restored += 1
+            log.info(f"Restored flap state for {dev.name}/{s.name} (did={did} sid={sid}): {','.join(flags)}")
+    log.info(
+        f"db_load_unresolved_flap_state: restored {restored} sensor(s); "
+        f"skipped {skipped_no_device} missing device(s), {skipped_no_sensor} missing sensor(s)"
+    )
 
 
 # ── SNMP trap log ────────────────────────────────────────────────
