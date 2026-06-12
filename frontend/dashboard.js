@@ -240,12 +240,13 @@ const _DW_REG = {
     icon:  icon('activity', 14),
     cat: 'charts',
     desc: 'Heatmap of ping latencies across many devices.',
-    meta: ['top-60', 'live'],
+    meta: ['top-100', 'live'],
     isNew: true,
     defaultCols: 2,
     fields: [
       { key: 'limit', label: 'Devices', type: 'select',
-        options: [{v:10,l:'10'},{v:20,l:'20'},{v:30,l:'30'}], def: 20 },
+        options: [{v:10,l:'10'},{v:20,l:'20'},{v:30,l:'30'},{v:50,l:'50'},{v:100,l:'100'}], def: 20 },
+      { key: 'group', label: 'Group', type: 'group-select', def: '' },
     ],
     render:  (wid, cfg) => _dwRefreshLatencyHeatmap(wid, cfg),
     refresh: (wid, cfg) => _dwRefreshLatencyHeatmap(wid, cfg),
@@ -1290,6 +1291,17 @@ function _dwSelectType(type) {
         <select id="dw-cfg-${f.key}">${opts}</select>
       </div>`;
     }
+    if (f.type === 'group-select') {
+      const cur = f.def || '';
+      const groups = [...new Set(Object.values(S.devices).map(d => d.group || 'Default Group'))].sort();
+      const opts = ['<option value="">All groups</option>']
+        .concat(groups.map(g => `<option value="${esc(g)}"${g===cur?' selected':''}>${esc(g)}</option>`))
+        .join('');
+      return `<div class="fr">
+        <label class="fl">${f.label}</label>
+        <select id="dw-cfg-${f.key}">${opts}</select>
+      </div>`;
+    }
     return '';
   }).join('');
   const noteHtml = reg.note
@@ -1376,6 +1388,17 @@ function _dwOpenEdit(wid) {
     if (f.type === 'select') {
       const opts = f.options.map(o =>
         `<option value="${o.v}"${String(o.v)===String(w.cfg[f.key]||f.def)?' selected':''}>${o.l}</option>`).join('');
+      return `<div class="fr">
+        <label class="fl">${f.label}</label>
+        <select id="dw-cfg-${f.key}">${opts}</select>
+      </div>`;
+    }
+    if (f.type === 'group-select') {
+      const cur = w.cfg[f.key] || '';
+      const groups = [...new Set(Object.values(S.devices).map(d => d.group || 'Default Group'))].sort();
+      const opts = ['<option value="">All groups</option>']
+        .concat(groups.map(g => `<option value="${esc(g)}"${g===cur?' selected':''}>${esc(g)}</option>`))
+        .join('');
       return `<div class="fr">
         <label class="fl">${f.label}</label>
         <select id="dw-cfg-${f.key}">${opts}</select>
@@ -1588,25 +1611,32 @@ async function _dwRefreshLatencyHeatmap(wid, cfg) {
   const body = document.getElementById(`dw-body-${wid}`);
   if (!body) return;
   const limit   = Number(cfg?.limit) || 20;
+  const group   = cfg?.group || '';        // '' = all groups
   const minutes = _dwTimeRangeMinutes();   // follows global dashboard range
 
   // Serve from cache if fresh
   const cached = _dwHeatCache[wid];
-  if (cached && (Date.now() - cached.ts) < HEAT_CACHE_TTL && cached.cfgKey === `${limit}/${minutes}`) {
+  if (cached && (Date.now() - cached.ts) < HEAT_CACHE_TTL && cached.cfgKey === `${limit}/${minutes}/${group}`) {
     if (body.innerHTML !== cached.html) body.innerHTML = cached.html;
     return;
   }
 
-  // Pick up to `limit` ping sensors, one per device (worst current latency wins ties)
+  // Pick up to `limit` ping sensors, one per device (worst current latency wins ties).
+  // When a group is configured, only devices in that group are considered.
   const pingByDevice = {};
   Object.values(S.sensors).forEach(s => {
     if (s.stype !== 'ping') return;
+    if (group) {
+      const dev = S.devices[s.device_id];
+      if (!dev || (dev.group || 'Default Group') !== group) return;
+    }
     const cur = pingByDevice[s.device_id];
     if (!cur || (Number(s.last_ms) || 0) > (Number(cur.last_ms) || 0)) pingByDevice[s.device_id] = s;
   });
   const sensors = Object.values(pingByDevice).slice(0, limit);
   if (!sensors.length) {
-    body.innerHTML = '<div style="color:var(--text3);font-size:11px;padding:8px;text-align:center">No ping sensors yet</div>';
+    const msg = group ? `No ping sensors in “${esc(group)}”` : 'No ping sensors yet';
+    body.innerHTML = `<div style="color:var(--text3);font-size:11px;padding:8px;text-align:center">${msg}</div>`;
     return;
   }
 
@@ -1680,7 +1710,7 @@ async function _dwRefreshLatencyHeatmap(wid, cfg) {
       ${rowsHtml}
       <div class="heatmap-legend"><span>0ms</span><div class="grad"></div><span>${hi}ms+</span></div>
     </div>`;
-  _dwHeatCache[wid] = { ts: Date.now(), cfgKey: `${limit}/${minutes}`, html };
+  _dwHeatCache[wid] = { ts: Date.now(), cfgKey: `${limit}/${minutes}/${group}`, html };
   if (body.innerHTML !== html) body.innerHTML = html;
 }
 
