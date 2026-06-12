@@ -8,14 +8,16 @@ build_agent_package() assembles, in memory, everything a branch host needs:
       probes.py                 (verbatim copy of monitoring/probes.py)
       core/…                    (shim package from agent/core/ +
                                  verbatim core/radius_auth.py)
+      vmware/…                  (verbatim copy — VMware sensors need only
+                                 pyvmomi on the branch host)
       install.sh / install.bat / pingwatch-agent.service / README.md
       requirements-optional.txt
       config.json               (generated: server URL, one-time enrollment
                                  token, server cert SHA-256 pin)
 
-probes.py and radius_auth.py are copied from the canonical sources at
-download time, so a freshly downloaded package always matches the running
-server. Deployed agents report their version each checkin; the Probes page
+probes.py, radius_auth.py, and vmware/ are copied from the canonical
+sources at download time, so a freshly downloaded package always matches
+the running server. Deployed agents report their version each checkin; the Probes page
 shows an "update available" badge when they drift.
 """
 import hashlib
@@ -30,10 +32,14 @@ _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _AGENT_DIR = os.path.join(_REPO_ROOT, "agent")
 
 # Files copied verbatim from elsewhere in the repo into the package root /
-# package core/ — the reason the agent/core shims exist at all.
+# package core/ — the reason the agent/core shims exist at all. vmware/
+# rides along so VMware sensors only need `pip install pyvmomi` on the
+# branch host (the installers offer it).
 _EXTRA_FILES = [
     (os.path.join(_REPO_ROOT, "monitoring", "probes.py"), "probes.py"),
     (os.path.join(_REPO_ROOT, "core", "radius_auth.py"), "core/radius_auth.py"),
+    (os.path.join(_REPO_ROOT, "vmware", "__init__.py"), "vmware/__init__.py"),
+    (os.path.join(_REPO_ROOT, "vmware", "client.py"), "vmware/client.py"),
 ]
 
 

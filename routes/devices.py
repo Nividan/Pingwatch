@@ -573,6 +573,34 @@ def handle(h, method, path, body):
         if not dev:
             h._json(404, {"error": "not found"}); return True
         host    = dev.host
+
+        # Devices measured from a remote probe are scanned there too —
+        # central usually can't even reach them. Long-polls the agent
+        # task channel (~10s pickup + ~8s scan), same response shape.
+        from core.probe_assign import effective_probe
+        pid = effective_probe(dev)
+        if pid:
+            from db.probes import db_get_probe
+            probe = db_get_probe(pid)
+            pname = (probe or {}).get("name") or pid
+            if not probe or probe.get("status") != "enrolled":
+                h._json(409, {"error": f"Probe '{pname}' is not enrolled — "
+                              "this device can only be scanned from there"})
+                return True
+            if _time.time() - float(probe.get("last_seen") or 0) > 35:
+                h._json(503, {"error": f"Probe '{pname}' is offline — "
+                              "this device can only be scanned from there"})
+                return True
+            from routes.agent import run_remote_device_scan
+            services, err = run_remote_device_scan(
+                probe, host, _get_scan_targets(), user)
+            if services is None:
+                h._json(502, {"error": err or "remote scan failed"})
+                return True
+            h._json(200, {"did": did, "host": host, "services": services,
+                          "via_probe": probe["name"]})
+            return True
+
         results = []
         _lock   = threading.Lock()
 

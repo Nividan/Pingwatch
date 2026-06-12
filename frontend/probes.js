@@ -339,13 +339,18 @@ async function _pbDeleteApply(pid){
 
 // ── Probe dropdown for device / sensor / site forms ──────────────
 // inheritLabel describes what '' falls back to at that level.
-function _probeSelectHtml(id, current, inheritLabel){
+// omitCentral: skip the explicit 'central' pin option — used by the site
+// form, where '' already resolves to central (the pin would render as a
+// duplicate "Central (this server)" entry).
+function _probeSelectHtml(id, current, inheritLabel, omitCentral){
   const probes=Object.values(S.probes)
     .filter(p=>p.status!=='revoked')
     .sort((a,b)=>(a.name||'').localeCompare(b.name||''));
-  const cur=current||'';
+  let cur=current||'';
+  if(omitCentral && cur==='central') cur='';   // same meaning at this level
   let opts=`<option value=""${cur===''?' selected':''}>${esc(inheritLabel)}</option>`;
-  opts+=`<option value="central"${cur==='central'?' selected':''}>Central (this server)</option>`;
+  if(!omitCentral)
+    opts+=`<option value="central"${cur==='central'?' selected':''}>Central (this server)</option>`;
   probes.forEach(p=>{
     opts+=`<option value="${esc(p.probe_id)}"${cur===p.probe_id?' selected':''}>📡 ${esc(p.name)}</option>`;
   });

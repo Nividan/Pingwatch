@@ -5,10 +5,11 @@
 # starts the systemd service.
 #
 # Flags (for unattended installs; without them an interactive terminal is
-# asked, a non-interactive run just warns like before):
+# asked — default answer Yes — and a non-interactive run just warns):
 #   --with-snmp      install net-snmp (snmpget) for SNMP sensors
 #   --with-ssh       install paramiko for SSH/SFTP sensors
-#   --all-optional   both of the above
+#   --with-vmware    install pyvmomi for VMware sensors
+#   --all-optional   all of the above
 #   --no-optional    never prompt, never install optional packages
 #
 # Re-running the installer is safe (idempotent copy + service restart) —
@@ -19,12 +20,13 @@ set -euo pipefail
 TARGET="/opt/pingwatch-agent"
 SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-WITH_SNMP=""; WITH_SSH=""; NO_OPTIONAL=""
+WITH_SNMP=""; WITH_SSH=""; WITH_VMWARE=""; NO_OPTIONAL=""
 for arg in "$@"; do
     case "$arg" in
         --with-snmp)    WITH_SNMP=1 ;;
         --with-ssh)     WITH_SSH=1 ;;
-        --all-optional) WITH_SNMP=1; WITH_SSH=1 ;;
+        --with-vmware)  WITH_VMWARE=1 ;;
+        --all-optional) WITH_SNMP=1; WITH_SSH=1; WITH_VMWARE=1 ;;
         --no-optional)  NO_OPTIONAL=1 ;;
         *) echo "Unknown flag: $arg" >&2; exit 1 ;;
     esac
@@ -54,10 +56,11 @@ chmod 600 "$TARGET/config.json" 2>/dev/null || true
 
 # ── Optional sensor capabilities ──────────────────────────────────
 # The agent's core sensor types are stdlib-only. SNMP needs the snmpget
-# binary; SSH/SFTP need paramiko. Offer them here — the person running the
-# installer is the right one to decide — but never block the install on
-# them: a failed/declined extra just means those sensor types report
-# "capability missing" until added (re-run with --with-… anytime).
+# binary; SSH/SFTP need paramiko; VMware needs pyvmomi. Offer them all here
+# (default Yes — a probe should be able to run any sensor type out of the
+# box) but never block the install on them: a failed/declined extra just
+# means those sensor types report "capability missing" until added
+# (re-run with --with-… anytime).
 
 _pkg_mgr() {
     command -v apt-get >/dev/null 2>&1 && { echo apt; return; }
@@ -67,12 +70,13 @@ _pkg_mgr() {
     echo ""
 }
 
-_ask() {  # yes → 0. Auto-no when --no-optional or stdin isn't a terminal.
+_ask() {  # yes → 0. Default-Yes on Enter. Auto-no when --no-optional or
+          # stdin isn't a terminal (unattended runs use the flags instead).
     [[ -n "$NO_OPTIONAL" ]] && return 1
     [[ -t 0 ]] || return 1
     local _a
-    read -r -p "$1 [y/N] " _a
-    [[ "$_a" =~ ^[Yy] ]]
+    read -r -p "$1 [Y/n] " _a
+    [[ ! "$_a" =~ ^[Nn] ]]
 }
 
 _install_snmp() {
@@ -102,6 +106,21 @@ _install_paramiko() {
     return 1
 }
 
+_install_pyvmomi() {
+    # Same ladder as paramiko; the distro package only exists on some
+    # distros, so pip is the common path.
+    case "$(_pkg_mgr)" in
+        apt)    apt-get install -y python3-pyvmomi 2>/dev/null && return 0 ;;
+        dnf)    dnf install -y python3-pyvmomi 2>/dev/null && return 0 ;;
+        yum)    yum install -y python3-pyvmomi 2>/dev/null && return 0 ;;
+        zypper) zypper --non-interactive install python3-pyvmomi 2>/dev/null && return 0 ;;
+    esac
+    echo "  Distro package unavailable — trying pip…"
+    python3 -m pip install pyvmomi 2>/dev/null && return 0
+    python3 -m pip install --break-system-packages pyvmomi && return 0
+    return 1
+}
+
 if command -v snmpget >/dev/null 2>&1; then
     echo "snmpget found — SNMP sensors supported."
 else
@@ -123,8 +142,17 @@ else
         echo "      will fail. Re-run later: sudo bash install.sh --with-ssh"
     fi
 fi
-# (VMware sensors additionally need pyvmomi — niche enough that it stays
-#  manual: pip3 install pyvmomi. See requirements-optional.txt.)
+
+if python3 -c "import pyVim" >/dev/null 2>&1 || python3 -c "import pyVmomi" >/dev/null 2>&1; then
+    echo "pyvmomi found — VMware sensors supported."
+else
+    if [[ -n "$WITH_VMWARE" ]] || _ask "Install pyvmomi so this probe can run VMware sensors?"; then
+        _install_pyvmomi || echo "  ! pyvmomi install failed — VMware sensors will report 'capability missing'."
+    else
+        echo "NOTE: pyvmomi not found — VMware sensors assigned to this probe"
+        echo "      will fail. Re-run later: sudo bash install.sh --with-vmware"
+    fi
+fi
 
 UNIT_SRC="$TARGET/pingwatch-agent.service"
 UNIT_DST="/etc/systemd/system/pingwatch-agent.service"

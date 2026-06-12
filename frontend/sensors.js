@@ -885,6 +885,14 @@ async function openScanModal(did){
   closeM('mdscan');
   const dev=S.devices[did];
   const host=dev?.host||did;
+  // Devices measured from a remote probe are scanned there (server routes
+  // it through the agent task channel) — slower round-trip, say so up front.
+  const viaPid=(typeof _effectiveProbeFor==='function')?_effectiveProbeFor(dev,null):'';
+  const viaName=viaPid?((S.probes&&S.probes[viaPid]&&S.probes[viaPid].name)||viaPid):'';
+  const spin=viaPid
+    ?`&#8635; Scanning via &#128225; ${esc(viaName)}&hellip; <span style="color:var(--text3)">(remote probe — can take ~20s)</span>`
+    :'&#8635; Scanning&hellip;';
+  const tmoMs=viaPid?40000:30000;
   const o=document.createElement('div');o.className='mo';o.id='mdscan';
   o.onclick=e=>{if(e.target===o)closeM('mdscan');};
   o.innerHTML=`
@@ -896,7 +904,7 @@ async function openScanModal(did){
     </div>
     <div id="scan-body" style="max-height:380px;overflow-y:auto;display:flex;flex-direction:column;
          gap:5px;padding:4px 0">
-      <div class="scan-spin">&#8635; Scanning&hellip;</div>
+      <div class="scan-spin">${spin}</div>
     </div>
     <div class="mfoot" style="justify-content:space-between">
       <button class="btn-s" onclick="closeM('mdscan')">Close</button>
@@ -906,29 +914,38 @@ async function openScanModal(did){
   </div>`;
   document.body.appendChild(o);
   const ctrl=new AbortController();
-  const tid=setTimeout(()=>ctrl.abort(),30000);
+  const tid=setTimeout(()=>ctrl.abort(),tmoMs);
   try{
     const r=await fetch(`/api/device/${did}/scan`,{
       method:'POST',headers:{'Content-Type':'application/json'},
       body:'{}',signal:ctrl.signal,
     });
     clearTimeout(tid);
-    _scanServices=(await r.json()).services||[];
-    _renderScanResults(did,host,_scanServices);
+    const j=await r.json().catch(()=>({}));
+    if(!r.ok||j.error){
+      const b=document.getElementById('scan-body');
+      if(b)b.innerHTML=`<div class="scan-spin" style="color:var(--down)">${esc(j.error||r.statusText||'Scan failed')}</div>`;
+      return;
+    }
+    _scanServices=j.services||[];
+    _renderScanResults(did,host,_scanServices,j.via_probe||'');
   }catch(e){
     clearTimeout(tid);
     const b=document.getElementById('scan-body');
-    const msg=e.name==='AbortError'?'Scan timed out (30s)':`Scan failed: ${esc(String(e))}`;
+    const msg=e.name==='AbortError'?`Scan timed out (${Math.round(tmoMs/1000)}s)`:`Scan failed: ${esc(String(e))}`;
     if(b)b.innerHTML=`<div class="scan-spin" style="color:var(--down)">${msg}</div>`;
   }
 }
 
-function _renderScanResults(did,host,services){
+function _renderScanResults(did,host,services,viaProbe){
   const body=document.getElementById('scan-body');
   const btn=document.getElementById('btn-add-scanned');
   if(!body)return;
+  const viaNote=viaProbe
+    ?`<div style="font-size:11px;color:var(--text3);padding:0 2px 4px">Scanned from &#128225; ${esc(viaProbe)}</div>`
+    :'';
   if(!services.length){
-    body.innerHTML=`<div class="scan-spin">No services found on ${esc(host)}</div>`;
+    body.innerHTML=viaNote+`<div class="scan-spin">No services found on ${esc(host)}</div>`;
     if(btn)btn.style.display='none';
     return;
   }
@@ -938,7 +955,7 @@ function _renderScanResults(did,host,services){
       .filter(k=>k.startsWith(did+'/'))
       .map(k=>{ const s=S.sensors[k]; return `${s.stype}:${s.port||''}`; })
   );
-  body.innerHTML=services.map((svc,i)=>{
+  body.innerHTML=viaNote+services.map((svc,i)=>{
     const key=`${svc.stype}:${svc.port||''}`;
     const exists=existingKeys.has(key);
     const ms=svc.ms!=null?`${svc.ms}ms`:'';

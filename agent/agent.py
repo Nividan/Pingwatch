@@ -384,11 +384,20 @@ def run_probe(cfg):
                                        cfg.get("radius_nas_id") or "pingwatch",
                                        timeout)
         if st == "vmware":
+            # The vmware/ module ships in the package; pyvmomi is the only
+            # branch-host install. Distinct details so the operator knows
+            # whether to pip-install or re-download the package.
+            if not (_have_module("pyVim") or _have_module("pyVmomi")):
+                return {"ok": False, "ms": None,
+                        "detail": "capability missing on probe: pyvmomi "
+                                  "(pip install pyvmomi, or re-run the "
+                                  "installer)", "value": None}
             try:
                 from vmware import vmware_probe
             except Exception:
                 return {"ok": False, "ms": None,
-                        "detail": "capability missing on probe: pyvmomi/vmware", "value": None}
+                        "detail": "vmware module missing on probe — download "
+                                  "a fresh agent package", "value": None}
             return vmware_probe(host, cfg.get("vmware_user") or "",
                                 cfg.get("vmware_password") or "",
                                 cfg.get("vmware_vm_id") or "",
@@ -820,6 +829,9 @@ class TaskRunner:
         tid = int(task.get("task_id"))
         ttype = task.get("task_type") or ""
         payload = task.get("payload") or {}
+        if ttype == "device_scan":
+            self._run_device_scan(tid, payload)
+            return
         cidr = str(payload.get("cidr") or "")
         mode = str(payload.get("mode") or "ping")
         if ttype not in ("ipam_scan", "discovery_scan") or not cidr:
@@ -902,6 +914,77 @@ class TaskRunner:
             self._set(tid, "done")
         else:
             self._set(tid, "error", error="final upload failed")
+
+    def _run_device_scan(self, tid, payload):
+        """Single-host service scan (Devices → Scan button on the server).
+
+        Mirrors central's /api/devices/{did}/scan fanout: one thread per
+        target from the server's scan_ports setting (shipped in the
+        payload), 8s global deadline, only responding services reported.
+        The server handler long-polls for this result, so upload promptly.
+        """
+        host = str(payload.get("host") or "")
+        targets = payload.get("targets") or []
+        if not host or not isinstance(targets, list) or not targets:
+            self._set(tid, "error", error="bad device_scan payload")
+            return
+        log.info("task %d: device_scan %s (%d targets)",
+                 tid, host, len(targets))
+        self._set(tid, "running", progress={"phase": "scanning",
+                                            "total": len(targets)})
+        rows = []
+        lock = threading.Lock()
+
+        def _scan_one(t):
+            stype = str(t.get("stype") or "")
+            port = t.get("port")
+            try:
+                tout = int(t.get("tout", 2) or 2)
+            except (TypeError, ValueError):
+                tout = 2
+            try:
+                if stype == "ping":
+                    r = probes.probe_ping(host, timeout=tout)
+                elif stype == "tcp":
+                    r = probes.probe_tcp(host, port, timeout=tout)
+                elif stype == "http":
+                    url = f"http://{host}" if port == 80 \
+                        else f"http://{host}:{port}"
+                    r = probes.probe_http(url, timeout=tout, verify_ssl=False)
+                elif stype == "tls":
+                    r = probes.probe_tls(host, port, timeout=tout)
+                elif stype == "banner":
+                    r = probes.probe_banner(host, port, timeout=tout)
+                else:
+                    return
+            except Exception:
+                return
+            if r and r.get("ok"):
+                with lock:
+                    rows.append({"stype": stype,
+                                 "name": str(t.get("name") or stype)[:64],
+                                 "port": port, "ms": r.get("ms"),
+                                 "detail": str(r.get("detail") or "")[:512]})
+
+        threads = [threading.Thread(target=_scan_one, args=(t,), daemon=True)
+                   for t in targets[:64]]
+        deadline = time.monotonic() + 8     # same budget as central
+        for th in threads:
+            th.start()
+        for th in threads:
+            remaining = deadline - time.monotonic()
+            if remaining > 0:
+                th.join(timeout=remaining)
+        if self._cancelled(tid):
+            log.info("task %d cancelled (device_scan)", tid)
+            self._set(tid, "error", error="cancelled")
+            return
+        if self._upload_chunk(tid, rows, done=True):
+            log.info("task %d complete: %d services on %s",
+                     tid, len(rows), host)
+            self._set(tid, "done")
+        else:
+            self._set(tid, "error", error="result upload failed")
 
     def _enrich(self, ip, ms, targets):
         hostname = ""

@@ -40,6 +40,24 @@ if errorlevel 1 (
     echo paramiko found - SSH/SFTP sensors supported.
 )
 
+rem VMware sensors need pyvmomi (the vmware/ module ships in this package).
+python -c "import pyVim" >nul 2>&1
+if not errorlevel 1 goto :vmw_ok
+python -c "import pyVmomi" >nul 2>&1
+if not errorlevel 1 goto :vmw_ok
+choice /C YN /N /M "Install pyvmomi so this probe can run VMware sensors? [Y/N] "
+if not errorlevel 2 (
+    python -m pip install pyvmomi
+    if errorlevel 1 echo   ! pyvmomi install failed - VMware sensors will report "capability missing".
+) else (
+    echo NOTE: pyvmomi not installed - VMware sensors assigned to this
+    echo       probe will fail. Later: python -m pip install pyvmomi
+)
+goto :vmw_done
+:vmw_ok
+echo pyvmomi found - VMware sensors supported.
+:vmw_done
+
 rem SNMP sensors need the net-snmp snmpget.exe binary - no scripted install
 rem exists on Windows, so this stays a pointer.
 where snmpget >nul 2>&1

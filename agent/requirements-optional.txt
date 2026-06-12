@@ -1,12 +1,13 @@
 # Optional dependencies for the PingWatch remote agent.
 # The core sensor types (ping/tcp/http/dns/tls/http_keyword/banner/smtp/
-# radius) are pure stdlib — install nothing unless you assign these types:
+# radius) are pure stdlib. The installers offer these automatically;
+# `pip install -r requirements-optional.txt` is the manual equivalent.
 #
 #   ssh / sftp sensors:
 paramiko>=3.0.0
 #
-#   vmware sensors:
-# pyvmomi>=8.0.0
+#   vmware sensors (the vmware/ module ships in this package):
+pyvmomi>=8.0.0
 #
 # snmp sensors need the net-snmp `snmpget` BINARY on this host (not pip):
 #   Debian/Ubuntu: apt install snmp     RHEL/Rocky: dnf install net-snmp-utils

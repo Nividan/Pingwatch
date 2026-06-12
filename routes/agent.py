@@ -54,6 +54,97 @@ def _probe_lock(probe_id: str) -> threading.Lock:
         return lk
 
 
+# ── Device-scan waiters ───────────────────────────────────────────
+# The per-device service scan (Devices → Scan) is a synchronous UX: the
+# browser POSTs and waits for the service list. When the device routes to a
+# remote probe, the scan becomes an agent task — these waiters let the HTTP
+# handler thread block until the agent posts the result (or a timeout).
+_DEVSCAN_WAITERS: dict = {}      # task_id → {"evt", "rows", "error"}
+_DEVSCAN_LOCK = threading.Lock()
+
+# Service rows a probe may return for a device scan — mirror of the stypes
+# central's own scan can produce (routes/devices.py _SCAN_TARGETS).
+_DEVSCAN_STYPES = frozenset({"ping", "tcp", "http", "tls", "banner"})
+
+
+def _devscan_complete(task_id: int, rows, error: str = ""):
+    """Hand a finished device-scan result to whoever is waiting on it."""
+    with _DEVSCAN_LOCK:
+        w = _DEVSCAN_WAITERS.get(task_id)
+        if not w:
+            return
+        if rows:
+            w["rows"].extend(rows)
+        if error:
+            w["error"] = error
+        w["evt"].set()
+
+
+def run_remote_device_scan(probe: dict, host: str, targets: list,
+                           created_by: str, timeout: float = 25.0) -> tuple:
+    """Run a device service scan on a remote probe and wait for the result.
+
+    Creates a device_scan agent task (picked up at the next ~10s checkin),
+    blocks the calling handler thread until the agent uploads the service
+    list, and returns (services, ""). On failure returns (None, reason).
+    The scan-port targets ride in the payload so the agent honors the
+    server's scan_ports setting without having settings access.
+    """
+    from db.probes import db_create_task
+    pid = probe["probe_id"]
+    payload = {"host": str(host)[:253],
+               "targets": [{"name": str(t.get("name") or "")[:64],
+                            "stype": str(t.get("stype") or ""),
+                            "port": t.get("port"),
+                            "tout": t.get("tout", 2)} for t in targets[:64]]}
+    tid = db_create_task(pid, "device_scan", json.dumps(payload), created_by)
+    if not tid:
+        return None, "could not queue the scan task"
+    evt = threading.Event()
+    with _DEVSCAN_LOCK:
+        _DEVSCAN_WAITERS[tid] = {"evt": evt, "rows": [], "error": ""}
+    try:
+        if not evt.wait(timeout=timeout):
+            # Cancel so the agent drops it (cancelled_tasks rides the next
+            # checkin) and a late upload gets a clean 409 instead of a waiter.
+            db_set_task_state(tid, "cancelled")
+            log_probes.warning(
+                f"device_scan task {tid} on {probe.get('name')} ({pid}) timed "
+                f"out after {timeout:.0f}s (host={host})")
+            return None, (f"Probe '{probe.get('name')}' did not return scan "
+                          f"results within {timeout:.0f}s — it may be busy or "
+                          "reconnecting. Try again, or check the Probes page.")
+        with _DEVSCAN_LOCK:
+            w = _DEVSCAN_WAITERS.get(tid) or {}
+        if w.get("error"):
+            return None, str(w["error"])
+        # Sanitize: the probe is trusted-ish, but keep the same shape and
+        # bounds central's local scan produces.
+        services = []
+        for r in w.get("rows", [])[:64]:
+            if not isinstance(r, dict):
+                continue
+            stype = str(r.get("stype") or "")
+            if stype not in _DEVSCAN_STYPES:
+                continue
+            port = r.get("port")
+            if port is not None:
+                try: port = int(port)
+                except (TypeError, ValueError): port = None
+            ms = r.get("ms")
+            if ms is not None:
+                try: ms = float(ms)
+                except (TypeError, ValueError): ms = None
+            services.append({"stype": stype,
+                             "name": str(r.get("name") or stype)[:64],
+                             "port": port, "ms": ms,
+                             "detail": str(r.get("detail") or "")[:512]})
+        return services, ""
+    finally:
+        with _DEVSCAN_LOCK:
+            _DEVSCAN_WAITERS.pop(tid, None)
+
+
 # ── Enroll rate limiting (per IP, mirrors the login limiter) ─────
 _ENROLL_LOCK = threading.Lock()
 _ENROLL_LOG: dict = {}     # ip → [timestamp, ...]
@@ -206,7 +297,16 @@ def _apply_task_progress(probe: dict, tasks: list):
         elif st == "error" and task["state"] not in ("done", "error", "cancelled"):
             err = str(t.get("error") or "task failed")[:512]
             db_set_task_state(tid, "error", error=err)
-            _scan_error(task, err)
+            if task.get("task_type") == "device_scan":
+                # An agent predating device_scan reports "unsupported task" —
+                # translate so the scan modal explains the fix.
+                if "unsupported task" in err:
+                    err = (f"The agent on this probe is too old for remote "
+                           f"device scans — download a fresh package from "
+                           f"the Probes page and re-run install.")
+                _devscan_complete(tid, None, err)
+            else:
+                _scan_error(task, err)
 
 
 def _scan_progress(task: dict, prog: dict):
@@ -377,6 +477,21 @@ def handle(h, method, path, body) -> bool:
             return True
         done  = bool(body.get("done"))
         error = str(body.get("error") or "")[:512]
+        # Device scans bypass the _SCANS registry — their result goes
+        # straight to the handler thread waiting in run_remote_device_scan.
+        if task.get("task_type") == "device_scan":
+            with _DEVSCAN_LOCK:
+                w = _DEVSCAN_WAITERS.get(tid)
+                if w and rows:
+                    w["rows"].extend(rows[:64])
+            if done or error:
+                db_set_task_state(tid, "error" if error else "done",
+                                  error=error)
+                _devscan_complete(tid, None, error)
+            elif task["state"] != "running":
+                db_set_task_state(tid, "running")
+            h._json(200, {"ok": True})
+            return True
         try:
             payload = json.loads(task.get("payload") or "{}")
         except Exception:

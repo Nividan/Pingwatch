@@ -20,11 +20,14 @@ sudo bash install.sh
 Installs to `/opt/pingwatch-agent` and registers the
 `pingwatch-agent` systemd service (auto-restart, starts at boot).
 When run in a terminal it detects missing optional capabilities
-(`snmpget` for SNMP sensors, paramiko for SSH/SFTP) and offers to
-install them. For unattended installs use flags instead of prompts:
+(`snmpget` for SNMP sensors, paramiko for SSH/SFTP, pyvmomi for
+VMware) and offers to install them — default answer Yes, so pressing
+Enter through the prompts gives the probe every sensor capability.
+For unattended installs use flags instead of prompts:
 
 ```bash
-sudo bash install.sh --all-optional     # or --with-snmp / --with-ssh / --no-optional
+sudo bash install.sh --all-optional
+# or pick: --with-snmp / --with-ssh / --with-vmware / --no-optional
 ```
 
 Re-running the installer later is safe — e.g. `--with-ssh` once SSH
@@ -37,8 +40,9 @@ install.bat
 ```
 
 Registers a Scheduled Task `PingWatchAgent` that runs at boot as SYSTEM.
-Offers to `pip install paramiko` for SSH/SFTP sensors; SNMP needs the
-net-snmp `snmpget.exe` installed manually (the installer points there).
+Offers to `pip install paramiko` (SSH/SFTP sensors) and `pyvmomi`
+(VMware sensors); SNMP needs the net-snmp `snmpget.exe` installed
+manually (the installer points there).
 
 **Manual / test run**
 
@@ -101,13 +105,14 @@ enrollment token (Probes page → Re-enroll), paste it into `config.json` as
 |--------------|-------------------------------------------------------|
 | snmp         | `snmpget` binary (net-snmp)                            |
 | ssh / sftp   | paramiko                                               |
-| vmware       | `pip install pyvmomi` (+ vmware/ package from server)  |
+| vmware       | pyvmomi (the vmware/ module already ships in this zip) |
 
-The installers offer snmp/ssh automatically (see above); vmware stays
-manual. Everything else is Python 3.8+ stdlib. A declined or missing
-capability is never fatal — those sensors just report *"capability
-missing on probe"* until it's added (no agent restart needed; the
-capability chips on the server's Probes page update within ~5 minutes).
+The installers detect and offer all of these (Windows can't script the
+net-snmp install, so snmpget stays a pointer there). Everything else is
+Python 3.8+ stdlib. A declined or missing capability is never fatal —
+those sensors just report *"capability missing on probe"* until it's
+added (no agent restart needed; the capability chips on the server's
+Probes page update within ~5 minutes).
 
 ## Files
 
