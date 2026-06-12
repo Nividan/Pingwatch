@@ -22,9 +22,7 @@ async function openEditGroup(groupName) {
           </div>
           <div class="meg-sec">
             <div class="meg-h">Site</div>
-            <input type="text" id="eg-site" list="eg-site-dl"
-                   placeholder="(loading…)" autocomplete="off"/>
-            <datalist id="eg-site-dl"></datalist>
+            ${siteComboHtml('eg-site', '', '(loading…)')}
             <div class="fh" id="eg-site-hint">Applies to every device in this group.</div>
           </div>
         </div>
@@ -253,10 +251,7 @@ async function _loadGroupSiteState(groupName) {
   input.value = initial;
   input.dataset.initial = initial;
   input.placeholder = 'HQ, DR-Site-2…';
-  // Populate the datalist from /api/sites (UNION of IPAM + devices).
-  if (typeof _populateSiteDatalist === 'function') {
-    _populateSiteDatalist('eg-site-dl');
-  }
+  // Site options come from the shared site combobox (one /api/sites list).
 }
 
 async function _loadGroupMuteState(groupName){

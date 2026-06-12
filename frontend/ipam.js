@@ -1304,8 +1304,7 @@ function _ipamOpenAddSubnet() {
         </div>
         <div class="fr">
           <label class="fl">Site / zone <span style="color:var(--text3);font-size:10px">(optional — groups the sidebar)</span></label>
-          <input type="text" id="ipam-add-site" placeholder="e.g. NYC, DC1, HQ" list="ipam-site-options" autocomplete="off" maxlength="40"/>
-          <datalist id="ipam-site-options">${_ipamSiteDatalist()}</datalist>
+          ${siteComboHtml('ipam-add-site', '', 'e.g. NYC, DC1, HQ')}
         </div>
         <div class="fr">
           <label class="fl">VLAN ID <span style="color:var(--text3);font-size:10px">(optional — 1..4094, leave blank for untagged)</span></label>
@@ -1329,16 +1328,6 @@ function _ipamOpenAddSubnet() {
     if (e.key === 'Enter') _ipamSaveSubnet();
   });
   setTimeout(() => o.querySelector('#ipam-add-cidr').focus(), 50);
-}
-
-// Build a <datalist> body of existing site values for autocomplete in the
-// Add / Edit modals. De-duplicates and sorts.
-function _ipamSiteDatalist() {
-  const set = new Set();
-  for (const s of (_ipamSubnets || [])) {
-    if (s.site) set.add(s.site);
-  }
-  return [...set].sort().map(v => `<option value="${esc(v)}"></option>`).join('');
 }
 
 async function _ipamSaveSubnet() {
@@ -1411,10 +1400,7 @@ function _ipamOpenEdit() {
           </div>
           <div class="fr">
             <label class="fl">Site / zone <span class="fh" style="margin-left:6px">(groups the sidebar)</span></label>
-            <input type="text" id="ipam-edit-site" value="${esc(sub.site||'')}"
-                   placeholder="e.g. NYC, DC1, HQ" list="ipam-site-options"
-                   autocomplete="off" maxlength="40"/>
-            <datalist id="ipam-site-options">${_ipamSiteDatalist()}</datalist>
+            ${siteComboHtml('ipam-edit-site', sub.site||'', 'e.g. NYC, DC1, HQ')}
           </div>
           <div class="fr">
             <label class="fl">VLAN ID <span class="fh" style="margin-left:6px">(optional — 1..4094)</span></label>

@@ -755,6 +755,7 @@ body.pw-select-mode .grp-sel-cb{display:inline-flex;}
   font-size:13px;
 }
 .bulk-move input:focus{outline:none;border-color:var(--accent);}
+.bulk-move .site-combo{min-width:240px;}
 .bulk-ops{display:flex;gap:6px;}
 .bulk-danger{color:var(--down);}
 .bulk-danger:hover{background:rgba(248,81,73,.14);color:var(--down);}
@@ -5612,3 +5613,28 @@ label.toggle input:checked + .tsl:before{transform:translateX(18px);background:#
              letter-spacing:.5px;padding:0 4px;margin-left:4px;
              border-radius:4px;color:var(--down);background:var(--down-bg);
              border:1px solid var(--down-border);}
+
+/* ── Site combobox (real dropdown of all sites; free-text still allowed) ──
+   Replaces the native <datalist> in the subnet / device / group editors.
+   The panel is position:fixed (set by JS) so it escapes modal overflow and
+   never clips. Theme-driven via CSS vars (dark + light). */
+.site-combo{position:relative;}
+.site-combo .site-combo-input{width:100%;padding-right:30px;}
+.site-combo-arrow{position:absolute;top:1px;right:1px;bottom:1px;width:28px;
+                  display:flex;align-items:center;justify-content:center;
+                  background:transparent;border:none;color:var(--text3);
+                  cursor:pointer;border-radius:0 6px 6px 0;}
+.site-combo-arrow:hover{color:var(--text);}
+.site-combo.open .site-combo-arrow{color:var(--accent);}
+.site-combo-panel{position:fixed;z-index:100050;max-height:240px;overflow-y:auto;
+                  background:var(--panel-bg-strong,var(--bg2));
+                  border:1px solid var(--border2);border-radius:8px;
+                  box-shadow:0 14px 36px rgba(0,0,0,.55),0 0 0 1px rgba(255,255,255,.03);
+                  padding:4px;backdrop-filter:blur(8px);}
+.site-combo-item{padding:7px 10px;font-size:13px;color:var(--text);cursor:pointer;
+                 border-radius:5px;white-space:nowrap;overflow:hidden;
+                 text-overflow:ellipsis;}
+.site-combo-item:hover,.site-combo-item.active{
+                 background:var(--accent-glow,rgba(47,129,247,.15));color:var(--text);}
+.site-combo-clear{color:var(--text3);}
+.site-combo-new{color:var(--accent);font-weight:500;}

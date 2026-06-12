@@ -309,17 +309,7 @@ function _updateBulkBar(){
     const groups = [...new Set(Object.values(S.devices).map(d => d.group || 'Default Group'))].sort();
     list.innerHTML = groups.map(g => `<option value="${esc(g)}"></option>`).join('');
   }
-  // Site datalist — fetched from /api/sites (UNION of IPAM + devices).
-  // Falls back to in-memory devices list on fetch failure.
-  const siteList = document.getElementById('bulkSiteList');
-  if (siteList){
-    if (typeof _populateSiteDatalist === 'function') {
-      _populateSiteDatalist('bulkSiteList');
-    } else {
-      const sites = [...new Set(Object.values(S.devices).map(d => d.site).filter(Boolean))].sort();
-      siteList.innerHTML = sites.map(s => `<option value="${esc(s)}"></option>`).join('');
-    }
-  }
+  // Site options come from the shared site combobox (one /api/sites list).
 }
 
 async function _bulkApplyMove(){
@@ -1522,8 +1512,7 @@ function openAddGroup(siteName){
       <div class="alrt-section">
         <div class="alrt-section-hdr">Site</div>
         <div class="fr">
-          <input type="text" id="ag-site" list="ag-site-dl" placeholder="HQ, DR-Site-2…" autocomplete="off"/>
-          <datalist id="ag-site-dl"></datalist>
+          ${siteComboHtml('ag-site', '', 'HQ, DR-Site-2…')}
           <div class="fh">
             Where the empty group section will live in the sidebar. Leave blank for Unsited.
             Future devices added to this group will not auto-inherit this — set per-device on Add Device.
@@ -1560,8 +1549,6 @@ function openAddGroup(siteName){
     </div>
   </div>`;
   document.body.appendChild(o);
-  // Populate the Site datalist from /api/sites (UNION of IPAM + devices)
-  if (typeof _populateSiteDatalist === 'function') _populateSiteDatalist('ag-site-dl');
   setTimeout(()=>{
     if(siteName){
       const sf=document.getElementById('ag-site');

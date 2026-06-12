@@ -135,3 +135,144 @@ window.addEventListener('resize',()=>{
     const info=S.charts[k];if(info)drawSpk(k,S.sensors[k]?.history||[]);
   });
 });
+
+/* ── Site combobox ────────────────────────────────────────────────────────
+   A real click-to-pick dropdown of ALL sites that still allows typing a new
+   site name (sites are free-text). Replaces the native <datalist> used by the
+   subnet / device / group editors — datalists filter-as-you-type and don't
+   show every option reliably. Drop in via siteComboHtml(id, current, ph): the
+   inner <input> keeps the given id, so existing `getElementById(id).value`
+   read paths are unchanged. Sites come from /api/sites (the full union the
+   sidebar uses), cached for 60s. Self-wires through document-level delegation
+   — no per-form init call. */
+(function(){
+  let _open = null;          // currently open .site-combo element (or null)
+  let _sites = null;         // cached site list
+  let _sitesAt = 0;
+
+  async function _ensureSites(){
+    if (_sites && (Date.now() - _sitesAt) < 60000) return _sites;
+    try {
+      const r = await fetch('/api/sites', { credentials: 'same-origin' });
+      if (r.ok) { _sites = ((await r.json()).sites || []).filter(Boolean); _sitesAt = Date.now(); }
+    } catch (_) { /* keep stale/empty */ }
+    return _sites || [];
+  }
+  // Let callers drop the cache after creating a new site so it shows up at once.
+  window._siteComboInvalidate = function(){ _sites = null; };
+
+  const _inp   = c => c.querySelector('.site-combo-input');
+  const _panel = c => c.querySelector('.site-combo-panel');
+
+  function _render(c){
+    const inp = _inp(c), panel = _panel(c);
+    const q = (inp.value || '').trim().toLowerCase();
+    const all = _sites || [];
+    const matches = q ? all.filter(s => s.toLowerCase().includes(q)) : all;
+    let html = '<div class="site-combo-item site-combo-clear" data-val="">— No site —</div>';
+    html += matches.map(s =>
+      `<div class="site-combo-item" data-val="${esc(s)}">${esc(s)}</div>`).join('');
+    // Offer to use a brand-new value when the typed text isn't an exact match.
+    if (q && !all.some(s => s.toLowerCase() === q)) {
+      const v = inp.value.trim();
+      html += `<div class="site-combo-item site-combo-new" data-val="${esc(v)}">➕ Use “${esc(v)}”</div>`;
+    }
+    panel.innerHTML = html;
+  }
+
+  function _position(c){
+    const r = _inp(c).getBoundingClientRect(), panel = _panel(c);
+    panel.style.left  = r.left + 'px';
+    panel.style.width = r.width + 'px';
+    const below = window.innerHeight - r.bottom;
+    const ph = Math.min(panel.scrollHeight, 240);
+    if (below < ph + 8 && r.top > below) {           // flip up when cramped
+      panel.style.top = ''; panel.style.bottom = (window.innerHeight - r.top + 4) + 'px';
+    } else {
+      panel.style.bottom = ''; panel.style.top = (r.bottom + 4) + 'px';
+    }
+  }
+
+  async function _openCombo(c){
+    if (_open && _open !== c) _closeCombo(_open);
+    _open = c;
+    await _ensureSites();
+    if (_open !== c || !document.contains(c)) return;   // raced/closed
+    _render(c);
+    _panel(c).hidden = false;
+    c.classList.add('open');
+    _position(c);
+  }
+  function _closeCombo(c){
+    if (!c) return;
+    _panel(c).hidden = true;
+    c.classList.remove('open');
+    if (_open === c) _open = null;
+  }
+
+  function _reposition(){
+    if (_open && !document.contains(_open)) { _open = null; return; }
+    if (_open) _position(_open);
+  }
+  window.addEventListener('scroll', _reposition, true);
+  window.addEventListener('resize', _reposition);
+
+  document.addEventListener('focusin', e => {
+    const t = e.target;
+    if (t.classList && t.classList.contains('site-combo-input'))
+      _openCombo(t.closest('.site-combo'));
+  });
+  document.addEventListener('input', e => {
+    const t = e.target;
+    if (t.classList && t.classList.contains('site-combo-input')) {
+      const c = t.closest('.site-combo');
+      if (c.classList.contains('open')) _render(c); else _openCombo(c);
+    }
+  });
+  document.addEventListener('mousedown', e => {
+    const arrow = e.target.closest && e.target.closest('.site-combo-arrow');
+    if (arrow) {                       // toggle without stealing focus first
+      e.preventDefault();
+      const c = arrow.closest('.site-combo');
+      if (c.classList.contains('open')) _closeCombo(c);
+      else { _inp(c).focus(); _openCombo(c); }
+      return;
+    }
+    const item = e.target.closest && e.target.closest('.site-combo-item');
+    if (item) {
+      e.preventDefault();              // keep focus, don't blur-close mid-pick
+      const c = item.closest('.site-combo'), inp = _inp(c);
+      inp.value = item.dataset.val || '';
+      inp.dispatchEvent(new Event('change', { bubbles: true }));
+      _closeCombo(c);
+      return;
+    }
+    if (_open && !(e.target.closest && e.target.closest('.site-combo'))) _closeCombo(_open);
+  });
+  document.addEventListener('keydown', e => {
+    if (!_open) return;
+    const panel = _panel(_open);
+    if (e.key === 'Escape') { _closeCombo(_open); return; }
+    const items = [...panel.querySelectorAll('.site-combo-item')];
+    if (!items.length) return;
+    let i = items.findIndex(x => x.classList.contains('active'));
+    if (e.key === 'ArrowDown')      { e.preventDefault(); i = Math.min(items.length - 1, i + 1); }
+    else if (e.key === 'ArrowUp')   { e.preventDefault(); i = Math.max(0, i - 1); }
+    else if (e.key === 'Enter')     { if (i >= 0) { e.preventDefault(); items[i].dispatchEvent(new MouseEvent('mousedown', {bubbles:true})); } return; }
+    else return;
+    items.forEach(x => x.classList.remove('active'));
+    items[i].classList.add('active');
+    items[i].scrollIntoView({ block: 'nearest' });
+  });
+
+  window.siteComboHtml = function(id, current, placeholder){
+    return '<div class="site-combo" data-site-combo>'
+      + '<input type="text" id="' + esc(id) + '" class="site-combo-input" autocomplete="off" '
+      + 'maxlength="60" value="' + esc(current || '') + '" placeholder="'
+      + esc(placeholder || 'e.g. NYC, DC1, HQ') + '"/>'
+      + '<button type="button" class="site-combo-arrow" tabindex="-1" aria-label="Show sites">'
+      + '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" '
+      + 'stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>'
+      + '</button><div class="site-combo-panel" hidden></div></div>';
+  };
+})();

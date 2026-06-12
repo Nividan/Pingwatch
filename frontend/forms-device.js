@@ -13,8 +13,7 @@ function openAddDevice(){
         <div class="fr"><label class="fl">Host / IP Address</label>
           <input type="text" id="ad-h" placeholder="192.168.1.1" autocomplete="off"/></div>
         <div class="fr"><label class="fl">Site <span style="color:var(--text3);font-weight:400;font-size:11px">(optional)</span></label>
-          <input type="text" id="ad-site" list="ad-site-dl" placeholder="HQ, DR-Site-2…" autocomplete="off"/>
-          <datalist id="ad-site-dl"></datalist></div>
+          ${siteComboHtml('ad-site', '', 'HQ, DR-Site-2…')}</div>
       </div>
       <div class="fr"><label class="fl">Group</label>
         <input type="text" id="ad-g" placeholder="Default Group" autocomplete="off"/></div>
@@ -70,7 +69,6 @@ function openAddDevice(){
   document.body.appendChild(o);
   setTimeout(()=>document.getElementById('ad-n')?.focus(),50);
   ['ad-n','ad-h'].forEach(id=>document.getElementById(id)?.addEventListener('keydown',e=>{if(e.key==='Enter')submitAddDevice()}));
-  _populateSiteDatalist('ad-site-dl');
 }
 
 // Populate a <datalist> with sites from /api/sites. Used by the add/edit
@@ -243,9 +241,7 @@ function openEditDevice(did){
           </div>
           <div class="fr">
             <label class="fl">Site <span style="color:var(--text3);font-weight:400;font-size:11px">(optional)</span></label>
-            <input type="text" id="ed-site" value="${esc(dev.site||'')}" list="ed-site-dl"
-                   placeholder="HQ, DR-Site-2…" autocomplete="off"/>
-            <datalist id="ed-site-dl"></datalist>
+            ${siteComboHtml('ed-site', dev.site||'', 'HQ, DR-Site-2…')}
           </div>
         </div>
         <div class="fgrid">
@@ -388,7 +384,6 @@ function openEditDevice(did){
     })
   );
   document.getElementById('ed-g')?.addEventListener('blur', () => setTimeout(_edgHide, 150));
-  _populateSiteDatalist('ed-site-dl');
   _edSipRender();
   _edParentInit(did);
   _edLicLoad(did);
