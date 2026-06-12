@@ -211,71 +211,117 @@ def _make_ssl_ctx(verify_ssl):
     return ctx
 
 
+# Per-(host,user) reconnect locks — single-flight session creation. When a
+# session expires or fails its health check, exactly ONE thread rebuilds it
+# under this lock while every other probe to the same vCenter waits and reuses
+# the result. Without it, all N sensors targeting a vCenter reconnect at once
+# on the 25-min TTL boundary, and each publish Disconnect()s the previous
+# winner's session — including one a sibling probe is mid-SOAP-call on, which
+# surfaces as vim.fault.NotAuthenticated. Per-key (not global) so a slow login
+# to one vCenter never blocks probes to another.
+_connect_locks = {}
+_connect_locks_guard = threading.Lock()
+
+
+def _connect_lock_for(key):
+    with _connect_locks_guard:
+        lk = _connect_locks.get(key)
+        if lk is None:
+            lk = threading.Lock()
+            _connect_locks[key] = lk
+        return lk
+
+
+def _healthy_cached(entry, now):
+    """Return the ServiceInstance from a cache entry if it's unexpired and
+    answers a cheap authenticated call within the health-check timeout, else
+    None. The check is a network round-trip — callers run it outside every
+    lock so one hung-but-reachable vCenter can't stall probes to others."""
+    if entry is None:
+        return None
+    si, expiry = entry
+    if now >= expiry:
+        return None
+    try:
+        with _socket_timeout(_HEALTH_CHECK_TIMEOUT_S):
+            si.CurrentTime()
+        return si
+    except Exception:
+        return None
+
+
 def _get_session(host, user, password, port=443, verify_ssl=False):
     """Return a cached or fresh ServiceInstance.
 
-    Every ServiceInstance we stop using is Disconnect()-ed — pyVmomi holds an
-    HTTPS connection AND a server-side vCenter session per instance, and
-    vCenter caps concurrent sessions. Dropping a reference without Disconnect()
-    leaked one session every TTL (25 min) until vCenter locked everyone out.
+    Concurrency model — single-flight per (host, user):
+      * A healthy cached session is validated and returned WITHOUT any lock —
+        the health check is a network round-trip, and serialising it would let
+        one slow vCenter stall probes to every other vCenter.
+      * When the session is expired or unhealthy, exactly ONE thread rebuilds
+        it under a per-key connect lock while every sibling probe waits and
+        reuses the result — no login storm, no Disconnect() of an in-flight
+        session (the NotAuthenticated cascade).
+
+    Every ServiceInstance we stop using is Disconnect()-ed (deferred by a grace
+    delay — see _disconnect_later) — pyVmomi holds an HTTPS connection AND a
+    server-side vCenter session per instance, and vCenter caps concurrent
+    sessions. Dropping a reference without Disconnect() leaked one session
+    every TTL (25 min) until vCenter locked everyone out.
     """
     SmartConnect, Disconnect, vim, vmodl = _require_pyvmomi()
 
     key = (host, user)
-    now = time.monotonic()
 
-    # Read the cached entry under the lock, then validate it OUTSIDE the lock.
-    # The health check is a network round-trip; running it under the global
-    # _sessions_lock meant one hung-but-reachable vCenter stalled probes for
-    # every other vCenter behind the lock.
+    # ── Fast path: a healthy cached session, validated outside every lock ──
     with _sessions_lock:
         entry = _sessions.get(key)
-    if entry is not None:
-        si, expiry = entry
-        if now < expiry:
-            try:
-                with _socket_timeout(_HEALTH_CHECK_TIMEOUT_S):
-                    si.CurrentTime()
-                return si
-            except Exception:
-                pass   # stale — fall through to reconnect + Disconnect old
-        # Expired or failed health check: drop it from the cache and
-        # Disconnect (only if no other thread already replaced it).
+    si = _healthy_cached(entry, time.monotonic())
+    if si is not None:
+        return si
+
+    # ── Slow path: (re)connect under the per-key lock (single-flight) ──
+    with _connect_lock_for(key):
+        # Another thread may have rebuilt the session while we waited on the
+        # lock — re-check before logging in again.
         with _sessions_lock:
-            if _sessions.get(key) is entry:
-                del _sessions[key]
-                _disconnect_quietly(Disconnect, si)
+            entry = _sessions.get(key)
+        si = _healthy_cached(entry, time.monotonic())
+        if si is not None:
+            return si
 
-    # Create new connection (outside lock — may block on network)
-    ctx = _make_ssl_ctx(verify_ssl)
-    try:
-        with _socket_timeout(60):          # cap SmartConnect at 60s
-            si = SmartConnect(
-                host=host, user=user, pwd=password,
-                port=int(port), sslContext=ctx
-            )
-    except Exception as e:
-        err = str(e)
-        if "incorrect user name or password" in err.lower() or "InvalidLogin" in err:
-            raise PermissionError("Authentication failed")
-        if "ssl" in err.lower() or "certificate" in err.lower():
-            raise ConnectionError("SSL error — try disabling Verify SSL")
-        if isinstance(e, socket.timeout) or "timed out" in err.lower():
-            raise ConnectionError("Connection timed out (60s) — check vCenter/ESXi host is reachable")
-        raise ConnectionError(f"Connection failed: {err}")
+        # Evict the dead/expired session and close it after a grace delay, so a
+        # probe that grabbed it just before expiry finishes its SOAP call first
+        # (probes are hard-capped near 60s) instead of being yanked mid-flight.
+        with _sessions_lock:
+            old = _sessions.pop(key, None)
+        if old is not None:
+            _disconnect_later(Disconnect, old[0])
 
-    # Warm the heavy server-side caches before the session is used, so the
-    # first probe doesn't race a cold perfManager/inventory. Best-effort.
-    _warm_session(si)
+        # Create new connection (still under the per-key lock — siblings wait).
+        ctx = _make_ssl_ctx(verify_ssl)
+        try:
+            with _socket_timeout(60):          # cap SmartConnect at 60s
+                si = SmartConnect(
+                    host=host, user=user, pwd=password,
+                    port=int(port), sslContext=ctx
+                )
+        except Exception as e:
+            err = str(e)
+            if "incorrect user name or password" in err.lower() or "InvalidLogin" in err:
+                raise PermissionError("Authentication failed")
+            if "ssl" in err.lower() or "certificate" in err.lower():
+                raise ConnectionError("SSL error — try disabling Verify SSL")
+            if isinstance(e, socket.timeout) or "timed out" in err.lower():
+                raise ConnectionError("Connection timed out (60s) — check vCenter/ESXi host is reachable")
+            raise ConnectionError(f"Connection failed: {err}")
 
-    # Publish the new session. If another thread raced us and already cached
-    # one, Disconnect the loser so it doesn't leak.
-    with _sessions_lock:
-        prev = _sessions.get(key)
-        _sessions[key] = (si, now + _SESSION_TTL)
-    if prev is not None:
-        _disconnect_quietly(Disconnect, prev[0])
-    return si
+        # Warm the heavy server-side caches before the session is published, so
+        # the first probe doesn't race a cold perfManager/inventory. Best-effort.
+        _warm_session(si)
+
+        with _sessions_lock:
+            _sessions[key] = (si, time.monotonic() + _SESSION_TTL)
+        return si
 
 
 def _warm_session(si) -> None:
@@ -306,6 +352,19 @@ def _disconnect_quietly(Disconnect, si) -> None:
         Disconnect(si)
     except Exception:
         pass
+
+
+def _disconnect_later(Disconnect, si, delay=65) -> None:
+    """Disconnect a superseded session after a grace delay so a probe that
+    grabbed it just before expiry can finish its in-flight SOAP call first —
+    probes are hard-capped near 60s (see vmware_probe). Closing it immediately
+    would yank the session mid-call and surface as vim.fault.NotAuthenticated.
+    Still bounded — the session is closed ~delay seconds later, so vCenter's
+    concurrent-session cap isn't leaked. Daemon thread: dies with the process."""
+    def _later():
+        time.sleep(delay)
+        _disconnect_quietly(Disconnect, si)
+    threading.Thread(target=_later, daemon=True, name="pw-vmdisc-close").start()
 
 
 def _invalidate_session(host, user):
