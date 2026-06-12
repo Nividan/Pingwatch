@@ -139,6 +139,18 @@ class ServerClient:
         self.host = u.hostname
         self.port = u.port or (443 if self.scheme == "https" else 80)
         self.pin = (cfg.get("server_cert_sha256") or "").strip()
+        # Private-CA support: a PEM file (path relative to the agent folder)
+        # used as the trust root instead of the system store — drop your
+        # internal CA next to config.json, no root / system-store changes.
+        # Precedence: pin > ca file > system CAs. Full CA + hostname
+        # verification still applies with a ca file.
+        self.ca_file = (cfg.get("server_ca_file") or "").strip()
+        if self.ca_file and not os.path.isabs(self.ca_file):
+            self.ca_file = os.path.join(BASE_DIR, self.ca_file)
+        if self.ca_file and not os.path.exists(self.ca_file):
+            log.error("server_ca_file not found: %s — falling back to system CAs",
+                      self.ca_file)
+            self.ca_file = ""
         self.timeout = 20
 
     def request(self, method, path, body=None, token=None):
@@ -148,9 +160,19 @@ class ServerClient:
                 conn = PinnedHTTPSConnection(self.host, self.port, self.pin,
                                              self.timeout)
             else:
+                # ca_file is ADDITIVE: system CAs keep working (publicly
+                # trusted proxy certs) and the bundled private CAs / server
+                # cert are trusted on top — mirrors the server's
+                # apply_trusted_cas() semantics.
+                ctx = ssl.create_default_context()
+                if self.ca_file:
+                    try:
+                        ctx.load_verify_locations(cafile=self.ca_file)
+                    except Exception as e:
+                        log.error("failed to load server_ca_file %s: %s",
+                                  self.ca_file, e)
                 conn = http.client.HTTPSConnection(
-                    self.host, self.port, timeout=self.timeout,
-                    context=ssl.create_default_context())
+                    self.host, self.port, timeout=self.timeout, context=ctx)
         else:
             conn = http.client.HTTPConnection(self.host, self.port,
                                               timeout=self.timeout)
@@ -710,10 +732,12 @@ class Agent:
 
     # ── Main loop ────────────────────────────────────────────────
     def run(self):
-        log.info("PingWatch agent %s starting (probe=%s, server=%s, pin=%s)",
+        log.info("PingWatch agent %s starting (probe=%s, server=%s, verify=%s)",
                  AGENT_VERSION, self.cfg.get("probe_name") or self.cfg.get("probe_id"),
                  self.cfg.get("server_url"),
-                 "yes" if self.client.pin else "no")
+                 "pin" if self.client.pin
+                 else f"ca-file:{os.path.basename(self.client.ca_file)}"
+                 if self.client.ca_file else "system-ca")
         threading.Thread(target=self._scheduler_loop, daemon=True,
                          name="pwa-sched").start()
         for key in list(self.sensors):

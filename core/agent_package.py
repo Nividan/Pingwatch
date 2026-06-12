@@ -97,20 +97,65 @@ def _behind_reverse_proxy(headers) -> bool:
     return False
 
 
+def _agent_ca_bundle() -> tuple:
+    """(pem_bundle, has_custom_ca) for the agent's ca.pem.
+
+    The bundle holds the admin-uploaded trusted CAs (Settings → TLS →
+    Trusted CA certificates — the same store sensors use to verify internal
+    endpoints) plus PingWatch's own active certificate, so the agent
+    validates the server whether it terminates TLS itself (self-signed) or
+    sits behind a private-CA-issued front. Loaded ADDITIVELY on the agent —
+    system CAs keep working for publicly-trusted proxies.
+    """
+    parts = []
+    has_custom_ca = False
+    try:
+        from core.ssl_trust import get_trusted_ca_pem
+        blob = get_trusted_ca_pem()
+        if blob and blob.strip():
+            parts.append(blob.strip())
+            has_custom_ca = True
+    except Exception as e:
+        log.warning(f"agent package: trusted-CA store unavailable: {e}")
+    try:
+        import core.settings as _settings
+        cert_pem = _settings.get("tls_cert_pem", "") or ""
+        if not cert_pem:
+            from core.config import CERTS_DIR
+            _p = os.path.join(str(CERTS_DIR), "cert.pem")
+            if os.path.exists(_p):
+                with open(_p, "r", encoding="utf-8") as f:
+                    cert_pem = f.read()
+        if cert_pem.strip():
+            parts.append(cert_pem.strip())
+    except Exception as e:
+        log.warning(f"agent package: own cert unavailable for ca bundle: {e}")
+    return (("\n".join(parts) + "\n") if parts else ""), has_custom_ca
+
+
 def build_agent_package(probe: dict, enrollment_token: str,
                         host_header: str = "",
                         request_headers=None) -> bytes:
     """Assemble the zip in memory and return its bytes."""
-    if _behind_reverse_proxy(request_headers):
+    ca_bundle, has_custom_ca = _agent_ca_bundle()
+    proxied = _behind_reverse_proxy(request_headers)
+    # Pin only in the plain direct self-signed case (it also covers IP-based
+    # server_urls that a SAN check would reject). A proxy or an uploaded
+    # private CA signals custom TLS in front — CA validation via the bundled
+    # ca.pem (+ system store) is the mode that survives renewals there.
+    if proxied or has_custom_ca:
         pin = ""
-        log.info("agent package: reverse proxy detected (X-Forwarded-* headers) "
-                 "— omitting cert pin; the agent will use CA validation")
+        log.info("agent package: %s — omitting cert pin; agent will use CA "
+                 "validation via bundled ca.pem + system store",
+                 "reverse proxy detected (X-Forwarded-* headers)" if proxied
+                 else "trusted CAs are configured")
     else:
         pin = _server_cert_fingerprint()
     cfg = {
         "server_url":         _guess_server_url(host_header),
         "enrollment_token":   enrollment_token,
         "server_cert_sha256": pin,
+        "server_ca_file":     "ca.pem" if ca_bundle else "",
         "probe_id":           probe["probe_id"],
         "probe_name":         probe.get("name") or "",
         "checkin_interval":   10,
@@ -131,6 +176,11 @@ def build_agent_package(probe: dict, enrollment_token: str,
         # Canonical copies (probes.py, radius_auth.py)
         for src, arc in _EXTRA_FILES:
             zf.write(src, prefix + arc)
+        # CA bundle — server verification AND outbound sensor TLS (the
+        # agent's ssl_trust shim reads the same file, so HTTPS/TLS sensors
+        # probed from the branch trust internal CAs exactly like central).
+        if ca_bundle:
+            zf.writestr(prefix + "ca.pem", ca_bundle)
         # Generated config — the one-time token lives only in this download
         zf.writestr(prefix + "config.json", json.dumps(cfg, indent=2) + "\n")
     return buf.getvalue()

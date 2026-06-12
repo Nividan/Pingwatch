@@ -70,9 +70,21 @@ cert they see belongs to the proxy and the pin fails. Fix in
 
 - Proxy / publicly-trusted cert → `"server_cert_sha256": ""`
   (normal CA validation; survives renewals — the right choice).
+- **Internal/private CA** (e.g. your own lab CA) → upload the CA root once
+  on the server (Settings → TLS → Trusted CA certificates): every package
+  downloaded afterwards ships it automatically as `ca.pem` with
+  `"server_ca_file": "ca.pem"` pre-set, and the pin is omitted. For an
+  already-installed agent, do the same by hand: drop the CA's PEM next to
+  config.json, set `"server_ca_file": "my-ca.pem"`, clear the pin. Full
+  certificate + hostname validation, survives server-cert renewals, no
+  system-trust-store changes needed. (The server cert must carry a
+  subjectAltName for the hostname — Python ignores CN-only certs.)
 - Self-signed cert that legitimately rotated → paste the full
   *"server presented …"* fingerprint from the error into
   `server_cert_sha256`.
+
+Verification precedence: `server_cert_sha256` (pin) → `server_ca_file` →
+system CA store.
 
 Packages downloaded through a proxy now ship with an empty pin
 automatically (the server detects `X-Forwarded-*` headers).
