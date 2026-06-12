@@ -98,6 +98,7 @@ function _ipamRenderShell() {
         <!-- Left group — always available (subnet inventory). -->
         <button class="btn primary rbac-op" onclick="_ipamOpenAddSubnet()" title="Create a new subnet">${icon('plus',13)} Add Subnet</button>
         <button class="btn rbac-op" onclick="_ipamOpenImport()" title="Bulk-import subnets from a CSV file or paste">${icon('upload',13)} Import</button>
+        <button class="btn" onclick="_ipamExportCsv(this)" title="Download every allocation across all subnets as CSV (Site, Subnet, IP, Name, DNS, Status, Licenses, Modified By, Last Modified)">${icon('download',13)} Export CSV</button>
         <span class="ipam-tb-divider" aria-hidden="true"></span>
         <!-- Right group — operate on the selected subnet. Disabled until one is picked. -->
         <button class="btn rbac-op" id="ipam-scan-btn" onclick="_ipamScanActive()" disabled title="Ping every IP in this subnet and populate the grid with the active ones (no devices created)">${icon('activity',13)} Scan hosts</button>
@@ -166,6 +167,32 @@ function _ipamLicBadge(did) {
 async function _ipamOnLicenseUpdate() {
   await _ipamLoadLicenses();
   if (_ipamSelectedId) _ipamApplyFilter(document.getElementById('ipam-search')?.value || '');
+}
+
+// ── Export every allocation (all subnets) to CSV ───────────────────────────
+// Server builds the CSV (it joins subnets + allocations + licenses across the
+// whole DB, not just the loaded subnet); we stream the blob to a download
+// using the server's Content-Disposition filename.
+async function _ipamExportCsv(btn) {
+  if (btn) btn.disabled = true;
+  try {
+    const r = await fetch('/api/ipam/export', { credentials: 'same-origin' });
+    if (r.status === 401) { if (!_loggedOut) showLogin('Session expired'); return; }
+    if (!r.ok) { toast('Export failed', 'err'); return; }
+    const blob = await r.blob();
+    const cd = r.headers.get('Content-Disposition') || '';
+    const m = cd.match(/filename="?([^"]+)"?/);
+    const fname = (m && m[1]) || 'pingwatch-ipam.csv';
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = fname;
+    document.body.appendChild(a); a.click(); a.remove();
+    URL.revokeObjectURL(url);
+  } catch (e) {
+    toast('Export failed', 'err');
+  } finally {
+    if (btn) btn.disabled = false;
+  }
 }
 
 // ── Subnet loading ─────────────────────────────────────────────────────────

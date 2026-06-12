@@ -172,6 +172,89 @@ def _now_monotonic() -> float:
     return _t.monotonic()
 
 
+def _ipam_status_label(kind: str, name: str) -> str:
+    """Human-readable allocation status, mirroring the IPAM grid badge."""
+    return {
+        'gateway':    'Gateway',
+        'reserved':   'Reserved',
+        'conflict':   'Conflict',
+        'stale':      'Stale',
+        'discovered': 'Discovered',
+    }.get((kind or '').lower(), 'Used' if (name or '').strip() else 'Free')
+
+
+def _build_ipam_csv():
+    """Assemble the IPAM export CSV — every allocation across every subnet.
+
+    Returns (utf8_bytes_with_bom, filename, row_count). Columns:
+    Site, Subnet, IP Address, Name, DNS, Status, Licenses, Modified By,
+    Last Modified. UTF-8 BOM so Excel renders non-ASCII names/sites.
+    """
+    import csv, io, datetime
+    from db.helpers import db_query
+
+    rows = [dict(r) for r in db_query(
+        'main',
+        "SELECT s.site AS site, s.cidr AS cidr, a.ip AS ip, "
+        "COALESCE(a.name,'') AS name, COALESCE(a.dns_name,'') AS dns_name, "
+        "COALESCE(a.kind,'') AS kind, COALESCE(a.modified_by,'') AS modified_by, "
+        "COALESCE(a.modified_at,0) AS modified_at, "
+        "COALESCE(a.device_id,'') AS device_id "
+        "FROM ip_allocations a JOIN ipam_subnets s ON a.subnet_id = s.id"
+    )]
+
+    # device_id → ["LicName (expiry; status)", …]. Best-effort: the table may
+    # be absent on a very old DB — an empty Licenses column is fine then.
+    lic_map = {}
+    try:
+        for _r in db_query(
+                'main',
+                "SELECT did, COALESCE(license_name,'') AS license_name, "
+                "COALESCE(expiry_date,'') AS expiry_date, "
+                "COALESCE(last_status,'') AS last_status "
+                "FROM device_licenses ORDER BY did, expiry_date"):
+            r = dict(_r)
+            label = (r['license_name'] or '').strip()
+            if not label:
+                continue
+            extra = '; '.join(p for p in (str(r['expiry_date'] or '').strip(),
+                                          str(r['last_status'] or '').strip()) if p)
+            lic_map.setdefault(r['did'], []).append(
+                f"{label} ({extra})" if extra else label)
+    except Exception as e:
+        log.warning(f"IPAM export: licenses unavailable: {e}")
+
+    def _ip_key(ip):
+        try:
+            return (0, int(ipaddress.ip_address(ip)))
+        except ValueError:
+            return (1, 0)
+    rows.sort(key=lambda r: ((r['site'] or '').lower(),
+                             (r['cidr'] or ''), _ip_key(r['ip'])))
+
+    buf = io.StringIO()
+    w = csv.writer(buf, lineterminator='\n')
+    w.writerow(['Site', 'Subnet', 'IP Address', 'Name', 'DNS', 'Status',
+                'Licenses', 'Modified By', 'Last Modified'])
+    for r in rows:
+        ma = r.get('modified_at') or 0
+        try:
+            last_mod = (datetime.datetime.utcfromtimestamp(float(ma))
+                        .strftime('%Y-%m-%d %H:%M:%S') if ma else '')
+        except (TypeError, ValueError, OSError):
+            last_mod = ''
+        w.writerow([
+            r['site'] or '', r['cidr'] or '', r['ip'] or '',
+            r['name'] or '', r['dns_name'] or '',
+            _ipam_status_label(r['kind'], r['name']),
+            '; '.join(lic_map.get(r['device_id'], [])),
+            r['modified_by'] or '', last_mod,
+        ])
+    data = (chr(0xFEFF) + buf.getvalue()).encode('utf-8')   # BOM for Excel
+    fname = f"pingwatch-ipam-{datetime.date.today().isoformat()}.csv"
+    return data, fname, len(rows)
+
+
 def handle(h, method, path, body):
     """Return True if this module handled the request, False otherwise."""
     # ── GET /api/sites ───────────────────────────────────────────
@@ -226,6 +309,25 @@ def handle(h, method, path, body):
         user, _ = h._require('viewer')
         if not user: return True
         h._json(200, {'subnets': db_list_subnets()})
+        return True
+
+    # ── GET /api/ipam/export → CSV of every allocation, all subnets ──
+    if path == '/api/ipam/export' and method == 'GET':
+        user, _ = h._require('viewer')
+        if not user: return True
+        try:
+            data, fname, n = _build_ipam_csv()
+        except Exception as e:
+            h._error(500, 'IPAM export failed', e, context='ipam_export')
+            return True
+        db_log_audit(user, h.client_address[0], 'ipam_export', f'{n} allocations')
+        h.send_response(200)
+        h.send_header('Content-Type', 'text/csv; charset=utf-8')
+        h.send_header('Content-Disposition', f'attachment; filename="{fname}"')
+        h.send_header('Content-Length', str(len(data)))
+        h.send_header('Cache-Control', 'no-store')
+        h.end_headers()
+        h.wfile.write(data)
         return True
 
     # ── GET /api/ipam/search?q=… ──────────────────────────────────

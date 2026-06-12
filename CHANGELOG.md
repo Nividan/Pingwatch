@@ -16,6 +16,10 @@ ACKing an event now marks the *live sensor*, not just the event row: its tile re
 
 The HTTP/S sensor can now warn/crit on an **approaching certificate expiry** — one sensor covers both endpoint health and cert lifetime, no separate TLS sensor needed. New per-sensor **Warn ≤ days** / **Crit ≤ days** fields (default **90 / 30** for new HTTPS sensors, off for existing ones until edited). The probe reports days-to-expiry via a bounded, best-effort TLS peek ([monitoring/probes.py](monitoring/probes.py) `_peer_cert_expiry_days`) that never turns a healthy HTTP check into a failure; the server folds cert severity into the existing threshold state as **worst-of** with latency/loss (cert only *escalates* — latency keeps attribution on a tie), so it rides the same Events/ack/resolve/alert pipeline with a *"Certificate expires in Nd"* detail. Works from remote probes too (the agent reports `cert_days`; the server owns the thresholds). Needs a verifiable cert (Verify SSL on) — a peek under CERT_NONE can't read the expiry date.
 
+### IPAM CSV export
+
+An **Export CSV** button on the IPAM page downloads every allocation across **all** subnets in one file — columns **Site, Subnet, IP Address, Name, DNS, Status, Licenses, Modified By, Last Modified**. The server ([routes/ipam.py](routes/ipam.py) `GET /api/ipam/export`) joins `ip_allocations` + `ipam_subnets` and folds in each linked device's licenses (`name (expiry; status)`), so the export is complete regardless of which subnet is loaded in the UI. Rows sort by site → subnet → numeric IP; Status mirrors the grid badge (Used / Gateway / Reserved / Discovered / …); UTF-8 BOM so Excel opens non-ASCII names cleanly. Read-only (viewer), audited as `ipam_export`.
+
 ### No more restart blips
 
 After a restart the first probe cycle used to spray DOWN events that auto-resolved one cycle later (worst with vCenter: the in-memory pyvmomi session cache is cold, so every vmware sensor's first probe raced a cold session and false-failed with "VM not found" / "metric not available"). Fixed at the source plus a safety net:
