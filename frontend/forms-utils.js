@@ -147,8 +147,22 @@ window.addEventListener('resize',()=>{
    — no per-form init call. */
 (function(){
   let _open = null;          // currently open .site-combo element (or null)
+  let _panel = null;         // single shared dropdown, portaled to <body>
   let _sites = null;         // cached site list
   let _sitesAt = 0;
+
+  // The panel lives on <body>, NOT inside the .site-combo — modals create a
+  // containing block (transform/filter) that would make position:fixed render
+  // relative to the modal instead of the viewport, throwing the dropdown off
+  // to the side. A body-level singleton + viewport coords fixes that.
+  function _ensurePanel(){
+    if (_panel) return _panel;
+    _panel = document.createElement('div');
+    _panel.className = 'site-combo-panel';
+    _panel.hidden = true;
+    document.body.appendChild(_panel);
+    return _panel;
+  }
 
   async function _ensureSites(){
     if (_sites && (Date.now() - _sitesAt) < 60000) return _sites;
@@ -161,11 +175,10 @@ window.addEventListener('resize',()=>{
   // Let callers drop the cache after creating a new site so it shows up at once.
   window._siteComboInvalidate = function(){ _sites = null; };
 
-  const _inp   = c => c.querySelector('.site-combo-input');
-  const _panel = c => c.querySelector('.site-combo-panel');
+  const _inp = c => c && c.querySelector('.site-combo-input');
 
   function _render(c){
-    const inp = _inp(c), panel = _panel(c);
+    const inp = _inp(c), panel = _ensurePanel();
     const q = (inp.value || '').trim().toLowerCase();
     const all = _sites || [];
     const matches = q ? all.filter(s => s.toLowerCase().includes(q)) : all;
@@ -180,40 +193,41 @@ window.addEventListener('resize',()=>{
     panel.innerHTML = html;
   }
 
-  function _position(c){
-    const r = _inp(c).getBoundingClientRect(), panel = _panel(c);
-    panel.style.left  = r.left + 'px';
-    panel.style.width = r.width + 'px';
+  function _position(){
+    if (!_open || !_panel) return;
+    const inp = _inp(_open);
+    if (!inp || !document.contains(inp)) { _close(); return; }
+    const r = inp.getBoundingClientRect();
+    _panel.style.left  = r.left + 'px';
+    _panel.style.width = r.width + 'px';
     const below = window.innerHeight - r.bottom;
-    const ph = Math.min(panel.scrollHeight, 240);
+    const ph = Math.min(_panel.scrollHeight, 240);
     if (below < ph + 8 && r.top > below) {           // flip up when cramped
-      panel.style.top = ''; panel.style.bottom = (window.innerHeight - r.top + 4) + 'px';
+      _panel.style.top = ''; _panel.style.bottom = (window.innerHeight - r.top + 4) + 'px';
     } else {
-      panel.style.bottom = ''; panel.style.top = (r.bottom + 4) + 'px';
+      _panel.style.bottom = ''; _panel.style.top = (r.bottom + 4) + 'px';
     }
   }
 
   async function _openCombo(c){
-    if (_open && _open !== c) _closeCombo(_open);
+    if (!c) return;
+    if (_open && _open !== c) _open.classList.remove('open');
     _open = c;
+    const panel = _ensurePanel();
     await _ensureSites();
     if (_open !== c || !document.contains(c)) return;   // raced/closed
     _render(c);
-    _panel(c).hidden = false;
+    panel.hidden = false;
     c.classList.add('open');
-    _position(c);
+    _position();
   }
-  function _closeCombo(c){
-    if (!c) return;
-    _panel(c).hidden = true;
-    c.classList.remove('open');
-    if (_open === c) _open = null;
+  function _close(){
+    if (_panel) _panel.hidden = true;
+    if (_open) _open.classList.remove('open');
+    _open = null;
   }
 
-  function _reposition(){
-    if (_open && !document.contains(_open)) { _open = null; return; }
-    if (_open) _position(_open);
-  }
+  function _reposition(){ if (_open) _position(); }
   window.addEventListener('scroll', _reposition, true);
   window.addEventListener('resize', _reposition);
 
@@ -226,7 +240,7 @@ window.addEventListener('resize',()=>{
     const t = e.target;
     if (t.classList && t.classList.contains('site-combo-input')) {
       const c = t.closest('.site-combo');
-      if (c.classList.contains('open')) _render(c); else _openCombo(c);
+      if (_open === c) _render(c); else _openCombo(c);
     }
   });
   document.addEventListener('mousedown', e => {
@@ -234,26 +248,28 @@ window.addEventListener('resize',()=>{
     if (arrow) {                       // toggle without stealing focus first
       e.preventDefault();
       const c = arrow.closest('.site-combo');
-      if (c.classList.contains('open')) _closeCombo(c);
+      if (_open === c) _close();
       else { _inp(c).focus(); _openCombo(c); }
       return;
     }
+    // Panel items live on <body> (not inside .site-combo) — match them first.
     const item = e.target.closest && e.target.closest('.site-combo-item');
-    if (item) {
+    if (item && _open) {
       e.preventDefault();              // keep focus, don't blur-close mid-pick
-      const c = item.closest('.site-combo'), inp = _inp(c);
+      const inp = _inp(_open);
       inp.value = item.dataset.val || '';
       inp.dispatchEvent(new Event('change', { bubbles: true }));
-      _closeCombo(c);
+      _close();
       return;
     }
-    if (_open && !(e.target.closest && e.target.closest('.site-combo'))) _closeCombo(_open);
+    const inCombo = e.target.closest && e.target.closest('.site-combo');
+    const inPanel = _panel && _panel.contains(e.target);
+    if (_open && !inCombo && !inPanel) _close();
   });
   document.addEventListener('keydown', e => {
-    if (!_open) return;
-    const panel = _panel(_open);
-    if (e.key === 'Escape') { _closeCombo(_open); return; }
-    const items = [...panel.querySelectorAll('.site-combo-item')];
+    if (!_open || !_panel) return;
+    if (e.key === 'Escape') { _close(); return; }
+    const items = [..._panel.querySelectorAll('.site-combo-item')];
     if (!items.length) return;
     let i = items.findIndex(x => x.classList.contains('active'));
     if (e.key === 'ArrowDown')      { e.preventDefault(); i = Math.min(items.length - 1, i + 1); }
@@ -273,6 +289,6 @@ window.addEventListener('resize',()=>{
       + '<button type="button" class="site-combo-arrow" tabindex="-1" aria-label="Show sites">'
       + '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" '
       + 'stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>'
-      + '</button><div class="site-combo-panel" hidden></div></div>';
+      + '</button></div>';
   };
 })();
