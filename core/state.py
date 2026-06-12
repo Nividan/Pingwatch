@@ -911,6 +911,13 @@ class MonitorState:
         self._did_ctr         = 0
         self._sse             = []
         self._sse_registered  = {}   # Queue → monotonic timestamp of subscribe()
+        # Set true once shutdown teardown begins (server.py, after the bounded
+        # probe drain). Late results from wedged probe workers that finish
+        # AFTER this point — e.g. a VMware probe sitting on its 60s hard cap —
+        # are dropped in _process_result so they don't dispatch alerts or write
+        # to an already-closed DB pool ("PostgreSQL pool is closed" spam +
+        # false "missing template" warnings when template lookups return None).
+        self._shutting_down   = False
         self._executor  = concurrent.futures.ThreadPoolExecutor(
             max_workers=64, thread_name_prefix='pw-sensor'
         )
@@ -1551,6 +1558,13 @@ class MonitorState:
 
         Returns True when the result was applied, False when dropped.
         """
+        # Shutdown teardown has begun: drop late results from probe workers that
+        # finished after the bounded drain (e.g. wedged on a 60s hard cap). The
+        # sample buffer is already flushed and the DB pool is closing, so
+        # processing them now only dispatches alerts and spams the closed pool.
+        if self._shutting_down:
+            return False
+
         # Import here to avoid circular import at module load time
         from db import db_log_err, db_log_flap, db_buffer_sample, _db_enqueue
         from db.events import db_auto_resolve_flap

@@ -1177,6 +1177,12 @@ def main():
                         "— proceeding with shutdown")
     except Exception as e:
         log.warning(f"executor drain failed: {e}")
+    # Past the bounded drain: workers that finished in time already buffered
+    # their last sample. Gate _process_result so any still-wedged worker that
+    # finishes later (e.g. a VMware probe on its 60s hard cap) drops its result
+    # instead of dispatching alerts and writing to the closing pool — the
+    # source of the "PostgreSQL pool is closed" / false "missing template" spam.
+    STATE._shutting_down = True
     db_save(STATE)
     log.info("Configuration saved.")
     # Flush the in-memory sample buffer BEFORE draining the writer queues —
