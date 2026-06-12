@@ -67,6 +67,18 @@ def pg_init_pool(max_override: int = 0):
         dbname=cfg["pg_database"],
         user=cfg["pg_user"],
         password=cfg["pg_password"],
+        # Without these, a new-connection attempt during a failover/blackhole
+        # blocks for the OS TCP timeout (minutes) while holding a semaphore
+        # slot — every probe worker then stalls behind it. connect_timeout
+        # bounds the SYN wait; keepalives + tcp_user_timeout make the kernel
+        # tear down a dead established socket instead of hanging a checkout's
+        # health-check SELECT 1 on TCP retransmits.
+        connect_timeout=5,
+        keepalives=1,
+        keepalives_idle=30,
+        keepalives_interval=10,
+        keepalives_count=3,
+        options="-c tcp_user_timeout=15000",
     )
     _pool_sema = threading.Semaphore(maxconn)
     _pool_closed = False
@@ -198,19 +210,28 @@ def pg_conn(schema="main"):
     # with AttributeError when _pool is None.
     if _pool_closed or _pool is None:
         raise PoolClosedError("PostgreSQL pool is closed")
+    # Capture the pool + its semaphore as locals up front. server.py's
+    # auto-scale swaps _pool/_pool_sema for fresh objects (pg_close_pool +
+    # pg_init_pool). If that swap lands mid-checkout, putconn() / release()
+    # on the module globals would hit the NEW pool — psycopg2 raises
+    # "unkeyed connection" and the new semaphore gets over-credited. Pinning
+    # the locals guarantees we return the connection to the pool we took it
+    # from and release the matching semaphore.
+    pool = _pool
+    sema = _pool_sema
     try:
         import core.settings as _s
         _acq_to = max(5, min(120, int(_s.get("pg_pool_acquire_timeout_s", 30) or 30)))
         _stmt_to = max(5, min(600, int(_s.get("pg_statement_timeout_s", 30) or 30)))
     except Exception:
         _acq_to, _stmt_to = 30, 30
-    if not _pool_sema.acquire(timeout=_acq_to):
+    if not sema.acquire(timeout=_acq_to):
         raise Exception("connection pool timeout")
     con = None
     try:
         # Re-check inside the gated section: pg_close_pool() may have run
         # between the early check and our semaphore acquire.
-        if _pool_closed or _pool is None:
+        if _pool_closed or pool is None:
             raise PoolClosedError("PostgreSQL pool is closed")
         # ── Connect phase ─────────────────────────────────────────────────
         # Failures here mean PG is unreachable (refused, SSL drop, auth, etc.)
@@ -218,14 +239,14 @@ def pg_conn(schema="main"):
         # phase below is intentionally outside this try so caller SQL errors
         # don't get classified as connection outages.
         try:
-            con = _pool.getconn()
+            con = pool.getconn()
             # Health check: detect stale connections after PG restart
             try:
                 con.cursor().execute("SELECT 1")
             except Exception:
-                _pool.putconn(con, close=True)   # properly discard stale connection
+                pool.putconn(con, close=True)   # properly discard stale connection
                 con = None
-                con = _pool.getconn()
+                con = pool.getconn()
             cur = con.cursor()
             cur.execute("SET search_path TO %s, public", (schema,))
             cur.execute(f"SET statement_timeout TO '{_stmt_to}s'")
@@ -250,10 +271,10 @@ def pg_conn(schema="main"):
     finally:
         if con:
             try:
-                _pool.putconn(con)
+                pool.putconn(con)
             except Exception:
                 pass
-        _pool_sema.release()
+        sema.release()
 
 
 @contextmanager

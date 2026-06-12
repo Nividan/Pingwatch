@@ -80,25 +80,44 @@ class _SensorScheduler:
             self._tombstones.clear()
 
     def _loop(self):
+        # This single thread drives EVERY sensor. An uncaught exception here
+        # would stop all probing while the rest of the app keeps running —
+        # the worst possible failure mode for a monitor. Guard the whole body.
         while True:
-            with self._lock:
-                now = time.monotonic()
-                while self._heap and self._heap[0][0] <= now:
-                    _, _, did, sid = heapq.heappop(self._heap)
-                    if (did, sid) in self._tombstones:
-                        continue   # sensor was deleted/stopped — skip
-                    self._executor.submit(self._run_fn, did, sid)
+            try:
+                with self._lock:
                     now = time.monotonic()
-                sleep_for = (self._heap[0][0] - now) if self._heap else 60.0
-                heap_size = len(self._heap)
-                tomb_size = len(self._tombstones)
-            # Prune outside the inner hot path when heap has drifted; the scheduler
-            # owner passes live_count via cancel() accounting, but a heuristic
-            # threshold on tombstone count keeps this simple and safe.
-            if tomb_size > 100 and heap_size > 2 * max(tomb_size, 1):
-                self._prune(heap_size - tomb_size)
-            self._wake.wait(timeout=min(sleep_for, 1.0))
-            self._wake.clear()
+                    while self._heap and self._heap[0][0] <= now:
+                        _, _, did, sid = heapq.heappop(self._heap)
+                        if (did, sid) in self._tombstones:
+                            continue   # sensor was deleted/stopped — skip
+                        try:
+                            self._executor.submit(self._run_fn, did, sid)
+                        except Exception:
+                            # Executor rejected the task (e.g. shut down or
+                            # mid-resize). Re-queue with a short delay so this
+                            # sensor's probe chain isn't lost if it recovers.
+                            self._seq += 1
+                            heapq.heappush(self._heap,
+                                           (time.monotonic() + 5.0, self._seq, did, sid))
+                            raise
+                        now = time.monotonic()
+                    sleep_for = (self._heap[0][0] - now) if self._heap else 60.0
+                    heap_size = len(self._heap)
+                    tomb_size = len(self._tombstones)
+                # Prune outside the inner hot path when heap has drifted; the scheduler
+                # owner passes live_count via cancel() accounting, but a heuristic
+                # threshold on tombstone count keeps this simple and safe.
+                if tomb_size > 100 and heap_size > 2 * max(tomb_size, 1):
+                    self._prune(heap_size - tomb_size)
+                self._wake.wait(timeout=min(sleep_for, 1.0))
+                self._wake.clear()
+            except Exception as e:
+                try:
+                    log_sensors.error(f"Sensor scheduler loop error: {e}")
+                except Exception:
+                    pass
+                time.sleep(1.0)
 
 from monitoring.probes import probe_ping, probe_tcp, probe_http, probe_snmp, probe_dns
 from monitoring.probes import probe_tls, probe_http_keyword, probe_banner, probe_smtp, probe_ssh, probe_sftp, probe_radius
@@ -344,6 +363,9 @@ class Sensor:
         self.alive          = None
         self.running        = False
         self._stopped       = threading.Event()   # set when _run_once exits without rescheduling
+        self._inflight_probe  = None    # orphan probe thread past its hard cap — leak guard
+        self._alert_has_fired = False   # any profile stage dispatched during the current incident
+        self._alert_cleanup_checked = False  # once-per-boot orphaned-event sweep done
         # Alert profile resolver cache (PRTG-style state-trigger system)
         self._resolved_profile_id  = None
         self._resolved_profile_ver = -1
@@ -668,7 +690,10 @@ class Device:
     def status(self):
         if self._cached_status is not None:
             return self._cached_status
-        active = [s for s in self.sensors.values() if not s.alerts_muted and s.running]
+        # list() snapshot: this property is read from probe/HTTP/broadcast
+        # threads while routes mutate the sensors dict. Iterating the live
+        # view raises "dictionary changed size during iteration".
+        active = [s for s in list(self.sensors.values()) if not s.alerts_muted and s.running]
         vals = [s.alive for s in active]
         if not vals or all(v is None for v in vals):
             result = "unknown"
@@ -734,17 +759,30 @@ def _send_webhook(url: str, payload: dict):
 
     # ── SSRF guard: resolve hostname and reject internal addresses ────
     # Fail-closed: if DNS resolution or IP parsing fails, abort rather
-    # than falling through to the request.
+    # than falling through to the request. Checks EVERY resolved address
+    # (incl. IPv4-mapped IPv6) so a multi-record rebinding host can't slip an
+    # internal IP past a first-record-only check.
+    def _internal(_o):
+        if (_o.is_loopback or _o.is_private or _o.is_link_local
+                or _o.is_reserved or _o.is_multicast or _o.is_unspecified):
+            return True
+        _m = getattr(_o, "ipv4_mapped", None)
+        return _m is not None and _internal(_m)
     try:
         _host = _parsed.hostname or ""
         if not _host:
             log.warning(f"Webhook blocked — no hostname: {url}")
             return
-        _addr = _sock.gethostbyname(_host)
-        _obj  = _ip.ip_address(_addr)
-        if _obj.is_loopback or _obj.is_private or _obj.is_link_local or _obj.is_reserved:
-            log.warning(f"Webhook blocked — private/reserved address {_addr}: {url}")
+        try:
+            _infos = _sock.getaddrinfo(_host, None)
+        except Exception as _de:
+            log.warning(f"Webhook blocked — DNS resolution failed for {url}: {_de}")
             return
+        for _info in _infos:
+            _addr = _info[4][0].split("%")[0]
+            if _internal(_ip.ip_address(_addr)):
+                log.warning(f"Webhook blocked — private/reserved address {_addr}: {url}")
+                return
     except Exception as _e:
         log.warning(f"Webhook blocked — DNS/IP resolution failed for {url}: {_e}")
         return
@@ -1081,13 +1119,17 @@ class MonitorState:
 
     def start_sensor(self, did, sid):
         with self._lock:
+            # Check-and-set must happen under the lock: two concurrent calls
+            # (UI double-click, start_device racing start_sensor) would both
+            # pass an unlocked check and spawn duplicate probe chains that
+            # each reschedule forever — doubling samples and events.
             dev = self.devices.get(did)
             if not dev: return
             s = dev.sensors.get(sid)
-        if not s or s.running: return
-        s.running = True
-        dev.invalidate_status()
-        s._stopped.clear()
+            if not s or s.running: return
+            s.running = True
+            dev.invalidate_status()
+            s._stopped.clear()
         self._executor.submit(self._run_once, did, sid)
 
     def stop_sensor(self, did, sid):
@@ -1108,7 +1150,7 @@ class MonitorState:
         for sid in sids:
             self.start_sensor(did, sid)
 
-    def stop_device(self, did):
+    def stop_device(self, did, resolve_events=True):
         from db import _logs_enqueue
         from db.events import db_resolve_flaps_by_sensor
         with self._lock:
@@ -1124,19 +1166,49 @@ class MonitorState:
         batch = [("sensor", sd) for sd in sensor_dicts]
         batch.append(("device_status", {"did": did, "status": new_status}))
         self._broadcast_batch(batch)
-        # Auto-resolve active flap events — device is intentionally stopped
-        for sid in sids:
-            _logs_enqueue(lambda d=did, s_=sid: db_resolve_flaps_by_sensor(d, s_))
+        # Auto-resolve active flap events — device is intentionally stopped.
+        # Skipped at process shutdown (resolve_events=False): restarting the
+        # monitor mid-outage must not close open incidents — that destroys
+        # downtime continuity / ack state and re-fires fresh flaps on boot.
+        if resolve_events:
+            for sid in sids:
+                _logs_enqueue(lambda d=did, s_=sid: db_resolve_flaps_by_sensor(d, s_))
 
     def start_all(self):
         for did in list(self.devices):
             self.start_device(did)
 
-    def stop_all(self):
+    def stop_all(self, resolve_events=True):
         for did in list(self.devices):
-            self.stop_device(did)
+            self.stop_device(did, resolve_events=resolve_events)
 
     def _run_once(self, did, sid):
+        """Safety wrapper around the probe cycle.
+
+        The executor never reads the returned Future, so an exception escaping
+        the cycle body would (a) vanish without a log line and (b) skip the
+        reschedule at the end of the body — silently freezing the sensor
+        forever while the UI keeps showing its last status. Catch, log, and
+        reschedule so one bad cycle can never kill a sensor's probe loop.
+        """
+        try:
+            self._run_once_inner(did, sid)
+        except Exception:
+            log_sensors.exception(
+                f"Probe cycle error for {did}/{sid} — sensor rescheduled")
+            try:
+                with self._lock:
+                    dev = self.devices.get(did)
+                    s   = dev.sensors.get(sid) if dev else None
+                if s is not None:
+                    if s.running:
+                        self._scheduler.schedule(did, sid, max(float(s.interval or 5), 1.0))
+                    else:
+                        s._stopped.set()
+            except Exception:
+                log_sensors.error(f"Probe cycle recovery failed for {did}/{sid}")
+
+    def _run_once_inner(self, did, sid):
         # Import here to avoid circular import at module load time
         from db import db_log_err, db_log_flap, db_buffer_sample, _db_enqueue
         from db.events import db_auto_resolve_flap
@@ -1153,6 +1225,9 @@ class MonitorState:
                                      "msg": f"[START] {s.name} on {s.host}", "type": "info"})
 
         dev = self.devices.get(did)   # re-fetch (unprotected, Device is stable)
+        if dev is None:               # device deleted while this probe was queued
+            s._stopped.set()
+            return
         # Hard timeout guard: if s.probe() hangs (misbehaving stack, stuck DNS/TLS),
         # run it on an orphan daemon thread and abandon it after a generous
         # upper bound so the worker returns to the pool instead of staying pinned.
@@ -1167,26 +1242,39 @@ class MonitorState:
             "vmware": 90, "smtp": 60, "ssh": 45, "sftp": 60,
         }
         _cap = max((s.timeout or 5) + 3, _PROBE_HARD_CAP_S.get(s.stype, 15))
-        _probe_result = [None]
-        def _probe_runner():
-            try:
-                _probe_result[0] = s.probe()
-            except Exception as _pe:
-                _probe_result[0] = {"ok": False, "ms": None,
-                                    "detail": f"probe crashed: {type(_pe).__name__}",
-                                    "value": None}
-        _pt = threading.Thread(target=_probe_runner, daemon=True,
-                               name=f"pw-probe-{did}-{sid}")
-        _pt.start()
-        _pt.join(timeout=_cap)
-        if _probe_result[0] is None:
-            log_sensors.warning(f"Probe hard-timeout ({_cap}s): "
-                                f"{dev.name if dev else did}/{s.name} "
-                                f"({s.host}) — worker released, orphan thread continues")
+        _prev_pt = getattr(s, "_inflight_probe", None)
+        if _prev_pt is not None and _prev_pt.is_alive():
+            # The previous cycle's probe blew past its hard cap and is STILL
+            # stuck (its internal timeouts never fired). Spawning another
+            # thread would leak one unkillable thread per interval against a
+            # truly hung target. Count this cycle as a failure; re-check the
+            # orphan next interval.
             result = {"ok": False, "ms": None,
-                      "detail": "Probe exceeded hard timeout", "value": None}
+                      "detail": "Probe exceeded hard timeout (still running)",
+                      "value": None}
         else:
-            result = _probe_result[0]
+            s._inflight_probe = None
+            _probe_result = [None]
+            def _probe_runner():
+                try:
+                    _probe_result[0] = s.probe()
+                except Exception as _pe:
+                    _probe_result[0] = {"ok": False, "ms": None,
+                                        "detail": f"probe crashed: {type(_pe).__name__}",
+                                        "value": None}
+            _pt = threading.Thread(target=_probe_runner, daemon=True,
+                                   name=f"pw-probe-{did}-{sid}")
+            _pt.start()
+            _pt.join(timeout=_cap)
+            if _probe_result[0] is None:
+                s._inflight_probe = _pt   # remember the orphan — don't stack another
+                log_sensors.warning(f"Probe hard-timeout ({_cap}s): "
+                                    f"{dev.name if dev else did}/{s.name} "
+                                    f"({s.host}) — worker released, orphan thread continues")
+                result = {"ok": False, "ms": None,
+                          "detail": "Probe exceeded hard timeout", "value": None}
+            else:
+                result = _probe_result[0]
         s.total += 1
         _ts = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         _ts_float = time.time()
@@ -1702,6 +1790,25 @@ class MonitorState:
                                      "msg": f"[STOP] {s.name}", "type": "info"})
             s._stopped.set()
 
+    @staticmethod
+    def _poison_sse(q):
+        """Push a close sentinel onto an evicted subscriber queue.
+
+        Eviction removes the queue from the fan-out list, but the /events
+        handler thread keeps blocking on q.get() and sending heartbeats over a
+        healthy TCP connection — a zombie stream: the browser looks connected
+        but never receives another event and never reconnects. The sentinel
+        makes the handler close the stream so EventSource auto-reconnects.
+        """
+        try:
+            q.put_nowait(None)
+        except queue.Full:
+            try:
+                q.get_nowait()           # make room — the client is stalled anyway
+                q.put_nowait(None)
+            except Exception:
+                pass
+
     def subscribe(self):
         # Queue sized for 5k-sensor bursts: ~200 events/s × 5s buffer = 1000 msgs.
         q = queue.Queue(maxsize=1000)
@@ -1709,6 +1816,7 @@ class MonitorState:
             if len(self._sse) >= 200:
                 oldest = self._sse.pop(0)
                 self._sse_registered.pop(oldest, None)
+                self._poison_sse(oldest)
             self._sse.append(q)
             self._sse_registered[q] = time.monotonic()
         return q
@@ -1749,6 +1857,7 @@ class MonitorState:
                     try: self._sse.remove(q)
                     except ValueError: pass
                     self._sse_registered.pop(q, None)
+                    self._poison_sse(q)
             if stale:
                 log_sensors.info("SSE sweeper: removed %d stale subscriber(s)", len(stale))
 
@@ -1811,6 +1920,7 @@ class MonitorState:
                     try: self._sse.remove(d)
                     except ValueError: pass
                     self._sse_registered.pop(d, None)
+                    self._poison_sse(d)
             log_sensors.warning(
                 "SSE back-pressure: evicted %d slow subscriber(s) "
                 "(queue full after 20ms grace)", len(dead)

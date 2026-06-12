@@ -134,6 +134,14 @@ def _fire_alert(cert_key: tuple[str, str], old_bucket: str, new_bucket: str,
     suppressed, mw_name = check_maintenance(ctx)
     if suppressed:
         log.debug(f"cert_alert: suppressed by maintenance window {mw_name!r}")
+        # Roll the bucket back so the next periodic check re-detects this
+        # transition after the window ends. check_cert commits the bucket
+        # BEFORE dispatch, so returning here without the rollback consumed
+        # the transition — the next chance to notify was the NEXT bucket
+        # (e.g. an "expiring" alert silenced at 30d resurfaced only at 7d).
+        with _state_lock:
+            if _last_threshold.get(cert_key) == new_bucket:
+                _last_threshold[cert_key] = old_bucket
         return
 
     now = time.time()

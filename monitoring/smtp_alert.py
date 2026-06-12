@@ -660,19 +660,37 @@ def _build_alert_html(rows: list, event_type: str, severity: str,
 
 
 def _connect(host, port, tls, user, password):
-    """Return an authenticated smtplib connection or raise."""
+    """Return an authenticated smtplib connection or raise.
+
+    TLS verifies the server certificate by default: smtplib's legacy default
+    context performs NO chain or hostname validation, so a MITM could harvest
+    the credentials sent by login(). User-uploaded corporate CAs are honored;
+    legacy relays with self-signed certs can opt out via app setting
+    smtp_verify_tls=0.
+    """
+    import ssl as _ssl
     import core.settings as _s
     try:
         _to = max(2, min(120, int(_s.get("smtp_timeout_s", 10) or 10)))
     except (TypeError, ValueError):
         _to = 10
+    _verify = str(_s.get("smtp_verify_tls", "1") or "1") != "0"
+    if _verify:
+        _ctx = _ssl.create_default_context()
+        try:
+            from core.ssl_trust import apply_trusted_cas
+            apply_trusted_cas(_ctx)
+        except Exception:
+            pass
+    else:
+        _ctx = _ssl._create_unverified_context()
     if tls == 'ssl':
-        srv = smtplib.SMTP_SSL(host, int(port), timeout=_to)
+        srv = smtplib.SMTP_SSL(host, int(port), timeout=_to, context=_ctx)
     else:
         srv = smtplib.SMTP(host, int(port), timeout=_to)
         if tls == 'starttls':
             try:
-                srv.starttls()
+                srv.starttls(context=_ctx)
             except Exception:
                 srv.quit()
                 raise
@@ -841,29 +859,62 @@ def send_rule_email(to_addrs: str, subject_tpl: str, body_tpl: str, ctx: dict):
                                  logo=_logo, company=_company, ctx=ctx)
 
     recipients = [r.strip() for r in to_addrs.split(',') if r.strip()]
+    if not recipients:
+        return
     _use_logo = html is not None and str(_cfg('email_logo', '1')) == '1'
-    srv = None
-    try:
+
+    # `remaining` is shared across retry attempts: recipients are removed as
+    # they succeed, so a retry only re-sends to the ones that failed — no
+    # duplicates for recipients that already got the alert.
+    remaining = list(recipients)
+
+    def _send():
+        global _last_ok_ts, _last_err
         srv = _connect(host, port, tls, user, password)
-        for rcpt in recipients:
-            srv.sendmail(from_addr, [rcpt],
-                         _build_msg(subject, body, from_addr, rcpt, html, logo=_use_logo).as_string())
-        srv.quit(); srv = None
+        errors = []
+        try:
+            for rcpt in list(remaining):
+                try:
+                    srv.sendmail(from_addr, [rcpt],
+                                 _build_msg(subject, body, from_addr, rcpt,
+                                            html, logo=_use_logo).as_string())
+                    remaining.remove(rcpt)
+                except smtplib.SMTPRecipientsRefused as re_:
+                    # 5xx = permanently bad address — drop THIS recipient only
+                    # (one stale address in a NOC list must not block, or
+                    # endlessly re-fail, delivery to everyone else).
+                    _codes = [c for c, _m in re_.recipients.values()] or [550]
+                    if all(500 <= c < 600 for c in _codes):
+                        log.error(f"Alert email recipient permanently refused, "
+                                  f"giving up on it: {rcpt} ({_codes})")
+                        remaining.remove(rcpt)
+                    else:
+                        errors.append(f"{rcpt}: {re_}")
+                except smtplib.SMTPServerDisconnected:
+                    raise   # connection-level — retry the whole remaining set
+                except Exception as ex:
+                    errors.append(f"{rcpt}: {ex}")
+        finally:
+            try:
+                srv.quit()
+            except Exception:
+                try: srv.close()
+                except Exception: pass
+        if remaining:
+            _last_err = {'ts': time.time(),
+                         'msg': ("; ".join(errors) or "send incomplete")[:200]}
+            raise RuntimeError("; ".join(errors) or
+                               f"{len(remaining)} recipient(s) unsent")
         _last_error.pop(host, None)
-        global _last_ok_ts; _last_ok_ts = time.time()
+        _last_ok_ts = time.time()
         log.info(f"Rule alert email sent to {to_addrs}: {subject[:60]}")
-    except Exception as e:
-        err_str = str(e)
-        now = time.monotonic()
-        last_err, last_ts = _last_error.get(host, (None, 0))
-        if err_str != last_err or (now - last_ts) >= _ERROR_SUPPRESS_S:
-            log.error(f"Rule alert SMTP failed (host={host}:{port}): {e}")
-            _last_error[host] = (err_str, now)
-        global _last_err; _last_err = {'ts': time.time(), 'msg': str(e)[:200]}
-    finally:
-        if srv:
-            try: srv.quit()
-            except Exception: pass
+
+    # Delivery layer: dedicated dispatch pool (not the probe workers),
+    # retry with backoff, per-relay circuit breaker.
+    from monitoring.delivery_retry import submit_delivery
+    submit_delivery("smtp", f"smtp:{host}:{port}", _send,
+                    f"alert email to {to_addrs[:80]} "
+                    f"({ctx.get('dname','?')}/{ctx.get('sname','?')})")
 
 
 def _build_batch_html(batch_ctx: dict, logo: bool = True,
@@ -1053,15 +1104,34 @@ def send_rule_email_batch(to_addrs: str, subject_tpl: str, batch_ctx: dict):
 
     recipients = [r.strip() for r in to_addrs.split(',') if r.strip()]
     srv = None
+    sent_to, failed_to = [], []
     try:
         srv = _connect(host, port, tls, user, password)
         for rcpt in recipients:
-            srv.sendmail(from_addr, [rcpt],
-                         _build_msg(subject, body, from_addr, rcpt, html, logo=_logo).as_string())
+            # Per-recipient isolation: one stale address must not abort
+            # delivery of the batch to everyone after it in the list.
+            try:
+                srv.sendmail(from_addr, [rcpt],
+                             _build_msg(subject, body, from_addr, rcpt, html, logo=_logo).as_string())
+                sent_to.append(rcpt)
+            except smtplib.SMTPServerDisconnected:
+                raise   # connection-level failure — abort and re-raise below
+            except Exception as re_:
+                failed_to.append(rcpt)
+                log.error(f"Batched alert email to {rcpt} failed: {re_}")
         srv.quit(); srv = None
         _last_error.pop(host, None)
         global _last_ok_ts; _last_ok_ts = time.time()
-        log.info(f"Batched alert email sent to {to_addrs}: {subject[:80]} ({count} events)")
+        if failed_to:
+            log.warning(f"Batched alert email: {len(sent_to)}/{len(recipients)} "
+                        f"recipient(s) delivered; failed: {', '.join(failed_to)}")
+        else:
+            log.info(f"Batched alert email sent to {to_addrs}: {subject[:80]} ({count} events)")
+        if not sent_to:
+            # Nothing went out — raise so the batcher's fallback runs. With
+            # partial delivery we deliberately do NOT raise: the fallback
+            # would duplicate every event for recipients that got the batch.
+            raise RuntimeError(f"all {len(recipients)} recipient(s) failed")
     except Exception as e:
         err_str = str(e)
         now = time.monotonic()

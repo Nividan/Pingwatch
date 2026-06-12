@@ -628,12 +628,26 @@ def handle(h, method, path, body):
         if not user: return True
         from monitoring.smtp_alert import test_smtp
         from db.backups import decrypt_pw as _dec_smtp_pw
+        _test_host = (body.get("smtp_host") or "").strip()
+        _pw = (body.get("smtp_pass") or "").strip()
+        if not _pw:
+            # Fall back to the stored password ONLY when testing the host it
+            # belongs to. Otherwise an admin could point smtp_host at a
+            # rogue relay and harvest the stored credential during AUTH.
+            _saved_host = (_settings.get("smtp_host", "") or "").strip()
+            if _test_host and _test_host.lower() == _saved_host.lower():
+                _pw = _dec_smtp_pw(_settings.get("smtp_pass", "")).strip()
+            else:
+                h._json(400, {"ok": False,
+                              "msg": "Enter the SMTP password to test a different host "
+                                     "(the saved password is only reused when testing the saved host)."})
+                return True
         cfg = {
-            "host":      (body.get("smtp_host") or "").strip(),
+            "host":      _test_host,
             "port":      body.get("smtp_port", 587),
             "tls":       (body.get("smtp_tls")  or "starttls").strip(),
             "user":      (body.get("smtp_user") or "").strip(),
-            "password":  (body.get("smtp_pass") or _dec_smtp_pw(_settings.get("smtp_pass", ""))).strip(),
+            "password":  _pw,
             "from_addr": (body.get("smtp_from") or "").strip(),
             "to_addr":   (body.get("smtp_to")   or "").strip(),
         }

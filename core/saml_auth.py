@@ -617,21 +617,43 @@ def saml_parse_response(saml_response_b64: str, relay_state: str) -> dict:
         "ds":    "http://www.w3.org/2000/09/xmldsig#",
     }
 
-    # Signature validation via pysaml2 (preferred) or cryptography fallback
-    sig_ok, sig_msg = _verify_response_signature(xml_bytes, cfg["idp_cert_pem"])
-    if not sig_ok:
+    # Signature validation. Returns the cryptographically-VERIFIED element so
+    # we can extract identity from it — never from the separately-parsed tree.
+    sig_ok, sig_msg, signed_bytes = _verify_response_signature(xml_bytes, cfg["idp_cert_pem"])
+    if not sig_ok or not signed_bytes:
         _record_err(f"signature validation failed: {sig_msg}")
         return {"ok": False, "message": f"Signature validation failed: {sig_msg}"}
 
-    # Locate the Assertion
-    assertion = root.find("saml:Assertion", ns)
-    if assertion is None:
-        # Some IdPs put Response/EncryptedAssertion — v1 doesn't handle encryption
-        if root.find("saml:EncryptedAssertion", ns) is not None:
-            _record_err("encrypted assertion received (not supported in v1)")
-            return {"ok": False, "message": "Encrypted assertions not supported — disable encryption on the IdP"}
-        _record_err("no Assertion element found")
-        return {"ok": False, "message": "SAML response contains no assertion"}
+    # Reject multi-assertion documents. XML Signature Wrapping attacks graft a
+    # forged unsigned <Assertion> alongside the genuine signed one; a single
+    # assertion is the only shape we accept.
+    if len(root.findall(".//saml:Assertion", ns)) > 1:
+        _record_err("multiple assertions present (possible signature-wrapping attack)")
+        return {"ok": False, "message": "SAML response contains multiple assertions — rejected"}
+    if root.find(".//saml:EncryptedAssertion", ns) is not None:
+        _record_err("encrypted assertion received (not supported in v1)")
+        return {"ok": False, "message": "Encrypted assertions not supported — disable encryption on the IdP"}
+
+    # Extract the Assertion from the VERIFIED subtree only. The verified
+    # element is either the Assertion itself (assertion-only signature) or the
+    # Response envelope (whole-response signature) containing exactly one
+    # Assertion. Reading from `signed_bytes` — not `root` — is what defeats
+    # signature wrapping: forged content outside the signed element is invisible.
+    try:
+        signed_root = DET.fromstring(signed_bytes)
+    except Exception as e:
+        _record_err(f"verified element re-parse failed: {e}")
+        return {"ok": False, "message": "SAML response verification error"}
+
+    _ASSERTION_TAG = "{urn:oasis:names:tc:SAML:2.0:assertion}Assertion"
+    if signed_root.tag == _ASSERTION_TAG:
+        assertion = signed_root
+    else:
+        _signed_assertions = signed_root.findall(".//saml:Assertion", ns)
+        if len(_signed_assertions) != 1:
+            _record_err(f"verified element holds {len(_signed_assertions)} assertions (expected 1)")
+            return {"ok": False, "message": "SAML signature does not cover exactly one assertion"}
+        assertion = _signed_assertions[0]
 
     # Issuer check
     issuer_el = assertion.find("saml:Issuer", ns)
@@ -716,25 +738,29 @@ def saml_parse_response(saml_response_b64: str, relay_state: str) -> dict:
     }
 
 
-def _verify_response_signature(xml_bytes: bytes, idp_cert_pem: str) -> tuple[bool, str]:
-    """Verify the XML signature on a SAMLResponse. Returns (ok, message).
+def _verify_response_signature(xml_bytes: bytes, idp_cert_pem: str) -> "tuple[bool, str, bytes | None]":
+    """Verify the XML signature on a SAMLResponse.
+
+    Returns (ok, message, signed_xml_bytes). `signed_xml_bytes` is the
+    serialized form of the element signxml actually verified — the caller MUST
+    extract identity from this, not from a re-parse of the raw response, or it
+    is vulnerable to XML Signature Wrapping.
 
     Tries multiple signxml call patterns because IdPs differ:
       - Okta / Entra: sign the Assertion only (1 reference).
       - FortiAuthenticator / ADFS: often sign Response + Assertion (2 references).
-      - Some sign only the Response envelope.
-    First pass asks for 1 reference; fallbacks relax the constraint. Full
-    signxml exception is logged server-side so admins can see the real cause
-    (cert mismatch vs digest vs canonicalization).
+    The references constraint is kept tight (1 or 2); the previous
+    no-constraint fallback is removed — accepting "any enveloped signature
+    that validates" is exactly what lets a wrapped document through.
     """
     if not idp_cert_pem or not idp_cert_pem.strip():
-        return False, "no IdP cert configured"
+        return False, "no IdP cert configured", None
 
     try:
         from signxml import XMLVerifier
         from lxml import etree
     except ImportError as e:
-        return False, f"signxml/lxml not installed: {e}"
+        return False, f"signxml/lxml not installed: {e}", None
 
     # signxml wants a parsed lxml tree or raw bytes. Bytes path keeps the
     # canonicalization exact — stdlib ElementTree round-trips whitespace
@@ -742,25 +768,43 @@ def _verify_response_signature(xml_bytes: bytes, idp_cert_pem: str) -> tuple[boo
     try:
         tree = etree.fromstring(xml_bytes)
     except Exception as e:
-        return False, f"XML parse failed: {str(e)[:200]}"
+        return False, f"XML parse failed: {str(e)[:200]}", None
+
+    def _verified_bytes(result):
+        """Pull the verified element out of signxml's return value across
+        versions: modern returns a VerifyResult with .signed_xml; older
+        returns the element (or data) directly."""
+        el = getattr(result, "signed_xml", None)
+        if el is None and hasattr(result, "tag"):
+            el = result          # older signxml returned the element itself
+        if el is None:
+            return None
+        try:
+            return etree.tostring(el)
+        except Exception:
+            return None
 
     attempts = [
         {"expect_references": 1},      # assertion-only or response-only
         {"expect_references": 2},      # response + assertion (FAC, ADFS)
-        {},                            # no constraint
     ]
     last_err = ""
     for kwargs in attempts:
         try:
-            XMLVerifier().verify(tree, x509_cert=idp_cert_pem, **kwargs)
-            return True, f"signxml verified ({kwargs or 'no-ref-constraint'})"
+            result = XMLVerifier().verify(tree, x509_cert=idp_cert_pem, **kwargs)
+            signed = _verified_bytes(result)
+            if not signed:
+                last_err = "verifier returned no signed element"
+                log.warning(f"SAML sig verify {kwargs}: {last_err}")
+                continue
+            return True, f"signxml verified ({kwargs})", signed
         except Exception as e:
             last_err = f"{type(e).__name__}: {e}"
             # Log the full error server-side for diagnosis — the HTTP response
             # stays generic so we don't leak cert details to the browser.
             log.warning(f"SAML sig verify attempt {kwargs} failed: {last_err}")
 
-    return False, f"signxml: {last_err[:240]}"
+    return False, f"signxml: {last_err[:240]}", None
 
 
 # ── Test endpoint helper ───────────────────────────────────────────

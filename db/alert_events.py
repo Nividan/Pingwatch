@@ -509,3 +509,43 @@ def db_has_acked_event(profile_id: int, did: str, sid: str) -> bool:
         return False
     finally:
         con.close()
+
+
+def db_clean_alert_events(retain_days: int = 90) -> int:
+    """Delete RESOLVED alert events older than `retain_days`.
+
+    The table header promised "rotational, capped retention" but nothing ever
+    pruned it — resolved events accumulated forever in the main DB of a 24/7
+    service. Active/acknowledged rows are always kept (they're open incidents).
+    Returns rows deleted. Called from the hourly autosave cleanup.
+    """
+    cutoff = time.time() - max(1, int(retain_days)) * 86400
+    try:
+        if is_pg():
+            from db.pg_pool import pg_cursor
+            with pg_cursor("main") as cur:
+                cur.execute(
+                    "DELETE FROM alert_events "
+                    "WHERE state='resolved' AND resolved_at>0 AND resolved_at < %s",
+                    (cutoff,)
+                )
+                n = cur.rowcount or 0
+        else:
+            con = _con()
+            try:
+                cur = con.execute(
+                    "DELETE FROM alert_events "
+                    "WHERE state='resolved' AND resolved_at>0 AND resolved_at < ?",
+                    (cutoff,)
+                )
+                n = cur.rowcount or 0
+                con.commit()
+            finally:
+                con.close()
+        if n:
+            log.info(f"Alert events retention: pruned {n} resolved event(s) "
+                     f"older than {retain_days}d")
+        return n
+    except Exception as e:
+        log.error(f"db_clean_alert_events error: {e}")
+        return 0

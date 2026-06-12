@@ -11,6 +11,7 @@ import hashlib
 import json
 import os
 import re
+import socket
 import threading
 import time
 
@@ -142,11 +143,24 @@ def _ssh_backup(device: dict, settings: dict) -> dict:
     # Old network devices (JUNOS 12.x, Cisco IOS, etc.) often reject the
     # modern KEX/cipher set that paramiko prefers.  Widen the allowed set
     # to include the legacy algorithms those devices advertise.
-    _transport_factory = paramiko.Transport((host, port))
+    #
+    # Connect the TCP socket ourselves with an explicit timeout. Passing an
+    # (host, port) tuple to paramiko.Transport does a BLOCKING connect with
+    # the OS default timeout (~21s Windows, up to ~2min Linux for an
+    # unroutable host) — the configured `timeout` only governs banner/auth.
+    # During a site outage the scheduler would otherwise pin a thread per
+    # device for minutes.
+    try:
+        _sock = socket.create_connection((host, port), timeout=timeout)
+    except Exception as _conn_err:
+        return _fail('ssh', f'SSH connection failed: {_conn_err}')
+    _transport_factory = paramiko.Transport(_sock)
     _transport_factory.banner_timeout = timeout
     try:
         _transport_factory.start_client(timeout=timeout)
     except Exception as _conn_err:
+        try: _sock.close()
+        except Exception: pass
         return _fail('ssh', f'SSH connection failed: {_conn_err}')
 
     # ── Host key verification (TOFU) ──────────────────────────────────

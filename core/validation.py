@@ -18,8 +18,11 @@ import re
 
 from core.constants import PORT_MIN, PORT_MAX, HOSTNAME_MAX
 
-# Hostname/IP regex: letters, digits, dots, dashes, colons (for IPv6), underscores
-_HOST_RE = re.compile(rf'^[a-zA-Z0-9.\-_:]{{1,{HOSTNAME_MAX}}}$')
+# Hostname/IP regex: letters, digits, dots, dashes, colons (for IPv6), underscores.
+# The leading char must NOT be a dash — probes pass the host as an argv token to
+# ping / snmpget / arp (list-form subprocess, so no shell injection), and a host
+# like "-foo" would be parsed as a command-line flag (argument injection).
+_HOST_RE = re.compile(rf'^(?!-)[a-zA-Z0-9.\-_:]{{1,{HOSTNAME_MAX}}}$')
 
 
 def validate_port(p) -> int:

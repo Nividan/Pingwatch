@@ -115,7 +115,9 @@ def handle(h, method, path, body):
     # ── GET /api/backups/run/<id> — full run with config ──────────
     m = _RE_BACKUP_RUN_ID.match(path)
     if m and method == 'GET':
-        user, _ = h._require('viewer')
+        # operator+: the run body contains the device running-config, which
+        # routinely embeds secrets (snmp community, enable secret, type-7 keys).
+        user, _ = h._require('operator')
         if not user: return True
         run = db_get_backup_run(int(m.group(1)))
         if not run:
@@ -135,7 +137,8 @@ def handle(h, method, path, body):
     # ── GET /api/backups/search — full-text search inside configs ─────
     # Must be checked BEFORE _RE_BACKUP_DEV which would match /api/backups/search
     if path.startswith('/api/backups/search') and method == 'GET':
-        user, _ = h._require('viewer')
+        # operator+: full-text search returns matching config text (secrets).
+        user, _ = h._require('operator')
         if not user: return True
         from urllib.parse import urlparse, parse_qs
         qs = parse_qs(urlparse(h.path).query)

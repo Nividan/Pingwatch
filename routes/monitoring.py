@@ -60,6 +60,11 @@ def handle(h, method, path, body):
             while True:
                 try:
                     msg = q.get(timeout=15)
+                    if msg is None:
+                        # Evicted by the broadcaster (slow client / cap / sweep).
+                        # Close the stream so EventSource reconnects instead of
+                        # heartbeating a queue nobody fans out to anymore.
+                        break
                     h.wfile.write(msg.encode("utf-8"))
                     h.wfile.flush()
                 except queue.Empty:

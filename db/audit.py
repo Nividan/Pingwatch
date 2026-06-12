@@ -3,6 +3,7 @@ db/audit.py — Audit log write and query helpers.
 """
 from __future__ import annotations
 
+import re
 import time
 
 import core.settings as _settings
@@ -10,9 +11,27 @@ from core.logger import log_audit
 from db.core import _db_enqueue
 from db.helpers import db_query, db_cursor
 
+_CTRL_RE = re.compile(r'[\r\n\t\x00-\x1f\x7f]')
+
+
+def _sanitize(s, max_len: int = 512) -> str:
+    """Strip control characters (esp. CR/LF) and cap length.
+
+    `actor`/`target`/`detail` are user-controlled (e.g. the login username on
+    a failed-login audit). Embedded newlines would forge extra lines in the
+    audit/app log files, which are later parsed back as genuine entries (log
+    injection). The DB columns are parameterized and safe regardless; this
+    protects the file-based log."""
+    return _CTRL_RE.sub(' ', str(s or ''))[:max_len]
+
 
 def db_log_audit(actor: str, ip: str, action: str, target: str = '', detail: str = ''):
     """Append one audit entry; trim to the configured `audit_trim_cap` rows."""
+    actor  = _sanitize(actor, 256)
+    ip     = _sanitize(ip, 64)
+    action = _sanitize(action, 128)
+    target = _sanitize(target, 512)
+    detail = _sanitize(detail, 1024)
     _t = f" -> {target}" if target else ""
     _d = f" | {detail}" if detail else ""
     log_audit.info(f"{actor} [{ip}] {action}{_t}{_d}")

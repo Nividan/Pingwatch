@@ -358,6 +358,7 @@ def pg_create_main_schema(cur):
             target TEXT DEFAULT '',
             detail TEXT DEFAULT ''
         )""")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_audit_ts ON audit_log(ts)")
 
     cur.execute("""
         CREATE TABLE IF NOT EXISTS dashboards (
@@ -968,6 +969,7 @@ def pg_create_logs_schema(cur):
             stype TEXT,
             msg   TEXT
         )""")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_err_log_did_sid ON sensor_err_log(did, sid)")
 
     cur.execute("""
         CREATE TABLE IF NOT EXISTS snmp_traps (

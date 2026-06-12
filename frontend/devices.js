@@ -959,7 +959,7 @@ function sSnrPreview(did){
       return `<div class="dc-snr">
         <div class="dc-snr-ico vmware">${_isH?'H':'V'}</div>
         <div class="dc-snr-nm">${esc(nm)} <span style="color:var(--text3);font-size:10px">${vms.length}m</span></div>
-        <div class="dc-snr-val ${worst.alive===false?'b':worst.alive===true?'g':'m'}" id="csv-${worst.device_id}_${worst.sensor_id}">${snrVal(worst)}</div>
+        <div class="dc-snr-val ${worst.alive===false?'b':worst.alive===true?'g':'m'}" id="csv-${worst.device_id}_${worst.sensor_id}">${esc(snrVal(worst))}</div>
         <div class="dc-snr-dot ${st}" id="csd-${worst.device_id}_${worst.sensor_id}"></div>
       </div>`;
     }
@@ -967,7 +967,7 @@ function sSnrPreview(did){
     return `<div class="dc-snr snr-t-${s.stype}">
       <div class="dc-snr-ico ${s.stype}">${sIco(s.stype)}</div>
       <div class="dc-snr-nm">${esc(s.name)}</div>
-      <div class="dc-snr-val ${vc(s)}" id="csv-${s.device_id}_${s.sensor_id}">${snrVal(s)}</div>
+      <div class="dc-snr-val ${vc(s)}" id="csv-${s.device_id}_${s.sensor_id}">${esc(snrVal(s))}</div>
       <div class="dc-snr-dot ${s.alive===true?'up':s.alive===false?'down':''}" id="csd-${s.device_id}_${s.sensor_id}"></div>
     </div>`;
   }).join('');
@@ -1113,7 +1113,7 @@ function listRowHTML(dev){
     snrHtml+=`<span class="dlr-snr snr-t-${s.stype}">
       <span class="dc-snr-ico ${s.stype}">${sIco(s.stype)}</span>
       <span class="dc-snr-nm">${esc(s.name)}</span>
-      <span class="dc-snr-val ${vc(s)}" id="lsv-${s.device_id}_${s.sensor_id}">${snrVal(s)}</span>
+      <span class="dc-snr-val ${vc(s)}" id="lsv-${s.device_id}_${s.sensor_id}">${esc(snrVal(s))}</span>
     </span>`;
   });
   if(snrs.length>5) snrHtml+=`<span class="dlr-more">+${snrs.length-5}</span>`;

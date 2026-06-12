@@ -14,6 +14,18 @@ from db.backend   import is_pg
 from db.core      import _db_enqueue, _logs_enqueue
 import core.settings as _settings
 
+# Set True only after a load pass completes without error. db_save() refuses
+# to run until then: its "delete every row not present in memory" semantics
+# would otherwise wipe the whole device/sensor configuration on the first
+# autosave after a transiently failed load (PG blip at boot, SQLite file
+# locked past its timeout, …).
+_LOAD_OK = False
+
+
+def _mark_load_ok():
+    global _LOAD_OK
+    _LOAD_OK = True
+
 
 def _int_or_none(v):
     """Coerce a value to int or None. Accepts None, '' → None. Everything else
@@ -289,6 +301,11 @@ def _pg_save(state):
 
 def db_save(state):
     """Upsert all devices and sensors; remove deleted rows."""
+    if not _LOAD_OK:
+        log.warning("DB save skipped — initial device/sensor load has not "
+                    "completed successfully; saving now could erase the stored "
+                    "configuration. Fix the load error and restart.")
+        return
     with state._lock:
         _nd = len(state.devices)
         _ns = sum(len(d.sensors) for d in state.devices.values())
@@ -536,6 +553,7 @@ def _pg_load(state):
     log.info(f"DB load: found {len(devs)} device(s), {len(srows)} sensor(s) in PostgreSQL")
     if not devs:
         log.info("DB load: no devices in database — starting with empty state")
+        _mark_load_ok()   # successful load of an empty DB — saves are safe
         return
 
     max_did = 0
@@ -712,6 +730,7 @@ def _pg_load(state):
     for did in list(state.devices):
         state.start_device(did)
     log.info("Auto-started all sensors.")
+    _mark_load_ok()
 
 
 def db_load(state):
@@ -779,6 +798,7 @@ def db_load(state):
     log.info(f"DB load: found {len(devs)} device(s), {len(srows)} sensor(s) in {DB_PATH}")
     if not devs:
         log.info("DB load: no devices in database — starting with empty state")
+        _mark_load_ok()   # successful load of an empty DB — saves are safe
         return
 
     max_did = 0
@@ -983,6 +1003,7 @@ def db_load(state):
     for did in list(state.devices):
         state.start_device(did)
     log.info("Auto-started all sensors.")
+    _mark_load_ok()
 
 
 # ── Background autosave ──────────────────────────────────────────
@@ -1011,6 +1032,15 @@ def autosave_loop(state):
         _iter += 1
         if _iter % 60 == 0:    # every ~hour
             _logs_enqueue(db_clean_samples)
+            # Prune resolved alert events (main DB) on the same cadence.
+            def _clean_alert_events():
+                try:
+                    from db.alert_events import db_clean_alert_events
+                    _rd = int(_settings.get("alert_events_retain_days", 90) or 90)
+                    db_clean_alert_events(_rd)
+                except Exception as _ae:
+                    log.warning(f"alert_events retention error: {_ae}")
+            _db_enqueue(_clean_alert_events)
         if _iter % 360 == 0:   # every ~6 hours
             # Check license expirations
             try:

@@ -4,6 +4,19 @@ Detailed implementation notes for every shipped feature. For the high-level road
 
 ---
 
+## v1.2 — Bug fixes
+
+**Event ACK lost after service restart.** Sensor runtime state (`_alerted_down`, `_threshold_state`) is reset on every restart, so the first post-restart probe of a still-down sensor logged a brand-new `active` flap row alongside the previously-acknowledged one — looking to the operator like the ACK was dropped. New `db_load_unresolved_flap_state()` in [db/events.py](db/events.py) re-hydrates those flags (plus `_down_since_ts` / `_threshold_triggered_ts` for accurate durations) from unresolved `flap_log` rows during [db_load](db/persistence.py), on both SQLite and PG paths, before sensors start probing. Threshold precedence (crit over warn) matches the live escalation logic.
+
+**Live-map link routing.** Several passes over the orthogonal SVG router in [frontend/livemap.js](frontend/livemap.js):
+
+- *Wide fan-outs* — when a parent's children span much wider than the card (BladeCenter feeding hypervisors across the canvas), entry points are now ranked by child X and distributed evenly across the parent's bottom edge instead of clamped to the nearest corner. Eliminates duplicate exit points where two siblings on the same side stacked onto one X, and reflows automatically when groups are added or deleted.
+- *Per-child sub-lanes + bus suppression* — with more than two children, each child gets its own Y row in the trunk band and the thick trunk-bus underlay is dropped; N horizontals read as N distinct lanes instead of one bar.
+- *Line-count collapse with full hover data* — fan-outs with more than two children draw one line per child instead of one per port pair (4 children × 6 ports no longer means 24 parallel lines). The hover tooltip still lists every collapsed port mapping — the visual is reduced, never the data. Per-port parallel lines remain for peer links (LACP bundles between switches).
+- *Hypervisor → VM breathing room* — the VM Clusters row gets a wider gap above it (`.sd-tier-vm` in [livemap.css](frontend/livemap.css)) since that band carries the densest routing.
+
+---
+
 ## v1.1 — REST API tokens & dedicated API doc
 
 Scoped Bearer-token authentication for scripts, CI, and Terraform — running alongside the existing browser cookie session, never replacing it. The full REST API reference moves out of DEVELOPER.md into its own [API.md](API.md).

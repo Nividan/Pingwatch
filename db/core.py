@@ -7,6 +7,7 @@ import queue
 import shutil
 import sqlite3
 import threading
+import time
 
 from core.auth   import _hash_pw, _SESSIONS, _SESSIONS_LOCK
 from core.config import DB_PATH, LOGS_DB_PATH
@@ -14,8 +15,34 @@ from core.logger import log
 from db.backend  import is_pg
 
 # ── Single-writer queues (Main DB + Logs DB) ─────────────────────────────────
-_DB_QUEUE:   queue.Queue = queue.Queue()
-_LOGS_QUEUE: queue.Queue = queue.Queue()
+# Bounded: if the SQLite writer stalls (slow disk, AV scan, lock storm) an
+# unbounded queue grows without limit — each queued autosave closure pins a
+# full device/sensor snapshot. When full, new work is dropped with a
+# rate-limited warning (bounded loss beats OOM, matching the sample buffer).
+_DB_QUEUE:   queue.Queue = queue.Queue(maxsize=50_000)
+_LOGS_QUEUE: queue.Queue = queue.Queue(maxsize=50_000)
+_writers_stopped = False           # set by shutdown_writers()
+_q_drop_logged   = {"main": 0.0, "logs": 0.0}
+
+
+def _put_or_drop(q, fn, name):
+    """Enqueue for the writer thread; drop with a warning when saturated.
+    After shutdown_writers() the threads are gone — execute inline (best
+    effort) so late writes aren't silently queued into the void."""
+    if _writers_stopped:
+        try:
+            fn()
+        except Exception as e:
+            log.error(f"{name} DB write after writer shutdown failed: {e}")
+        return
+    try:
+        q.put_nowait(fn)
+    except queue.Full:
+        now = time.time()
+        if now - _q_drop_logged[name] > 60:
+            log.warning(f"{name} DB writer queue full ({q.maxsize}) — dropping "
+                        "write. Writer is stalled; check disk I/O and locks.")
+            _q_drop_logged[name] = now
 
 
 def _db_writer_loop():
@@ -67,14 +94,19 @@ def shutdown_writers(timeout: float = 10.0) -> dict:
     writes were dropped — surface it in ops logs instead of silently
     proceeding.
     """
+    global _writers_stopped
     half = max(0.1, timeout / 2)
     # Capture pending counts BEFORE enqueuing the sentinel — otherwise the
     # sentinel itself inflates the count by 1, producing the misleading
     # 'pending=1' on otherwise-idle queues.
     main_pending = _DB_QUEUE.qsize()
     logs_pending = _LOGS_QUEUE.qsize()
-    _DB_QUEUE.put(None)
-    _LOGS_QUEUE.put(None)
+    _writers_stopped = True   # later enqueues execute inline instead of vanishing
+    # Bounded put: on a wedged/full queue, don't hang shutdown forever.
+    try: _DB_QUEUE.put(None, timeout=half)
+    except queue.Full: pass
+    try: _LOGS_QUEUE.put(None, timeout=half)
+    except queue.Full: pass
     _db_writer_thread.join(timeout=half)
     _logs_writer_thread.join(timeout=half)
     return {
@@ -95,7 +127,7 @@ def _db_enqueue(fn):
         except Exception as e:
             log.error(f"DB writer error: {e}")
     else:
-        _DB_QUEUE.put(fn)
+        _put_or_drop(_DB_QUEUE, fn, "main")
 
 
 def _logs_enqueue(fn):
@@ -107,7 +139,7 @@ def _logs_enqueue(fn):
         except Exception as e:
             log.error(f"Logs DB writer error: {e}")
     else:
-        _LOGS_QUEUE.put(fn)
+        _put_or_drop(_LOGS_QUEUE, fn, "logs")
 
 
 # ── Schema init ──────────────────────────────────────────────────
@@ -215,6 +247,9 @@ def db_init():
                 target TEXT    DEFAULT '',
                 detail TEXT    DEFAULT ''
             )""")
+        # db_log_audit trims per-insert with `ORDER BY ts DESC`; index ts so the
+        # trim and the newest-first list query don't full-scan + sort.
+        con.execute("CREATE INDEX IF NOT EXISTS idx_audit_ts ON audit_log(ts)")
         con.execute("""
             CREATE TABLE IF NOT EXISTS dashboards (
                 id         INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1281,6 +1316,12 @@ def logs_db_init():
                 stype TEXT,
                 msg   TEXT
             )""")
+        # db_log_err trims per-insert with a `(did,sid)` subquery on every
+        # sensor error — without this index that's two full scans, and error
+        # volume peaks exactly during outages.
+        con.execute(
+            "CREATE INDEX IF NOT EXISTS idx_err_log_did_sid ON sensor_err_log(did, sid)"
+        )
         con.execute("""
             CREATE TABLE IF NOT EXISTS snmp_traps (
                 id                 INTEGER PRIMARY KEY AUTOINCREMENT,

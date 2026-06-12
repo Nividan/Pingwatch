@@ -181,6 +181,13 @@ class QuietServer(http.server.ThreadingHTTPServer):
 # ── HTTP Handler ─────────────────────────────────────────────────
 
 class Handler(http.server.BaseHTTPRequestHandler):
+    # Per-socket timeout (socketserver applies it in setup()). Without it the
+    # default is None: a stalled client pins its handler thread forever in
+    # readline()/read()/write() — slowloris or just flaky clients accumulate
+    # threads without bound on a 24/7 deployment. The timeout is per-recv/send,
+    # so slow-but-progressing uploads and SSE streams are unaffected.
+    timeout = 60
+
     def log_message(self, fmt, *args): pass
 
     # ── Auth helpers ──────────────────────────────────────────────
@@ -1050,26 +1057,54 @@ def main():
         _headless_stop.wait()
 
     # ── Graceful shutdown ─────────────────────────────────────────
+    # Order: stop probe sources → drain in-flight probes (bounded) → persist
+    # config + final samples → stop writers → stop remaining loops → drain
+    # alerts → close pool. Draining probes BEFORE the final flush means their
+    # last results land in the buffer and get written; bounding the drain
+    # keeps total shutdown inside systemd's default 90 s kill window even
+    # when a probe is wedged at its hard cap.
     log.info("Shutting down...")
-    STATE.stop_all()
-    STATE._executor.shutdown(wait=False)
-    db_save(STATE)
-    log.info("Configuration saved.")
-    # Flush the in-memory sample buffer BEFORE draining the writer queues —
-    # flush enqueues one final batch-insert that the drain then writes. The
-    # reverse order would discard the last buffer.
-    try:
-        db_flush_samples()
-    except Exception as e:
-        log.error(f"db_flush_samples at shutdown failed: {e}")
-    # Stop the 60 s autosave loop BEFORE tearing down writers / the PG pool.
-    # Otherwise its uninterrupted sleep can wake up after pg_close_pool() and
-    # emit a misleading 'PostgreSQL pool is closed' error.
+    # resolve_events=False: restarting the monitor mid-outage must not close
+    # open incidents (downtime continuity, ack state, boot re-hydration).
+    STATE.stop_all(resolve_events=False)
+    # Stop periodic background feeders early so nothing races the teardown
+    # below (autosave waking after pool close, flush loop double-draining).
     try:
         from db.persistence import stop_autosave
         stop_autosave()
     except Exception as e:
         log.warning(f"stop_autosave failed: {e}")
+    try:
+        from db.samples import stop_sample_flush, stop_rollup_worker
+        stop_sample_flush()
+        stop_rollup_worker()
+    except Exception as e:
+        log.warning(f"stop sample/rollup workers failed: {e}")
+    # Bounded drain of probe workers: shutdown(wait=True) alone can block up
+    # to the 90 s probe hard cap. Also needed before closing the PG pool —
+    # an in-flight alert-engine query against a closed pool raises
+    # "InterfaceError: cursor already closed".
+    try:
+        STATE._executor.shutdown(wait=False)
+        _drain_deadline = time.time() + 15
+        for _wt in list(getattr(STATE._executor, "_threads", []) or []):
+            _wt.join(timeout=max(0.1, _drain_deadline - time.time()))
+        _stuck = sum(1 for _wt in getattr(STATE._executor, "_threads", [])
+                     if _wt.is_alive())
+        if _stuck:
+            log.warning(f"{_stuck} probe worker(s) still busy after 15s drain "
+                        "— proceeding with shutdown")
+    except Exception as e:
+        log.warning(f"executor drain failed: {e}")
+    db_save(STATE)
+    log.info("Configuration saved.")
+    # Flush the in-memory sample buffer BEFORE draining the writer queues —
+    # the flush writes directly; doing it after probe drain captures the
+    # final probe results too.
+    try:
+        db_flush_samples()
+    except Exception as e:
+        log.error(f"db_flush_samples at shutdown failed: {e}")
     try:
         summary = shutdown_writers(timeout=10.0)
         log.info(
@@ -1085,15 +1120,6 @@ def main():
             )
     except Exception as e:
         log.error(f"shutdown_writers failed: {e}")
-    # Stop periodic background threads before tearing down the pool,
-    # otherwise they race pg_close_pool() and spam 'NoneType has no
-    # attribute getconn' errors until the process actually exits.
-    try:
-        from db.samples import stop_sample_flush, stop_rollup_worker
-        stop_sample_flush()
-        stop_rollup_worker()
-    except Exception as e:
-        log.warning(f"stop sample/rollup workers failed: {e}")
     try:
         from core.ldap_auth import stop_ldap_sync
         stop_ldap_sync()
@@ -1114,16 +1140,6 @@ def main():
         stop_backup_scheduler()
     except Exception as e:
         log.warning(f"stop backup scheduler failed: {e}")
-    # Final drain of probe workers BEFORE closing the PG pool. The earlier
-    # `STATE._executor.shutdown(wait=False)` lets the rest of shutdown run in
-    # parallel, but a probe that cleared its `s.running` check continues
-    # through the alert-engine path (e.g. db_get_stage_state on alert_profile_state).
-    # Closing the pool while such a query is mid-flight raises
-    # "InterfaceError: cursor already closed".
-    try:
-        STATE._executor.shutdown(wait=True)
-    except Exception as e:
-        log.warning(f"executor final drain failed: {e}")
     # Drain pending alert batches synchronously — otherwise alert_batcher's
     # atexit hook runs after pg_close_pool() and every dispatch raises
     # "PostgreSQL pool is closed".

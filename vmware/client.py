@@ -205,29 +205,39 @@ def _make_ssl_ctx(verify_ssl):
 
 
 def _get_session(host, user, password, port=443, verify_ssl=False):
-    """Return a cached or fresh ServiceInstance."""
+    """Return a cached or fresh ServiceInstance.
+
+    Every ServiceInstance we stop using is Disconnect()-ed — pyVmomi holds an
+    HTTPS connection AND a server-side vCenter session per instance, and
+    vCenter caps concurrent sessions. Dropping a reference without Disconnect()
+    leaked one session every TTL (25 min) until vCenter locked everyone out.
+    """
     SmartConnect, Disconnect, vim, vmodl = _require_pyvmomi()
 
     key = (host, user)
     now = time.monotonic()
 
+    # Read the cached entry under the lock, then validate it OUTSIDE the lock.
+    # The health check is a network round-trip; running it under the global
+    # _sessions_lock meant one hung-but-reachable vCenter stalled probes for
+    # every other vCenter behind the lock.
     with _sessions_lock:
-        if key in _sessions:
-            si, expiry = _sessions[key]
-            if now < expiry:
-                # Quick health check — bounded so a dead cached session doesn't
-                # block discover for 60+s waiting on a TCP RST.
-                try:
-                    with _socket_timeout(_HEALTH_CHECK_TIMEOUT_S):
-                        si.CurrentTime()
-                    return si
-                except Exception:
-                    # Session stale — reconnect below
-                    try:
-                        Disconnect(si)
-                    except Exception:
-                        pass
-                    del _sessions[key]
+        entry = _sessions.get(key)
+    if entry is not None:
+        si, expiry = entry
+        if now < expiry:
+            try:
+                with _socket_timeout(_HEALTH_CHECK_TIMEOUT_S):
+                    si.CurrentTime()
+                return si
+            except Exception:
+                pass   # stale — fall through to reconnect + Disconnect old
+        # Expired or failed health check: drop it from the cache and
+        # Disconnect (only if no other thread already replaced it).
+        with _sessions_lock:
+            if _sessions.get(key) is entry:
+                del _sessions[key]
+                _disconnect_quietly(Disconnect, si)
 
     # Create new connection (outside lock — may block on network)
     ctx = _make_ssl_ctx(verify_ssl)
@@ -247,9 +257,21 @@ def _get_session(host, user, password, port=443, verify_ssl=False):
             raise ConnectionError("Connection timed out (60s) — check vCenter/ESXi host is reachable")
         raise ConnectionError(f"Connection failed: {err}")
 
+    # Publish the new session. If another thread raced us and already cached
+    # one, Disconnect the loser so it doesn't leak.
     with _sessions_lock:
+        prev = _sessions.get(key)
         _sessions[key] = (si, now + _SESSION_TTL)
+    if prev is not None:
+        _disconnect_quietly(Disconnect, prev[0])
     return si
+
+
+def _disconnect_quietly(Disconnect, si) -> None:
+    try:
+        Disconnect(si)
+    except Exception:
+        pass
 
 
 def _invalidate_session(host, user):
@@ -667,6 +689,34 @@ def _query_all_metrics(si, entity_moref, metrics, num_cpu=1):
 
 def vmware_probe(host, user, password, vm_id, metric,
                  port=443, verify_ssl=False, timeout=30, disk_path=""):
+    """Probe a single VMware metric for a VM or ESXi host.
+
+    Thin wrapper: runs the real probe under a hard wall-clock cap. The probe
+    path makes SOAP calls (RetrieveContent / QueryPerf) on pyVmomi's pooled
+    HTTPS sockets, which ignore socket.setdefaulttimeout — so without
+    _run_with_timeout a hung-but-reachable vCenter could block the probe far
+    past `timeout`, leaking an orphan thread every cycle. The cache TTL means
+    most probes are cache hits and never reach here.
+    """
+    _cap = max(float(timeout or 30) + 5, 60)
+    try:
+        return _run_with_timeout(
+            f"probe-{vm_id}-{metric}",
+            lambda: _vmware_probe_impl(host, user, password, vm_id, metric,
+                                       port, verify_ssl, timeout, disk_path),
+            _cap,
+        )
+    except ConnectionError as e:
+        # Hard-cap trip or connection failure — invalidate the session so the
+        # next probe reconnects rather than reusing a wedged one.
+        _invalidate_session(host, user)
+        return {"ok": False, "ms": None, "detail": str(e)}
+    except Exception as e:
+        return {"ok": False, "ms": None, "detail": f"VMware probe error: {e}"}
+
+
+def _vmware_probe_impl(host, user, password, vm_id, metric,
+                       port=443, verify_ssl=False, timeout=30, disk_path=""):
     """Probe a single VMware metric for a VM or ESXi host.
 
     Host metrics are identified by the ``host_`` prefix on the metric key.

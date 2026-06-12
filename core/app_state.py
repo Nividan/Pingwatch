@@ -12,8 +12,8 @@ from .state import MonitorState
 STATE = MonitorState()
 
 # ── Version & uptime ─────────────────────────────────────────────
-APP_VERSION      = "1.1"
-APP_VERSION_NAME = "REST API tokens"
+APP_VERSION      = "1.2"
+APP_VERSION_NAME = "bug fixes"
 SERVER_START = time.time()
 
 # ── Effective network ports (overwritten by main() from settings) ─

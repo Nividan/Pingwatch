@@ -1683,11 +1683,31 @@ let activeMainTab=(()=>{try{const t=localStorage.getItem('pw_tab')||'devices';re
 // Apply correct tab button immediately — synchronous, no network request needed
 document.getElementById('tab'+activeMainTab[0].toUpperCase()+activeMainTab.slice(1))?.classList.add('active');
 
+// Pop the oldest flap AND forget its dedup key. Without the delete, _FLAP_SEEN
+// grew unbounded for the life of the tab (one interned key per event ever
+// seen) even though FLAPS itself is capped — a multi-day NOC session leak.
+function _flapPop(){
+  const popped=FLAPS.pop();
+  if(popped) _FLAP_SEEN.delete(_flapKey(popped));
+}
+
+// Coalesce Events re-renders. During a correlated outage hundreds of distinct
+// flap/threshold events arrive in a burst; rendering synchronously per event
+// triggered N full #evtList innerHTML rebuilds + O(n²) collapse scans, freezing
+// the UI exactly when operators need it. We instead debounce, and skip the
+// rebuild entirely unless the Events tab is active (it re-renders on tab entry).
+let _renderFlapsTimer=null;
+function _scheduleRenderFlaps(){
+  if(activeMainTab!=='events') return;
+  if(_renderFlapsTimer) return;
+  _renderFlapsTimer=setTimeout(()=>{ _renderFlapsTimer=null; renderFlaps(); }, 200);
+}
+
 function pushFlap(d){
   const k=_flapKey(d); if(_FLAP_SEEN.has(k)) return; _FLAP_SEEN.add(k);
   FLAPS.unshift(d);
-  if(FLAPS.length>MAX_FLAPS) FLAPS.pop();
-  renderFlaps();
+  if(FLAPS.length>MAX_FLAPS) _flapPop();
+  _scheduleRenderFlaps();
   flashDownPill();
 }
 
@@ -1705,15 +1725,15 @@ function resolveFlap(d, matchDir){
       break;
     }
   }
-  renderFlaps();
+  _scheduleRenderFlaps();
 }
 
 function pushThresholdEvent(d, level){
   const entry=Object.assign({},d,{_direction:'threshold',_thr_level:level});
   const k=_flapKey(entry); if(_FLAP_SEEN.has(k)) return; _FLAP_SEEN.add(k);
   FLAPS.unshift(entry);
-  if(FLAPS.length>MAX_FLAPS)FLAPS.pop();
-  renderFlaps();
+  if(FLAPS.length>MAX_FLAPS) _flapPop();
+  _scheduleRenderFlaps();
 }
 
 function renderFlaps(){

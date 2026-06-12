@@ -102,7 +102,7 @@ function tileHTML(s){
     <div class="stl-sdot ${st}"></div>
   </div>
   <div class="stl-body">
-    <div class="stl-val ${vc}" id="stv-${s.device_id}_${s.sensor_id}">${vt}</div>
+    <div class="stl-val ${vc}" id="stv-${s.device_id}_${s.sensor_id}">${esc(vt)}</div>
     <div class="stl-det" title="${esc(s.last_detail||'')}">
       <span id="std-${s.device_id}_${s.sensor_id}">${esc(_tileDetail(s, tgt))}</span>
     </div>
@@ -1526,7 +1526,7 @@ function openDetail(did,sid,initialTab){
       <div class="dm-metrics">
         ${['last','avg','min','max','loss','sent'].map(k=>`
         <div class="dm-m">
-          <span class="dm-mv" id="dmv-${did}-${sid}-${k}">${mVal(s,k)}</span>
+          <span class="dm-mv" id="dmv-${did}-${sid}-${k}">${esc(mVal(s,k))}</span>
           <span class="dm-mk">${k.toUpperCase()}</span>
         </div>`).join('')}
       </div>
