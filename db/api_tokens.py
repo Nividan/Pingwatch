@@ -15,9 +15,15 @@ from db.helpers  import db_query, db_query_one, db_execute, db_cursor
 
 
 def db_create_api_token(token_hash: str, name: str, username: str,
-                        scope: str, expires_at: float | None = None) -> int | None:
-    """Insert a new API token row. Returns the new id, or None on failure."""
-    if scope not in ("read", "full"):
+                        scope: str, expires_at: float | None = None,
+                        probe_id: str | None = None) -> int | None:
+    """Insert a new API token row. Returns the new id, or None on failure.
+
+    scope='probe' tokens belong to a remote probe (distributed probes,
+    v1.3): username is the synthetic 'probe:<probe_id>' principal — no
+    users row exists for it — and probe_id links back to the probe record.
+    """
+    if scope not in ("read", "full", "probe"):
         return None
     now = time.time()
     try:
@@ -25,17 +31,17 @@ def db_create_api_token(token_hash: str, name: str, username: str,
             if is_pg():
                 cur.execute(
                     "INSERT INTO api_tokens "
-                    "(token_hash, name, username, scope, created_at, expires_at) "
-                    "VALUES (%s,%s,%s,%s,%s,%s) RETURNING id",
-                    (token_hash, name, username, scope, now, expires_at))
+                    "(token_hash, name, username, scope, created_at, expires_at, probe_id) "
+                    "VALUES (%s,%s,%s,%s,%s,%s,%s) RETURNING id",
+                    (token_hash, name, username, scope, now, expires_at, probe_id))
                 row = cur.fetchone()
                 return row["id"] if row else None
             else:
                 cur.execute(
                     "INSERT INTO api_tokens "
-                    "(token_hash, name, username, scope, created_at, expires_at) "
-                    "VALUES (?,?,?,?,?,?)",
-                    (token_hash, name, username, scope, now, expires_at))
+                    "(token_hash, name, username, scope, created_at, expires_at, probe_id) "
+                    "VALUES (?,?,?,?,?,?,?)",
+                    (token_hash, name, username, scope, now, expires_at, probe_id))
                 return cur.lastrowid
     except Exception as e:
         log.error(f"db_create_api_token failed: {type(e).__name__}: {e}")
@@ -44,13 +50,18 @@ def db_create_api_token(token_hash: str, name: str, username: str,
 
 def db_get_api_token_by_hash(token_hash: str) -> dict | None:
     """Look a token up by its SHA-256 hash. Returns the row joined with the
-    owning user's role, or None if not found / revoked / expired."""
+    owning user's role, or None if not found / revoked / expired.
+
+    LEFT JOIN: probe-scoped tokens have no users row (their username is the
+    synthetic 'probe:<probe_id>'); role comes back '' for them — the
+    /api/agent/* scope jail in server.py is their only authority."""
     row = db_query_one("main", """
         SELECT t.id, t.token_hash, t.name, t.username, t.scope,
                t.created_at, t.expires_at, t.last_used_at, t.revoked_at,
-               u.role
+               t.probe_id,
+               COALESCE(u.role, '') AS role
         FROM api_tokens t
-        JOIN users u ON u.username = t.username
+        LEFT JOIN users u ON u.username = t.username
         WHERE t.token_hash = ?
     """, (token_hash,))
     if not row:
@@ -77,9 +88,9 @@ def db_list_api_tokens(username: str | None = None,
     sql = """
         SELECT t.id, t.name, t.username, t.scope,
                t.created_at, t.expires_at, t.last_used_at, t.revoked_at,
-               u.role
+               COALESCE(u.role, '') AS role
         FROM api_tokens t
-        JOIN users u ON u.username = t.username
+        LEFT JOIN users u ON u.username = t.username
     """
     if where:
         sql += " WHERE " + " AND ".join(where)

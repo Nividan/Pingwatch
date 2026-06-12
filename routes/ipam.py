@@ -476,15 +476,46 @@ def handle(h, method, path, body):
                 # instead of failing with a 409.
                 h._json(200, {'ok': True, 'scan_id': existing, 'already_running': True})
                 return True
-        # Reuse the discovery scanner with skip_monitored=False so already-
-        # monitored IPs still get refreshed in the allocation grid. Mode is
-        # 'ping' (cheaper, no port-scan enrichment) — IPAM only needs the
-        # ip + hostname; sensor-suggestion data isn't displayed in the grid.
-        from monitoring.subnet_discovery import start_scan
-        scan_id, err = start_scan(sub['cidr'], skip_monitored=False, mode='ping')
-        if not scan_id:
-            log.warning(f"IPAM scan start failed: subnet={subnet_id} cidr={sub['cidr']!r} err={err!r}")
-            h._json(400, {'error': err or 'scan start failed'}); return True
+        # Distributed probes: a subnet whose site is bound to a probe scans
+        # FROM that probe — central usually can't reach branch ranges. The
+        # registry entry looks identical to a local scan, so the poll
+        # endpoint and the apply worker below need no changes.
+        from core.probe_assign import site_probe
+        _probe_id = site_probe((sub.get('site') or '').strip())
+        if _probe_id:
+            from db.probes import db_get_probe, db_create_task
+            _probe = db_get_probe(_probe_id)
+            if not _probe or _probe.get('status') != 'enrolled':
+                h._json(409, {'error': "this subnet's site is bound to a probe "
+                                       "that is not enrolled — scan unavailable"})
+                return True
+            from monitoring.subnet_discovery import (register_remote_scan,
+                                                     bind_remote_scan_task,
+                                                     complete_remote_scan)
+            scan_id, err = register_remote_scan(sub['cidr'], 'ping', _probe_id)
+            if not scan_id:
+                h._json(400, {'error': err or 'scan start failed'}); return True
+            import json as _json
+            _tid = db_create_task(_probe_id, 'ipam_scan',
+                                  _json.dumps({'scan_id': scan_id,
+                                               'cidr': sub['cidr'],
+                                               'mode': 'ping',
+                                               'subnet_id': subnet_id}),
+                                  user)
+            if not _tid:
+                complete_remote_scan(scan_id, [], error='failed to queue task')
+                h._json(500, {'error': 'failed to queue scan task'}); return True
+            bind_remote_scan_task(scan_id, _tid)
+        else:
+            # Reuse the discovery scanner with skip_monitored=False so already-
+            # monitored IPs still get refreshed in the allocation grid. Mode is
+            # 'ping' (cheaper, no port-scan enrichment) — IPAM only needs the
+            # ip + hostname; sensor-suggestion data isn't displayed in the grid.
+            from monitoring.subnet_discovery import start_scan
+            scan_id, err = start_scan(sub['cidr'], skip_monitored=False, mode='ping')
+            if not scan_id:
+                log.warning(f"IPAM scan start failed: subnet={subnet_id} cidr={sub['cidr']!r} err={err!r}")
+                h._json(400, {'error': err or 'scan start failed'}); return True
         with _active_scans_mutex:
             _active_scans[subnet_id] = scan_id
         t = threading.Thread(
@@ -533,9 +564,15 @@ def handle(h, method, path, body):
         if not user: return True
         subnet_id = int(m.group(1))
         scan_id   = m.group(2)
-        from monitoring.subnet_discovery import cancel_scan
+        from monitoring.subnet_discovery import cancel_scan, get_scan
         ok = cancel_scan(scan_id)
         if ok:
+            # Remote scans: flip the agent task too so the probe aborts the
+            # sweep (relayed via the checkin response's cancelled_tasks).
+            _st = get_scan(scan_id)
+            if _st and _st.get('task_id'):
+                from db.probes import db_set_task_state
+                db_set_task_state(int(_st['task_id']), 'cancelled')
             log.info(f"IPAM scan cancelled: subnet={subnet_id} scan_id={scan_id} by={user!r}")
         h._json(200, {'ok': bool(ok)})
         return True

@@ -193,20 +193,23 @@ def db_init():
                 username TEXT NOT NULL,
                 expires  REAL NOT NULL
             )""")
-        # Bearer-token auth for scripts / CI / Terraform. token_hash is
-        # SHA-256 of the plaintext token (plaintext never stored). scope
-        # gates HTTP method: 'read' = GET/HEAD/OPTIONS only, 'full' = any.
+        # Bearer-token auth for scripts / CI / Terraform / remote probes.
+        # token_hash is SHA-256 of the plaintext token (plaintext never
+        # stored). scope gates access: 'read' = GET/HEAD/OPTIONS only,
+        # 'full' = any, 'probe' = /api/agent/* endpoints only (distributed
+        # probes, v1.3). probe_id links a probe-scoped token to its probe.
         con.execute("""
             CREATE TABLE IF NOT EXISTS api_tokens (
                 id           INTEGER PRIMARY KEY AUTOINCREMENT,
                 token_hash   TEXT NOT NULL UNIQUE,
                 name         TEXT NOT NULL,
                 username     TEXT NOT NULL,
-                scope        TEXT NOT NULL CHECK(scope IN ('read','full')),
+                scope        TEXT NOT NULL CHECK(scope IN ('read','full','probe')),
                 created_at   REAL NOT NULL,
                 expires_at   REAL,
                 last_used_at REAL,
-                revoked_at   REAL
+                revoked_at   REAL,
+                probe_id     TEXT DEFAULT NULL
             )""")
         con.execute("CREATE INDEX IF NOT EXISTS idx_api_tokens_user "
                     "ON api_tokens(username)")
@@ -376,6 +379,8 @@ def db_init():
             ("log_audit_days",         "365"),
             ("log_backup_max_mb",      "5"),
             ("log_backup_backups",     "5"),
+            ("log_probes_max_mb",      "5"),
+            ("log_probes_backups",     "5"),
             # Tunables surfaced in per-feature tabs (SMTP/DB/Auto-Discovery/Sensors/Import)
             ("smtp_timeout_s",                 "10"),
             ("pg_statement_timeout_s",         "30"),
@@ -383,6 +388,9 @@ def db_init():
             ("auto_discover_scan_deadline_s", "300"),
             ("sftp_checksum_max_mb",           "10"),
             ("import_max_payload_mb",          "8"),
+            # Distributed probes (v1.3) — optional probe-offline email
+            ("probe_offline_email",            "0"),
+            ("probe_offline_email_to",         ""),
         ]:
             if not con.execute("SELECT 1 FROM app_settings WHERE key=?", (_k,)).fetchone():
                 con.execute("INSERT INTO app_settings VALUES (?,?)", (_k, _v))
@@ -1109,6 +1117,102 @@ def db_init():
                 con.commit()
             except Exception:
                 pass
+        # ── Distributed probes (v1.3) ─────────────────────────────────
+        # Remote agents that run sensor probes in branch networks and ship
+        # results back over HTTPS. probes = registry + enrollment + liveness;
+        # agent_tasks = on-demand work queue (IPAM scans, discovery sweeps).
+        # Scan results never land here — they flow into the in-memory _SCANS
+        # registry exactly like local scans.
+        con.execute("""
+            CREATE TABLE IF NOT EXISTS probes (
+                probe_id          TEXT PRIMARY KEY,
+                name              TEXT NOT NULL,
+                description       TEXT DEFAULT '',
+                status            TEXT DEFAULT 'pending',
+                enroll_token_hash TEXT DEFAULT NULL,
+                enroll_expires    REAL DEFAULT NULL,
+                token_id          INTEGER DEFAULT NULL,
+                config_version    INTEGER DEFAULT 1,
+                last_seen         REAL DEFAULT 0,
+                last_checkin_ip   TEXT DEFAULT '',
+                agent_version     TEXT DEFAULT '',
+                protocol_version  INTEGER DEFAULT 0,
+                os_info           TEXT DEFAULT '',
+                capabilities      TEXT DEFAULT '{}',
+                spool_depth       INTEGER DEFAULT 0,
+                offline_alerted   INTEGER DEFAULT 0,
+                clock_skew_s      REAL DEFAULT 0,
+                created_at        REAL NOT NULL,
+                created_by        TEXT DEFAULT ''
+            )""")
+        con.execute("""
+            CREATE TABLE IF NOT EXISTS agent_tasks (
+                id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                probe_id      TEXT NOT NULL,
+                task_type     TEXT NOT NULL,
+                payload       TEXT DEFAULT '{}',
+                state         TEXT DEFAULT 'pending',
+                progress      TEXT DEFAULT '{}',
+                error         TEXT DEFAULT '',
+                created_by    TEXT DEFAULT '',
+                created_at    REAL DEFAULT 0,
+                dispatched_at REAL DEFAULT 0,
+                finished_at   REAL DEFAULT 0
+            )""")
+        con.execute(
+            "CREATE INDEX IF NOT EXISTS idx_agent_tasks_probe_state "
+            "ON agent_tasks(probe_id, state)"
+        )
+        # probe_id assignment columns — '' = inherit (sensor→device→site→
+        # central), literal 'central' = explicit pin back to central probing.
+        for stmt in [
+            "ALTER TABLE devices ADD COLUMN probe_id TEXT DEFAULT ''",
+            "ALTER TABLE sensors ADD COLUMN probe_id TEXT DEFAULT ''",
+            "ALTER TABLE sites   ADD COLUMN probe_id TEXT DEFAULT ''",
+        ]:
+            try:
+                con.execute(stmt)
+                con.commit()
+            except Exception:
+                pass  # column already exists
+        # api_tokens 'probe' scope — the original CHECK(scope IN
+        # ('read','full')) must be widened and probe_id added. SQLite cannot
+        # alter a CHECK constraint → one-time table rebuild, gated on the
+        # probe_id column's absence. The pre-migration file backup at the
+        # top of db_init() already covers this DB.
+        _api_cols = [r[1] for r in con.execute("PRAGMA table_info(api_tokens)").fetchall()]
+        if "probe_id" not in _api_cols:
+            try:
+                con.execute("ALTER TABLE api_tokens RENAME TO api_tokens_old")
+                con.execute("""
+                    CREATE TABLE api_tokens (
+                        id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                        token_hash   TEXT NOT NULL UNIQUE,
+                        name         TEXT NOT NULL,
+                        username     TEXT NOT NULL,
+                        scope        TEXT NOT NULL CHECK(scope IN ('read','full','probe')),
+                        created_at   REAL NOT NULL,
+                        expires_at   REAL,
+                        last_used_at REAL,
+                        revoked_at   REAL,
+                        probe_id     TEXT DEFAULT NULL
+                    )""")
+                con.execute(
+                    "INSERT INTO api_tokens (id, token_hash, name, username, scope,"
+                    " created_at, expires_at, last_used_at, revoked_at)"
+                    " SELECT id, token_hash, name, username, scope, created_at,"
+                    " expires_at, last_used_at, revoked_at FROM api_tokens_old")
+                con.execute("DROP TABLE api_tokens_old")
+                con.execute("CREATE INDEX IF NOT EXISTS idx_api_tokens_user "
+                            "ON api_tokens(username)")
+                con.execute("CREATE INDEX IF NOT EXISTS idx_api_tokens_hash "
+                            "ON api_tokens(token_hash)")
+                con.commit()
+                log.info("api_tokens migrated: 'probe' scope + probe_id column")
+            except Exception as _ae:
+                con.rollback()
+                log.error(f"api_tokens probe-scope migration failed: {_ae}")
+        con.commit()
     finally:
         con.close()
     log.info("DB init: schema ready")

@@ -61,7 +61,7 @@ function _logsInit() {
       <div class="pagehead">
         <div class="pagehead-l">
           <h1>Logs</h1>
-          <div class="sub" id="lvSub">Application, sensors, audit, and backup streams.</div>
+          <div class="sub" id="lvSub">Application, sensors, audit, backup, and probe streams.</div>
         </div>
         <div class="pagehead-r">
           <button class="btn ghost sm lv-live" id="lvLiveBtn" onclick="_lvToggleLive()" title="Toggle live tail (l)">
@@ -78,6 +78,7 @@ function _logsInit() {
           <button class="lv-stream" data-stream="audit"   onclick="_lvSwitchStream('audit')">Audit</button>
           <button class="lv-stream" data-stream="sensors" onclick="_lvSwitchStream('sensors')">Sensors</button>
           <button class="lv-stream" data-stream="backup"  onclick="_lvSwitchStream('backup')">Backups</button>
+          <button class="lv-stream" data-stream="probes"  onclick="_lvSwitchStream('probes')">Probes</button>
         </div>
       </div>
       <div class="lv-filters">

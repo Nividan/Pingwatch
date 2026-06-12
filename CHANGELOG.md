@@ -4,6 +4,38 @@ Detailed implementation notes for every shipped feature. For the high-level road
 
 ---
 
+## v1.3 — Distributed probes
+
+Remote agents that run sensor probes inside branch offices, DR sites, and customer LANs, shipping results back over **outbound-only HTTPS** — nothing inbound is required at the branch. The central server stops doing per-probe work for remote sensors (scale) and gains reach into networks it can't route to.
+
+### Architecture
+
+- **Agent is dumb, server keeps the brains.** The agent schedules probes locally from a synced config and ships raw results `{ok, ms, value, detail, ts, rate?, snmp_type?}`. Debounce, thresholds, flap detection, alert profiles, and SSE all run through the existing pipeline: [core/state.py](core/state.py) `_run_once_inner` was split so its result-processing half — now `_process_result()` — can be fed remote results from the checkin handler with zero duplicated logic.
+- **Assignment cascade** `sensor.probe_id → device.probe_id → site binding → central`, with the literal `'central'` as an explicit pin. Resolver + cached site map in [core/probe_assign.py](core/probe_assign.py); `probe_id` columns on devices/sensors/sites (both backends). The central scheduler skips probe-assigned sensors (`running` stays true so the UI doesn't show them paused); reassignment takes effect live via `apply_probe_assignment()`.
+- **One transport rhythm.** `POST /api/agent/checkin` every ~10s carries the result batch and doubles as the heartbeat; the response piggybacks `config_version` + pending tasks. When a sensor's ok-state flips, the agent flushes immediately → server alerts within ~1s.
+- **Offline story.** The agent spools to a bounded, restart-safe `spool.jsonl` and backfills **oldest-first** on reconnect: samples land with their original timestamps (gapless charts) but results older than a staleness cutoff are persisted sample-only — no event/alert replay of incidents that already ended. A per-sensor `_last_processed_ts` guard (lazy-seeded from `MAX(sensor_samples.ts)`) makes batch re-sends across server restarts duplicate-proof. The watchdog ([monitoring/probe_watchdog.py](monitoring/probe_watchdog.py)) fires exactly one `probe_offline` event after ~35s of silence; member sensors grey out as *stale*, never false-DOWN, and nothing ever auto-falls-back to central.
+- **Remote IPAM scans + discovery.** A generic task channel (`agent_tasks` table → checkin pickup → chunked result upload) runs subnet sweeps **from the probe**: IPAM scans of subnets whose site is bound to a probe route there automatically; the Discovery page gains a "scan from" probe option. Results stream into the same in-memory `_SCANS` registry as local scans ([monitoring/subnet_discovery.py](monitoring/subnet_discovery.py)) — the poll/cancel/apply/bulk-add paths are untouched.
+
+### Security
+
+- **Enrollment**: admin creates a probe → one-time token (single use, 7-day expiry, bound to the probe record) baked into a downloadable pre-configured agent package; the agent exchanges it for a long-lived `pw_` bearer token with the new `probe` scope.
+- **Scope jail**: probe tokens are valid **only** under `/api/agent/*` ([server.py](server.py) `_auth`/`_require`); the checkin handler additionally verifies every submitted `(did, sid)` resolves to that probe. The `api_tokens` scope CHECK was widened (`probe`) — table rebuild on SQLite, constraint swap on PG — and the user JOIN became a LEFT JOIN (probe principals have no user row, role stays empty).
+- **TLS pinning**: the package embeds the server certificate's SHA-256; the agent verifies the peer cert fingerprint on every connection — self-signed-friendly MITM protection.
+
+### Agent package
+
+`agent/` in the repo + [core/agent_package.py](core/agent_package.py) builder: the Probes page downloads a zip containing `agent.py` (stdlib-only core), **verbatim copies** of `monitoring/probes.py` and `core/radius_auth.py` (tiny `core/` shims satisfy their imports), installers (`install.sh` → systemd, `install.bat` → Scheduled Task), and a generated `config.json`. ssh/sftp need paramiko, snmp needs the `snmpget` binary — the agent reports capabilities at checkin and the UI shows them as chips.
+
+### UI
+
+New **Probes** sidebar page (live status dot, last seen, agent version + *update available* badge, clock-skew warning, capability chips, spool depth, bound sites, sensor counts; add / download package / re-enroll / revoke / delete-with-reassign-dialog). "Measured from" dropdowns in the device, sensor, and site editors; a "via ‹probe›" pill on device cards with stale-grey rendering while the probe is offline; `probe_offline` / `probe_online` rows in Events.
+
+### Observability
+
+Dedicated **`logs/pingwatchprobes.log`** stream ([core/logger.py](core/logger.py), 5 MB × 5, `log_probes_max_mb`/`log_probes_backups` settings): enrollments, checkin/transport problems, rejected results, offline/online transitions, and task lifecycle — isolated from the main application log, with its own "Probes" tab in the Logs viewer. Branch-side, the agent keeps a rotating `agent.log` next to itself.
+
+---
+
 ## v1.2 — Bug fixes
 
 **Event ACK lost after service restart.** Sensor runtime state (`_alerted_down`, `_threshold_state`) is reset on every restart, so the first post-restart probe of a still-down sensor logged a brand-new `active` flap row alongside the previously-acknowledged one — looking to the operator like the ACK was dropped. New `db_load_unresolved_flap_state()` in [db/events.py](db/events.py) re-hydrates those flags (plus `_down_since_ts` / `_threshold_triggered_ts` for accurate durations) from unresolved `flap_log` rows during [db_load](db/persistence.py), on both SQLite and PG paths, before sensors start probing. Threshold precedence (crit over warn) matches the live escalation logic.

@@ -635,6 +635,9 @@ function sensorFormHTML(dev, s=null) {
       <div class="fr"><label class="fl">Timeout (s)</label>
         <input type="number" id="as-tmo" value="${s?.timeout||(window._snrDef?.timeout||4)}" min="1" max="60"/></div>
     </div>
+    <div class="fr" style="margin-top:8px"><label class="fl">Run from <span style="color:var(--text3);font-weight:400;font-size:11px">(override which probe measures this sensor)</span></label>
+      ${typeof _probeSelectHtml==='function' ? _probeSelectHtml('as-probe', s?.probe_id||'', 'Inherit from device / site') : '<select id="as-probe"><option value="">Inherit</option></select>'}
+    </div>
   </div>
   ${isEdit ? '' : `<!-- Start Immediately -->
   <div class="fr" style="margin-top:8px"><label class="fl">Start Immediately</label>
@@ -2479,6 +2482,8 @@ function collectSensorForm(did){
           dns_query,dns_record_type,dns_server,http_expected_status,
           warn_ms,crit_ms,loss_warn_pct,loss_crit_pct,
           keyword,keyword_case,banner_regex,alerts_muted};
+  { const _asp=document.getElementById('as-probe');
+    if(_asp) payload.probe_id=_asp.value||''; }
   // SNMPv3 per-sensor override — only send when type=snmp + version=3.  Empty
   // fields round-trip as "" so the backend inherits from the device default.
   if(type==='snmp' && snmp_version==='3'){

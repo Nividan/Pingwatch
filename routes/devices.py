@@ -264,6 +264,18 @@ def _filter_known_parents(STATE, refs: list, exclude_did: str = "") -> list:
     return out
 
 
+def _valid_probe_ref(v: str) -> bool:
+    """Validate a probe_id assignment value: '' (inherit), the literal
+    'central' (explicit pin), or an existing probe record."""
+    if v in ("", "central"):
+        return True
+    try:
+        from db.probes import db_get_probe
+        return db_get_probe(v) is not None
+    except Exception:
+        return False
+
+
 def handle(h, method, path, body):
     """Return True if this module handled the request, False otherwise."""
     STATE = app_state.STATE  # always current reference
@@ -448,6 +460,9 @@ def handle(h, method, path, body):
             h._json(400, {"error": "webhook_url too long (max 2048)"}); return True
         if not h._valid_host(host):
             h._json(400, {"error": "invalid host — use a hostname or IP address"}); return True
+        probe_id = str(body.get("probe_id", "") or "").strip()
+        if not _valid_probe_ref(probe_id):
+            h._json(400, {"error": "unknown probe"}); return True
         snmp_community_default  = body.get("snmp_community_default", "").strip()
         snmp_version_default    = body.get("snmp_version_default", "").strip()
         if snmp_version_default not in ("", "1", "2c", "3"):
@@ -486,6 +501,7 @@ def handle(h, method, path, body):
         did = STATE.add_device(name, host, group, site=site)
         with STATE._lock:
             if did in STATE.devices:
+                STATE.devices[did].probe_id = probe_id
                 STATE.devices[did].webhook_url = webhook_url
                 STATE.devices[did].snmp_community_default  = snmp_community_default
                 STATE.devices[did].snmp_version_default    = snmp_version_default
@@ -623,18 +639,24 @@ def handle(h, method, path, body):
         user, _ = h._require("operator")
         if not user: return True
         did = m.group(1)
+        if "probe_id" in body and not _valid_probe_ref(str(body.get("probe_id") or "").strip()):
+            h._json(400, {"error": "unknown probe"}); return True
         with STATE._lock:
             dev = STATE.devices.get(did)
             if not dev:
                 h._json(404, {"error": "device not found"}); return True
             _old_host = dev.host
             _old_name = dev.name
+            _old_site  = getattr(dev, "site", "")
+            _old_probe = getattr(dev, "probe_id", "")
             if "group" in body: dev.group = body["group"]
             if "site" in body:
                 _site = str(body.get("site") or "").strip()
                 if len(_site) > 80:
                     h._json(400, {"error": "site too long (max 80 chars)"}); return True
                 dev.site = _site
+            if "probe_id" in body:
+                dev.probe_id = str(body.get("probe_id") or "").strip()
             if "name" in body:
                 _n = str(body["name"]).strip()
                 if len(_n) > 255:
@@ -741,7 +763,17 @@ def handle(h, method, path, body):
             _dev_edit_name = dev.name
             _new_host = dev.host
             _new_name = dev.name
+            _new_site  = getattr(dev, "site", "")
+            _new_probe = getattr(dev, "probe_id", "")
+            _assign_sids = list(dev.sensors.keys())
         _db_enqueue(lambda: db_save(STATE))
+        # Site or probe changes can move this device's sensors between the
+        # central scheduler and a remote probe — re-apply scheduling and let
+        # every agent re-pull its config.
+        if _old_site != _new_site or _old_probe != _new_probe:
+            STATE.apply_probe_assignment([(did, _sid) for _sid in _assign_sids])
+            from routes.probes import _bump_all_probe_configs
+            _bump_all_probe_configs()
         _d = did
         _db_enqueue(lambda: ipam_sync_device_update(_d, _old_host, _new_host, _new_name))
         db_log_audit(user, h.client_address[0], 'device_edit', _dev_edit_name)
@@ -934,8 +966,13 @@ def handle(h, method, path, body):
                   "radius_test_level", "radius_username", "radius_nas_id",
                   "snmp_v3_user", "snmp_v3_level",
                   "snmp_v3_auth_proto", "snmp_v3_priv_proto", "snmp_v3_context",
-                  "anomaly_enabled", "anomaly_sensitivity", "anomaly_min_samples"]:
+                  "anomaly_enabled", "anomaly_sensitivity", "anomaly_min_samples",
+                  "probe_id"]:
             if k in body: kwargs[k] = body[k]
+        if "probe_id" in kwargs:
+            kwargs["probe_id"] = str(kwargs["probe_id"] or "").strip()
+            if not _valid_probe_ref(kwargs["probe_id"]):
+                h._json(400, {"error": "unknown probe"}); return True
         # Normalize anomaly fields to safe ranges
         if "anomaly_enabled" in kwargs:
             kwargs["anomaly_enabled"] = 1 if kwargs["anomaly_enabled"] else 0
@@ -1044,6 +1081,11 @@ def handle(h, method, path, body):
         ok = STATE.update_sensor(did, sid, **kwargs)
         if not ok:
             h._json(404, {"error": "sensor not found"}); return True
+        # update_sensor's stop/start already re-resolved the scheduling mode
+        # for probe_id changes; agents still need a config re-pull.
+        if "probe_id" in kwargs:
+            from routes.probes import _bump_all_probe_configs
+            _bump_all_probe_configs()
         _db_enqueue(lambda: db_save(STATE))
         with STATE._lock:
             _se_dev   = STATE.devices.get(did)
@@ -1289,6 +1331,11 @@ def handle(h, method, path, body):
                 s2.dns_record_type      = body.get("dns_record_type", "A")
                 s2.dns_server           = body.get("dns_server", "")
                 s2.http_expected_status = xstat
+                # Distributed probes: per-sensor override must land BEFORE the
+                # sensor starts so start_sensor resolves the right scheduler.
+                _new_probe = str(body.get("probe_id") or "").strip()
+                if _new_probe and _valid_probe_ref(_new_probe):
+                    s2.probe_id = _new_probe
                 # Optional anomaly config on create (UI enables post-creation; API may set here).
                 if "anomaly_enabled" in body:
                     s2.anomaly_enabled = 1 if body["anomaly_enabled"] else 0

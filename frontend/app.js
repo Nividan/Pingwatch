@@ -10,7 +10,7 @@ const TIMINGS = Object.freeze({
 });
 
 // ── App state ────────────────────────────────────────────────────
-const S={devices:{},sensors:{},logs:{},charts:{},devTraps:{},role:'viewer',_devSensors:{}};
+const S={devices:{},sensors:{},logs:{},charts:{},devTraps:{},role:'viewer',_devSensors:{},probes:{},_siteProbes:{}};
 let _loggedOut=false;  // set during intentional logout to suppress "session expired"
 let sse;
 let _sseFirstConnect = true;  // false after first successful open → reconnects trigger resync
@@ -156,6 +156,28 @@ function connectSSE(){
   sse.addEventListener('backup_complete',e=>{
     const d=_parseSSE(e); if(!d) return;
     if(typeof _bkOnBackupComplete==='function') _bkOnBackupComplete(d);
+  });
+  // ── Distributed probes ──
+  sse.addEventListener('probe_status',e=>{
+    const d=_parseSSE(e); if(!d||!d.probe_id) return;
+    if(d.deleted){ delete S.probes[d.probe_id]; }
+    else{
+      const p=S.probes[d.probe_id]||(S.probes[d.probe_id]={probe_id:d.probe_id});
+      if('connected' in d)      p.connected=!!d.connected;
+      if('status' in d)         p.status=d.status;
+      if('last_seen' in d)      p.last_seen=d.last_seen;
+      if('config_version' in d) p.config_version=d.config_version;
+    }
+    if(typeof _probesOnStatus==='function') _probesOnStatus(d);
+    if(typeof _refreshStaleBadges==='function') _refreshStaleBadges();
+  });
+  sse.addEventListener('probe_offline',e=>{
+    const d=_parseSSE(e); if(!d) return; d._direction='probe_offline'; pushFlap(d);
+    _scheduleBadgePoll();
+  });
+  sse.addEventListener('probe_online',e=>{
+    const d=_parseSSE(e); if(!d) return; d._direction='probe_online'; pushFlap(d);
+    _scheduleBadgePoll();
   });
   sse.addEventListener('license_status',e=>{
     const d=_parseSSE(e); if(!d) return;
@@ -1084,6 +1106,9 @@ async function onAuthenticated(username){
   await _waitForServerReady();
   loadAll();
   connectSSE();
+  // Distributed probes: cache probe list + site→probe bindings for the
+  // "via probe" badges and the Probes page (fire-and-forget).
+  if(typeof _probesRefreshCache==='function') _probesRefreshCache();
   // Refresh health bar sparkline every 5 min (clear old interval to prevent duplicates on re-login)
   if (_hbSparkInterval) clearInterval(_hbSparkInterval);
   _hbSparkInterval = setInterval(()=>{ _hbSparkLoaded=false; _hbDrawSpark(); }, TIMINGS.SPARK_REFRESH);
@@ -1849,6 +1874,7 @@ function switchMainTab(tab){
   document.getElementById('tabBackups').classList.toggle('active',tab==='backups');
   document.getElementById('tabIpam').classList.toggle('active',tab==='ipam');
   { const _rb=document.getElementById('tabReports'); if(_rb) _rb.classList.toggle('active',tab==='reports'); }
+  { const _pb=document.getElementById('tabProbes');  if(_pb) _pb.classList.toggle('active',tab==='probes');  }
   { const _lb=document.getElementById('tabLogs');    if(_lb) _lb.classList.toggle('active',tab==='logs');    }
   const dashboardView=document.getElementById('dashboardView');
   const eventsView   =document.getElementById('eventsView');
@@ -1859,6 +1885,7 @@ function switchMainTab(tab){
   const reportsView  =document.getElementById('reportsView');
   const alertingView =document.getElementById('alertingView');
   const logsView     =document.getElementById('logsView');
+  const probesView   =document.getElementById('probesView');
   const emptyMain    =document.getElementById('emptyMain');
   const dpanels      =document.getElementById('dpanels');
   dashboardView.style.display='none';
@@ -1870,6 +1897,7 @@ function switchMainTab(tab){
   if(reportsView)  reportsView.style.display ='none';
   if(alertingView) alertingView.style.display='none';
   if(logsView)     logsView.style.display    ='none';
+  if(probesView)   probesView.style.display  ='none';
   // Deactivate logs polling when switching away from the Logs tab
   if(tab!=='logs' && typeof _logsDeactivate==='function') _logsDeactivate();
   document.getElementById('devActBar').style.display='none';
@@ -1945,6 +1973,12 @@ function switchMainTab(tab){
     dpanels.style.display='none';
     _mf?.contentWindow?.postMessage({type:'ntm_pause'},window.location.origin);
     if(typeof _alertingPageInit==='function') _alertingPageInit();
+  } else if(tab==='probes'){
+    if(probesView) probesView.style.display='flex';
+    emptyMain.style.display='none';
+    dpanels.style.display='none';
+    _mf?.contentWindow?.postMessage({type:'ntm_pause'},window.location.origin);
+    if(typeof _probesInit==='function') _probesInit();
   } else if(tab==='logs'){
     if(logsView) logsView.style.display='flex';
     emptyMain.style.display='none';

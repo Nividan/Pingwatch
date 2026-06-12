@@ -75,7 +75,7 @@ _JS_FILES = _VENDOR_JS_FILES + [
     "forms-settings.js", "forms-io.js", "forms-users.js", "forms-ldap.js", "forms-radius.js",
     "forms-saml.js", "forms-oidc.js",
     "forms-discovery.js", "forms-import.js",
-    "dashboard.js", "events.js", "backups.js", "ipam.js", "reports.js", "logs.js", "alerting.js", "app.js",
+    "dashboard.js", "events.js", "backups.js", "ipam.js", "reports.js", "logs.js", "alerting.js", "probes.js", "app.js",
 ]
 
 # Vendored CSS appended to the inline <style> block in the same order.
@@ -242,6 +242,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if kind == "api_token" and self.path.startswith("/events"):
             self._json(400, {"error": "SSE requires cookie session"})
             return None
+        # Probe-scoped tokens are jailed to the agent API — a compromised
+        # branch host must not be able to read or mutate anything else.
+        if kind == "api_token" and _scope == "probe" \
+                and not self.path.startswith("/api/agent/"):
+            self._json(403, {"error": "forbidden"})
+            return None
         return user
 
     def _auth_role(self):
@@ -265,6 +271,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if _ROLE_RANK.get(role, 0) < _ROLE_RANK.get(min_role, 0):
             self._json(403, {"error": f"Requires {min_role} role"}); return None, None
         if kind == "api_token":
+            # Probe-scoped tokens are jailed to /api/agent/* — even if a
+            # future role default would let them pass the rank check above.
+            if scope == "probe" and not self.path.startswith("/api/agent/"):
+                self._json(403, {"error": "forbidden"})
+                return None, None
             if scope == "read" and self.command not in ("GET", "HEAD", "OPTIONS"):
                 self._json(403, {"error": "read-only token cannot perform writes"})
                 return None, None
@@ -477,11 +488,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 return
 
         # ── API routes ────────────────────────────────────────────
-        from routes import tls as _tls_mod, ipam, ldap as _ldap_mod, radius as _radius_mod, alert_profiles as _alert_profiles_mod, alert_events as _alert_events_mod, maintenance_windows as _maint_mod, groups as _groups_mod, discovery as _disc_mod, licenses as _lic_mod, reports as _reports_mod, saml as _saml_mod, oidc as _oidc_mod, imports as _imports_mod, auto_discovery as _ad_mod, diagnostics as _diag_mod, sites as _sites_mod, livemap as _livemap_mod, api_tokens as _api_tokens_mod
+        from routes import tls as _tls_mod, ipam, ldap as _ldap_mod, radius as _radius_mod, alert_profiles as _alert_profiles_mod, alert_events as _alert_events_mod, maintenance_windows as _maint_mod, groups as _groups_mod, discovery as _disc_mod, licenses as _lic_mod, reports as _reports_mod, saml as _saml_mod, oidc as _oidc_mod, imports as _imports_mod, auto_discovery as _ad_mod, diagnostics as _diag_mod, sites as _sites_mod, livemap as _livemap_mod, api_tokens as _api_tokens_mod, probes as _probes_mod, agent as _agent_mod
         # _imports_mod handles GET only for the Import Subnets CSV template
         # (every other import endpoint is POST). Adding it to the GET dispatch
         # list lets the template download <a href> resolve.
-        for mod in (auth, devices, monitoring, settings, topology, export, backups, ipam, _ldap_mod, _radius_mod, _tls_mod, _alert_profiles_mod, _alert_events_mod, _maint_mod, _groups_mod, _disc_mod, _lic_mod, _reports_mod, _saml_mod, _oidc_mod, _imports_mod, _ad_mod, _diag_mod, _sites_mod, _livemap_mod, _api_tokens_mod):
+        for mod in (auth, devices, monitoring, settings, topology, export, backups, ipam, _ldap_mod, _radius_mod, _tls_mod, _alert_profiles_mod, _alert_events_mod, _maint_mod, _groups_mod, _disc_mod, _lic_mod, _reports_mod, _saml_mod, _oidc_mod, _imports_mod, _ad_mod, _diag_mod, _sites_mod, _livemap_mod, _api_tokens_mod, _probes_mod, _agent_mod):
             if mod.handle(self, 'GET', p, {}):
                 return
 
@@ -506,8 +517,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
         body = self._body()
         if body is None: return
 
-        from routes import ipam, ldap as _ldap_mod, radius as _radius_mod, alert_profiles as _alert_profiles_mod, alert_events as _alert_events_mod, maintenance_windows as _maint_mod, groups as _groups_mod, discovery as _disc_mod, licenses as _lic_mod, reports as _reports_mod, saml as _saml_mod, oidc as _oidc_mod, imports as _imports_mod, auto_discovery as _ad_mod, diagnostics as _diag_mod, sites as _sites_mod, api_tokens as _api_tokens_mod
-        for mod in (auth, devices, monitoring, settings, topology, export, backups, ipam, _ldap_mod, _radius_mod, _tls_mod, _alert_profiles_mod, _alert_events_mod, _maint_mod, _groups_mod, _disc_mod, _lic_mod, _reports_mod, _saml_mod, _oidc_mod, _imports_mod, _ad_mod, _diag_mod, _sites_mod, _api_tokens_mod):
+        from routes import ipam, ldap as _ldap_mod, radius as _radius_mod, alert_profiles as _alert_profiles_mod, alert_events as _alert_events_mod, maintenance_windows as _maint_mod, groups as _groups_mod, discovery as _disc_mod, licenses as _lic_mod, reports as _reports_mod, saml as _saml_mod, oidc as _oidc_mod, imports as _imports_mod, auto_discovery as _ad_mod, diagnostics as _diag_mod, sites as _sites_mod, api_tokens as _api_tokens_mod, probes as _probes_mod, agent as _agent_mod
+        for mod in (auth, devices, monitoring, settings, topology, export, backups, ipam, _ldap_mod, _radius_mod, _tls_mod, _alert_profiles_mod, _alert_events_mod, _maint_mod, _groups_mod, _disc_mod, _lic_mod, _reports_mod, _saml_mod, _oidc_mod, _imports_mod, _ad_mod, _diag_mod, _sites_mod, _api_tokens_mod, _probes_mod, _agent_mod):
             if mod.handle(self, 'POST', p, body):
                 return
 
@@ -515,12 +526,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
     # ── PATCH ─────────────────────────────────────────────────────
     def do_PATCH(self):
-        from routes import auth, devices, settings, topology, tls as _tls_mod, ldap as _ldap_mod, radius as _radius_mod, alert_profiles as _alert_profiles_mod, maintenance_windows as _maint_mod, groups as _groups_mod, licenses as _lic_mod, reports as _reports_mod, saml as _saml_mod, oidc as _oidc_mod, ipam as _ipam_mod
+        from routes import auth, devices, settings, topology, tls as _tls_mod, ldap as _ldap_mod, radius as _radius_mod, alert_profiles as _alert_profiles_mod, maintenance_windows as _maint_mod, groups as _groups_mod, licenses as _lic_mod, reports as _reports_mod, saml as _saml_mod, oidc as _oidc_mod, ipam as _ipam_mod, probes as _probes_mod
         p    = urlparse(self.path).path
         body = self._body()
         if body is None: return
 
-        for mod in (auth, devices, settings, topology, _ldap_mod, _radius_mod, _tls_mod, _alert_profiles_mod, _maint_mod, _groups_mod, _lic_mod, _reports_mod, _saml_mod, _oidc_mod, _ipam_mod):
+        for mod in (auth, devices, settings, topology, _ldap_mod, _radius_mod, _tls_mod, _alert_profiles_mod, _maint_mod, _groups_mod, _lic_mod, _reports_mod, _saml_mod, _oidc_mod, _ipam_mod, _probes_mod):
             if mod.handle(self, 'PATCH', p, body):
                 return
 
@@ -556,8 +567,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
         from routes import auth, devices, topology, backups
         p = urlparse(self.path).path
 
-        from routes import ipam, alert_profiles as _alert_profiles_mod, maintenance_windows as _maint_mod, groups as _groups_mod, discovery as _disc_mod, licenses as _lic_mod, reports as _reports_mod, sites as _sites_mod, api_tokens as _api_tokens_mod
-        for mod in (auth, devices, topology, backups, ipam, _alert_profiles_mod, _maint_mod, _groups_mod, _disc_mod, _lic_mod, _reports_mod, _sites_mod, _api_tokens_mod):
+        from routes import ipam, alert_profiles as _alert_profiles_mod, maintenance_windows as _maint_mod, groups as _groups_mod, discovery as _disc_mod, licenses as _lic_mod, reports as _reports_mod, sites as _sites_mod, api_tokens as _api_tokens_mod, probes as _probes_mod
+        for mod in (auth, devices, topology, backups, ipam, _alert_profiles_mod, _maint_mod, _groups_mod, _disc_mod, _lic_mod, _reports_mod, _sites_mod, _api_tokens_mod, _probes_mod):
             if mod.handle(self, 'DELETE', p, {}):
                 return
 
@@ -951,6 +962,16 @@ def main():
     except Exception as _e:
         log.warning(f"Auto-Discovery loop did not start: {_e}")
 
+    # Distributed-probes watchdog — flags probes that stop checking in
+    # (one probe_offline event, stale-grey sensors) and expires stuck
+    # agent tasks. Cheap 10s sweep over a tiny table.
+    try:
+        from monitoring.probe_watchdog import probe_watchdog_loop
+        threading.Thread(target=probe_watchdog_loop, daemon=True,
+                         name="probe-watchdog").start()
+    except Exception as _e:
+        log.warning(f"Probe watchdog did not start: {_e}")
+
     threading.Thread(target=server.serve_forever, daemon=True).start()
 
     _scheme = "https" if app_state.tls_active else "http"
@@ -1140,6 +1161,11 @@ def main():
         stop_backup_scheduler()
     except Exception as e:
         log.warning(f"stop backup scheduler failed: {e}")
+    try:
+        from monitoring.probe_watchdog import stop_probe_watchdog
+        stop_probe_watchdog()
+    except Exception as e:
+        log.warning(f"stop probe watchdog failed: {e}")
     # Drain pending alert batches synchronously — otherwise alert_batcher's
     # atexit hook runs after pg_close_pool() and every dispatch raises
     # "PostgreSQL pool is closed".

@@ -99,7 +99,8 @@ def _pg_save(state):
              getattr(dev, "snmp_v3_priv_pass_default", ""),
              getattr(dev, "snmp_v3_context_default", ""),
              json.dumps(getattr(dev, "parent_device_ids", []) or []),
-             json.dumps(getattr(dev, "parent_device_ports", {}) or {}))
+             json.dumps(getattr(dev, "parent_device_ports", {}) or {}),
+             getattr(dev, "probe_id", "") or "")
             for dev in state.devices.values()
         ]
         snr_rows = [
@@ -158,7 +159,8 @@ def _pg_save(state):
              getattr(s, "snmp_v3_auth_pass", ""),
              getattr(s, "snmp_v3_priv_proto", ""),
              getattr(s, "snmp_v3_priv_pass", ""),
-             getattr(s, "snmp_v3_context", ""))
+             getattr(s, "snmp_v3_context", ""),
+             getattr(s, "probe_id", "") or "")
             for dev in state.devices.values()
             for s in dev.sensors.values()
         ]
@@ -181,7 +183,7 @@ def _pg_save(state):
                     "snmp_v3_user_default,snmp_v3_level_default,"
                     "snmp_v3_auth_proto_default,snmp_v3_auth_pass_default,"
                     "snmp_v3_priv_proto_default,snmp_v3_priv_pass_default,"
-                    "snmp_v3_context_default,parent_device_ids,parent_device_ports) "
+                    "snmp_v3_context_default,parent_device_ids,parent_device_ports,probe_id) "
                     "VALUES %s "
                     "ON CONFLICT (did) DO UPDATE SET "
                     "name=EXCLUDED.name, host=EXCLUDED.host, grp=EXCLUDED.grp, site=EXCLUDED.site, "
@@ -203,7 +205,8 @@ def _pg_save(state):
                     "snmp_v3_priv_pass_default=EXCLUDED.snmp_v3_priv_pass_default, "
                     "snmp_v3_context_default=EXCLUDED.snmp_v3_context_default, "
                     "parent_device_ids=EXCLUDED.parent_device_ids, "
-                    "parent_device_ports=EXCLUDED.parent_device_ports",
+                    "parent_device_ports=EXCLUDED.parent_device_ports, "
+                    "probe_id=EXCLUDED.probe_id",
                     dev_rows,
                 )
             # Delete orphaned devices
@@ -233,7 +236,7 @@ def _pg_save(state):
                     "sftp_remote_path,sftp_expected_sha256,"
                     "radius_secret,radius_test_level,radius_username,radius_password,radius_nas_id,"
                     "snmp_v3_user,snmp_v3_level,snmp_v3_auth_proto,snmp_v3_auth_pass,"
-                    "snmp_v3_priv_proto,snmp_v3_priv_pass,snmp_v3_context) "
+                    "snmp_v3_priv_proto,snmp_v3_priv_pass,snmp_v3_context,probe_id) "
                     "VALUES %s "
                     "ON CONFLICT (did, sid) DO UPDATE SET "
                     "name=EXCLUDED.name, stype=EXCLUDED.stype, host=EXCLUDED.host, "
@@ -277,7 +280,8 @@ def _pg_save(state):
                     "snmp_v3_auth_pass=EXCLUDED.snmp_v3_auth_pass, "
                     "snmp_v3_priv_proto=EXCLUDED.snmp_v3_priv_proto, "
                     "snmp_v3_priv_pass=EXCLUDED.snmp_v3_priv_pass, "
-                    "snmp_v3_context=EXCLUDED.snmp_v3_context",
+                    "snmp_v3_context=EXCLUDED.snmp_v3_context, "
+                    "probe_id=EXCLUDED.probe_id",
                     snr_rows,
                 )
             # Delete orphaned sensors
@@ -340,7 +344,8 @@ def db_save(state):
              getattr(dev, "snmp_v3_priv_pass_default", ""),
              getattr(dev, "snmp_v3_context_default", ""),
              json.dumps(getattr(dev, "parent_device_ids", []) or []),
-             json.dumps(getattr(dev, "parent_device_ports", {}) or {}))
+             json.dumps(getattr(dev, "parent_device_ports", {}) or {}),
+             getattr(dev, "probe_id", "") or "")
             for dev in state.devices.values()
         ]
         snr_rows = [
@@ -399,7 +404,8 @@ def db_save(state):
              getattr(s, "snmp_v3_auth_pass", ""),
              getattr(s, "snmp_v3_priv_proto", ""),
              getattr(s, "snmp_v3_priv_pass", ""),
-             getattr(s, "snmp_v3_context", ""))
+             getattr(s, "snmp_v3_context", ""),
+             getattr(s, "probe_id", "") or "")
             for dev in state.devices.values()
             for s in dev.sensors.values()
         ]
@@ -421,8 +427,8 @@ def db_save(state):
             "snmp_v3_user_default,snmp_v3_level_default,"
             "snmp_v3_auth_proto_default,snmp_v3_auth_pass_default,"
             "snmp_v3_priv_proto_default,snmp_v3_priv_pass_default,"
-            "snmp_v3_context_default,parent_device_ids,parent_device_ports) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", dev_rows)
+            "snmp_v3_context_default,parent_device_ids,parent_device_ports,probe_id) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", dev_rows)
         if live_dids:
             cur.execute(
                 f"DELETE FROM devices WHERE did NOT IN ({','.join('?'*len(live_dids))})",
@@ -446,8 +452,8 @@ def db_save(state):
             "sftp_remote_path,sftp_expected_sha256,"
             "radius_secret,radius_test_level,radius_username,radius_password,radius_nas_id,"
             "snmp_v3_user,snmp_v3_level,snmp_v3_auth_proto,snmp_v3_auth_pass,"
-            "snmp_v3_priv_proto,snmp_v3_priv_pass,snmp_v3_context) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "snmp_v3_priv_proto,snmp_v3_priv_pass,snmp_v3_context,probe_id) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             snr_rows
         )
         if live_sids:
@@ -493,7 +499,8 @@ def _pg_load(state):
                 "COALESCE(snmp_v3_context_default,'') AS snmp_v3_context_default,"
                 "COALESCE(site,'') AS site,"
                 "COALESCE(parent_device_ids,'[]') AS parent_device_ids,"
-                "COALESCE(parent_device_ports,'{}') AS parent_device_ports "
+                "COALESCE(parent_device_ports,'{}') AS parent_device_ports,"
+                "COALESCE(probe_id,'') AS probe_id "
                 "FROM devices"
             )
             devs = cur.fetchall()
@@ -541,7 +548,8 @@ def _pg_load(state):
                 "COALESCE(snmp_v3_auth_pass,'') AS snmp_v3_auth_pass,"
                 "COALESCE(snmp_v3_priv_proto,'') AS snmp_v3_priv_proto,"
                 "COALESCE(snmp_v3_priv_pass,'') AS snmp_v3_priv_pass,"
-                "COALESCE(snmp_v3_context,'') AS snmp_v3_context "
+                "COALESCE(snmp_v3_context,'') AS snmp_v3_context,"
+                "COALESCE(probe_id,'') AS probe_id "
                 "FROM sensors"
             )
             srows = cur.fetchall()
@@ -598,6 +606,7 @@ def _pg_load(state):
             dev.parent_device_ports = _normalize_pp_shape(_pp_raw)
         except (json.JSONDecodeError, TypeError):
             dev.parent_device_ports = {}
+        dev.probe_id = (row[25] or "") if len(row) > 25 else ""
         state.devices[did] = dev
 
     for row in srows:
@@ -660,6 +669,7 @@ def _pg_load(state):
         s.snmp_v3_priv_proto   = row[65] or "" if len(row) > 65 else ""
         s.snmp_v3_priv_pass    = row[66] or "" if len(row) > 66 else ""
         s.snmp_v3_context      = row[67] or "" if len(row) > 67 else ""
+        s.probe_id             = row[68] or "" if len(row) > 68 else ""
         dev.sensors[row[1]] = s
 
     state._did_ctr = max_did
@@ -755,7 +765,8 @@ def db_load(state):
             "COALESCE(snmp_v3_context_default,''),"
             "COALESCE(site,''),"
             "COALESCE(parent_device_ids,'[]'),"
-            "COALESCE(parent_device_ports,'{}') "
+            "COALESCE(parent_device_ports,'{}'),"
+            "COALESCE(probe_id,'') "
             "FROM devices"
         ).fetchall()
         srows = con.execute(
@@ -785,7 +796,8 @@ def db_load(state):
             "COALESCE(snmp_v3_user,''),COALESCE(snmp_v3_level,''),"
             "COALESCE(snmp_v3_auth_proto,''),COALESCE(snmp_v3_auth_pass,''),"
             "COALESCE(snmp_v3_priv_proto,''),COALESCE(snmp_v3_priv_pass,''),"
-            "COALESCE(snmp_v3_context,'') "
+            "COALESCE(snmp_v3_context,''),"
+            "COALESCE(probe_id,'') "
             "FROM sensors"
         ).fetchall()
     except Exception as e:
@@ -811,7 +823,7 @@ def db_load(state):
          v3_auth_proto_default, v3_auth_pass_default,
          v3_priv_proto_default, v3_priv_pass_default,
          v3_context_default, site, parent_ids_json,
-         parent_ports_json) = _row
+         parent_ports_json, dev_probe_id) = _row
         dev = Device(did, name, host, grp, site=site or "")
         try:
             n = int(did.replace("d", ""))
@@ -849,6 +861,7 @@ def db_load(state):
             dev.parent_device_ports = _normalize_pp_shape(_pports)
         except (json.JSONDecodeError, TypeError):
             dev.parent_device_ports = {}
+        dev.probe_id = dev_probe_id or ""
         state.devices[did] = dev
 
     for (did, sid, name, stype, host, port, url, interval, timeout,
@@ -871,7 +884,7 @@ def db_load(state):
          snmp_v3_user, snmp_v3_level,
          snmp_v3_auth_proto, snmp_v3_auth_pass,
          snmp_v3_priv_proto, snmp_v3_priv_pass,
-         snmp_v3_context) in srows:
+         snmp_v3_context, snr_probe_id) in srows:
         dev = state.devices.get(did)
         if not dev: continue
         s = Sensor(did, sid, name, stype, host or dev.host,
@@ -930,6 +943,7 @@ def db_load(state):
         s.snmp_v3_priv_proto   = snmp_v3_priv_proto or ""
         s.snmp_v3_priv_pass    = snmp_v3_priv_pass or ""
         s.snmp_v3_context      = snmp_v3_context or ""
+        s.probe_id             = snr_probe_id or ""
         dev.sensors[sid] = s
 
     state._did_ctr = max_did

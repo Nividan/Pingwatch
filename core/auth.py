@@ -979,7 +979,7 @@ def auth_check_api_token(token: str):
             with _API_TOKENS_LOCK:
                 _API_TOKENS.pop(token, None)
             return None
-        return {k: c[k] for k in ("username", "role", "scope", "id")}
+        return {k: c[k] for k in ("username", "role", "scope", "id", "probe_id")}
     # Cache miss or stale — go to the DB.
     h = _hash_token(token)
     try:
@@ -991,8 +991,14 @@ def auth_check_api_token(token: str):
         with _API_TOKENS_LOCK:
             _API_TOKENS.pop(token, None)
         return None
-    entry = {"username": row["username"], "role": row["role"] or "viewer",
+    # Probe-scoped tokens have no user row → no role. Never default them to
+    # 'viewer': the /api/agent/* jail is their only authority, and an empty
+    # role fails every _ROLE_RANK comparison as defense in depth.
+    _is_probe = row["scope"] == "probe"
+    entry = {"username": row["username"],
+             "role": (row["role"] or "") if _is_probe else (row["role"] or "viewer"),
              "scope": row["scope"], "id": row["id"],
+             "probe_id": row.get("probe_id"),
              "expires_at": row["expires_at"], "token_hash": h,
              "cached_at": now}
     with _API_TOKENS_LOCK:
@@ -1003,7 +1009,7 @@ def auth_check_api_token(token: str):
         db_touch_api_token_last_used(row["id"])
     except Exception:
         pass
-    return {k: entry[k] for k in ("username", "role", "scope", "id")}
+    return {k: entry[k] for k in ("username", "role", "scope", "id", "probe_id")}
 
 
 def auth_evict_api_token_hash(token_hash: str):

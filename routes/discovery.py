@@ -41,15 +41,49 @@ def handle(h, method, path, body):
             if mode not in ("full", "ping"):
                 h._json(400, {"error": "mode must be 'full' or 'ping'"}); return True
 
-            scan_id, err = start_scan(cidr, skip, mode)
-            if err:
-                h._json(400, {"error": err}); return True
+            # Distributed probes: optional "scan from" probe — the sweep runs
+            # on the branch agent and rows stream back through the task
+            # channel. The registry entry is indistinguishable from a local
+            # scan, so poll/cancel/bulk-add below need no changes.
+            probe_id = str(body.get("probe_id", "") or "").strip()
+            if probe_id:
+                from db.probes import db_get_probe, db_create_task
+                _probe = db_get_probe(probe_id)
+                if not _probe or _probe.get("status") != "enrolled":
+                    h._json(409, {"error": "probe is not enrolled"}); return True
+                from monitoring.subnet_discovery import (register_remote_scan,
+                                                         bind_remote_scan_task,
+                                                         complete_remote_scan)
+                scan_id, err = register_remote_scan(cidr, mode, probe_id)
+                if err:
+                    h._json(400, {"error": err}); return True
+                import json as _json
+                from routes.devices import _get_scan_targets
+                payload = {"scan_id": scan_id, "cidr": cidr, "mode": mode,
+                           "skip_monitored": skip}
+                if mode == "full":
+                    # Ship the port-scan target list so the agent enriches
+                    # with the same services a central full scan would.
+                    payload["targets"] = _get_scan_targets()
+                tid = db_create_task(probe_id, "discovery_scan",
+                                     _json.dumps(payload), user)
+                if not tid:
+                    complete_remote_scan(scan_id, [], error="failed to queue task")
+                    h._json(500, {"error": "failed to queue scan task"}); return True
+                bind_remote_scan_task(scan_id, tid)
+            else:
+                scan_id, err = start_scan(cidr, skip, mode)
+                if err:
+                    h._json(400, {"error": err}); return True
             try:
                 db_log_audit(user, h.client_address[0],
-                             "subnet_scan_start", f"{cidr} mode={mode}")
+                             "subnet_scan_start",
+                             f"{cidr} mode={mode}" +
+                             (f" probe={probe_id}" if probe_id else ""))
             except Exception:
                 pass
-            h._json(202, {"scan_id": scan_id, "cidr": cidr, "mode": mode})
+            h._json(202, {"scan_id": scan_id, "cidr": cidr, "mode": mode,
+                          "probe_id": probe_id})
             return True
 
     # ── /api/discovery/scan/<id>  GET=poll  DELETE=cancel ──────────
@@ -72,6 +106,12 @@ def handle(h, method, path, body):
             if not user:
                 return True
             ok = cancel_scan(scan_id)
+            if ok:
+                # Remote scans: flip the agent task too (relayed at checkin).
+                _st = get_scan(scan_id)
+                if _st and _st.get("task_id"):
+                    from db.probes import db_set_task_state
+                    db_set_task_state(int(_st["task_id"]), "cancelled")
             try:
                 db_log_audit(user, h.client_address[0],
                              "subnet_scan_cancel", scan_id)

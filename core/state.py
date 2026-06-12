@@ -295,6 +295,14 @@ class Sensor:
         self._prev_ticks        = None
         self._prev_text_value   = None
         self.host_override = False   # True = host was manually set; don't sync from device
+        # Distributed probes (v1.3) — '' = inherit from device/site cascade,
+        # 'central' = explicit pin to central, else a probe_id.
+        self.probe_id      = ""
+        # Monotonic guard for remote result injection: epoch ts of the last
+        # result processed through _process_result. Backfilled/replayed
+        # results at or before this ts are dropped. Lazily seeded from
+        # MAX(sensor_samples.ts) on the first remote injection after boot.
+        self._last_processed_ts = None
         # VMware fields
         self.vmware_user     = vmware_user or ""
         self.vmware_password = vmware_password or ""   # Fernet-encrypted ciphertext
@@ -363,6 +371,7 @@ class Sensor:
         self.alive          = None
         self.running        = False
         self._stopped       = threading.Event()   # set when _run_once exits without rescheduling
+        self._sched_mode    = "central"   # 'central' = local probe chain, 'probe' = remote agent
         self._inflight_probe  = None    # orphan probe thread past its hard cap — leak guard
         self._alert_has_fired = False   # any profile stage dispatched during the current incident
         self._alert_cleanup_checked = False  # once-per-boot orphaned-event sweep done
@@ -546,6 +555,7 @@ class Sensor:
             "banner_regex":          self.banner_regex,
             "alerts_muted":          self.alerts_muted,
             "host_override":         self.host_override,
+            "probe_id":              getattr(self, "probe_id", "") or "",
             "snmp_unit":             self.snmp_unit,
             "snmp_type":             self.snmp_type,
             "vmware_user":           self.vmware_user,
@@ -649,6 +659,9 @@ class Device:
         self.discovered_from_cidr = ""
         self.sensors      = {}
         self._sid_ctr     = 0
+        # Distributed probes (v1.3) — device-level probe assignment.
+        # '' = inherit from site binding, 'central' = explicit central pin.
+        self.probe_id     = ""
         # Device-level default credentials (pre-fill for new sensors)
         self.snmp_community_default  = ""
         self.snmp_version_default    = ""
@@ -716,6 +729,7 @@ class Device:
             "secondary_ips": self.secondary_ips or [],
             "group":        self.group,
             "site":         getattr(self, "site", ""),
+            "probe_id":     getattr(self, "probe_id", "") or "",
             "webhook_url":  self.webhook_url,
             "alerts_muted": self.alerts_muted,
             "status":       self.status,
@@ -744,6 +758,37 @@ class Device:
             # directly, the API output stays uniform.
             "parent_device_ports":   _coerce_parent_ports(getattr(self, "parent_device_ports", {})),
         }
+
+
+def _bump_probe_config(probe_id: str):
+    """Advance a probe's config_version so its agent re-pulls config on the
+    next checkin. Called from start/stop_sensor for remote sensors — covers
+    sensor edits (stop+start restart), pause/resume, and sensor adds."""
+    if not probe_id:
+        return
+    try:
+        from db.probes import db_bump_config_version
+        db_bump_config_version(probe_id)
+    except Exception:
+        pass
+
+
+def _max_sample_ts(did: str, sid: str) -> float:
+    """Newest persisted sample ts for a sensor (0.0 when none / on error).
+
+    Seeds Sensor._last_processed_ts on the first remote-result injection
+    after boot so agent batch re-sends across a server restart can't
+    double-insert samples.
+    """
+    try:
+        from db.helpers import db_query_one
+        row = db_query_one(
+            "logs",
+            "SELECT MAX(ts) AS m FROM sensor_samples WHERE did = ? AND sid = ?",
+            (did, sid))
+        return float(row["m"]) if row and row["m"] is not None else 0.0
+    except Exception:
+        return 0.0
 
 
 def _send_webhook(url: str, payload: dict):
@@ -1055,7 +1100,8 @@ class MonitorState:
                         "snmp_v3_auth_proto", "snmp_v3_auth_pass",
                         "snmp_v3_priv_proto", "snmp_v3_priv_pass",
                         "snmp_v3_context",
-                        "anomaly_enabled", "anomaly_sensitivity", "anomaly_min_samples"]
+                        "anomaly_enabled", "anomaly_sensitivity", "anomaly_min_samples",
+                        "probe_id"]
             _anom_enabled_before = int(getattr(s, "anomaly_enabled", 0) or 0)
             _anom_sens_before    = int(getattr(s, "anomaly_sensitivity", 2) or 2)
             # Numeric fields must never land as "" on the Sensor — PG's INTEGER
@@ -1118,6 +1164,7 @@ class MonitorState:
         return True
 
     def start_sensor(self, did, sid):
+        from core.probe_assign import effective_probe
         with self._lock:
             # Check-and-set must happen under the lock: two concurrent calls
             # (UI double-click, start_device racing start_sensor) would both
@@ -1130,9 +1177,19 @@ class MonitorState:
             s.running = True
             dev.invalidate_status()
             s._stopped.clear()
-        self._executor.submit(self._run_once, did, sid)
+            # Distributed probes: sensors measured by a remote agent get no
+            # central probe chain — their results arrive via /api/agent/checkin.
+            # running stays True so the UI doesn't render them as paused.
+            _eff = effective_probe(dev, s)
+            s._sched_mode = "probe" if _eff else "central"
+        if _eff:
+            _bump_probe_config(_eff)   # agent re-pulls config → starts probing
+        else:
+            self._executor.submit(self._run_once, did, sid)
 
     def stop_sensor(self, did, sid):
+        from core.probe_assign import effective_probe
+        _eff = ""
         with self._lock:
             dev = self.devices.get(did)
             if dev:
@@ -1140,8 +1197,12 @@ class MonitorState:
                 if s:
                     s.running = False
                     dev.invalidate_status()
+                    _eff = effective_probe(dev, s)
         self._scheduler.cancel(did, sid)
-                    # Scheduler entry will be ignored — _run_once checks s.running at entry
+        # Scheduler entry will be ignored — _run_once checks s.running at entry.
+        # Remote sensors: the agent must drop the sensor from its schedule too.
+        if _eff:
+            _bump_probe_config(_eff)
 
     def start_device(self, did):
         with self._lock:
@@ -1209,9 +1270,7 @@ class MonitorState:
                 log_sensors.error(f"Probe cycle recovery failed for {did}/{sid}")
 
     def _run_once_inner(self, did, sid):
-        # Import here to avoid circular import at module load time
-        from db import db_log_err, db_log_flap, db_buffer_sample, _db_enqueue
-        from db.events import db_auto_resolve_flap
+        from core.probe_assign import effective_probe
 
         with self._lock:
             dev = self.devices.get(did)
@@ -1220,9 +1279,14 @@ class MonitorState:
             if s: s._stopped.set()
             return
 
-        if s.total == 0:
-            self._broadcast("log", {"did": did, "sid": sid,
-                                     "msg": f"[START] {s.name} on {s.host}", "type": "info"})
+        # Distributed probes: a sensor measured by a remote agent has no
+        # central probe chain — results arrive via /api/agent/checkin and are
+        # injected through _process_result(). End this chain; running stays
+        # True so the UI doesn't render the sensor as paused.
+        if effective_probe(dev, s):
+            s._sched_mode = "probe"
+            s._stopped.set()
+            return
 
         dev = self.devices.get(did)   # re-fetch (unprotected, Device is stable)
         if dev is None:               # device deleted while this probe was queued
@@ -1275,9 +1339,85 @@ class MonitorState:
                           "detail": "Probe exceeded hard timeout", "value": None}
             else:
                 result = _probe_result[0]
+
+        self._process_result(did, sid, result, ts_float=time.time(), source="local")
+
+        # Release thread immediately — scheduler fires next probe after interval.
+        # Re-check the assignment: if the sensor moved to a remote probe while
+        # this cycle was in flight, end the chain instead of rescheduling
+        # (schedule() would clear the tombstone apply_probe_assignment planted).
+        if s.running and not effective_probe(dev, s):
+            self._scheduler.schedule(did, sid, s.interval)
+        elif s.running:
+            s._sched_mode = "probe"
+            s._stopped.set()
+        else:
+            self._broadcast("log", {"did": did, "sid": sid,
+                                     "msg": f"[STOP] {s.name}", "type": "info"})
+            s._stopped.set()
+
+    def _process_result(self, did, sid, result, ts_float, source="local",
+                        state_eval=True):
+        """Run one probe result through the full state machine.
+
+        Everything downstream of probe execution lives here: sample
+        buffering, debounce, typed-SNMP transitions, threshold evaluation,
+        flap logging, alert profiles, and SSE broadcast. Local probe chains
+        call it with source='local'; the agent checkin handler injects
+        remote results with source='probe'.
+
+        source='probe' contract:
+          - the caller (routes/agent.py) holds a per-probe lock, making this
+            thread the sensor's single writer (probe-assigned sensors have no
+            central chain);
+          - result may carry agent-computed 'rate' and 'snmp_type' — the
+            server never derives counter rates from remote values, since
+            arrival time says nothing about sample spacing;
+          - ts_float is the agent-side probe timestamp; a monotonic
+            per-sensor guard drops duplicates/out-of-order replays;
+          - state_eval=False marks a stale backfilled result: the sample is
+            persisted for charts, but no sensor state, events, or alerts are
+            touched (offline spool catch-up must not replay history).
+
+        Returns True when the result was applied, False when dropped.
+        """
+        # Import here to avoid circular import at module load time
+        from db import db_log_err, db_log_flap, db_buffer_sample, _db_enqueue
+        from db.events import db_auto_resolve_flap
+
+        with self._lock:
+            dev = self.devices.get(did)
+            s   = dev.sensors.get(sid) if dev else None
+        if not s or dev is None:
+            return False
+
+        if source == "probe":
+            if s._last_processed_ts is None:
+                # First remote injection since boot: seed from the newest
+                # persisted sample so an agent re-sending a batch whose ack
+                # was lost across a server restart can't double-insert.
+                s._last_processed_ts = _max_sample_ts(did, sid)
+            if ts_float <= s._last_processed_ts:
+                return False   # duplicate / out-of-order replay
+        s._last_processed_ts = ts_float
+
+        if not state_eval:
+            # Stale backfill — persist the sample for gapless charts, touch
+            # nothing else (no debounce, no flaps, no alerts, no broadcast).
+            _bf_val = (str(result.get("value", ""))
+                       if result.get("value") is not None else None)
+            db_buffer_sample(did, sid, result["ok"], result["ms"], _bf_val,
+                             ts_float, rate=result.get("rate"))
+            return True
+
+        if s.total == 0:
+            self._broadcast("log", {"did": did, "sid": sid,
+                                     "msg": f"[START] {s.name} on {s.host}", "type": "info"})
+
         s.total += 1
-        _ts = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-        _ts_float = time.time()
+        _ts = datetime.datetime.fromtimestamp(
+            ts_float, datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        _ts_float = ts_float
         _muted = s.alerts_muted or dev.alerts_muted or is_group_muted(dev.group)
 
         # Sample buffered after the ok/fail branch so s._last_rate reflects
@@ -1306,10 +1446,30 @@ class MonitorState:
             _raw_stype = result.get("snmp_type", "")
             if s.stype == "snmp" and _raw_stype:
                 s.snmp_type = _raw_stype
-            if s.stype == "snmp" and _stype in _COUNTER_TYPES and _raw_val is not None:
+            if source == "probe":
+                # Remote results carry an agent-computed rate — the agent owns
+                # counter continuity across checkins and spool gaps. Deriving a
+                # rate here from arrival spacing would corrupt the delta.
+                _agent_rate = result.get("rate")
+                if s.stype == "snmp" and _stype in _COUNTER_TYPES and _raw_val is not None:
+                    if _agent_rate is not None:
+                        try:
+                            s._last_rate = float(_agent_rate)
+                            s.last_value = _fmt_rate(s._last_rate, s.snmp_unit)
+                        except (ValueError, TypeError):
+                            s._last_rate = None
+                            s.last_value = None
+                    else:
+                        s.last_value  = None   # agent's first poll — no rate yet
+                        s._last_rate  = None
+                        s.last_detail = "—"
+                else:
+                    s.last_value = _raw_val
+                    s._last_rate = None
+            elif s.stype == "snmp" and _stype in _COUNTER_TYPES and _raw_val is not None:
                 try:
                     _cur = int(_raw_val)
-                    _now = time.time()
+                    _now = _ts_float
                     if s._snmp_prev is not None and s._snmp_prev_ts is not None:
                         _elapsed = _now - s._snmp_prev_ts
                         _delta   = _cur - s._snmp_prev
@@ -1415,7 +1575,7 @@ class MonitorState:
                                     s._alerted_down               = False
                                     s._email_sent_down            = False
                                 else:
-                                    s._threshold_triggered_ts     = time.time()
+                                    s._threshold_triggered_ts     = _ts_float
                                     s._threshold_recovery_pending = False
                                 dev.invalidate_status()
                             self._broadcast(f"flap_{_dir}", _flap)
@@ -1485,7 +1645,7 @@ class MonitorState:
             if s._alerted_down and s._consec_ok >= s.recover_after:
                 _flap_dur = None
                 if s._down_since_ts:
-                    _flap_dur = int(time.time() - s._down_since_ts)
+                    _flap_dur = int(_ts_float - s._down_since_ts)
                     s._down_since_ts = None
                 rec_data = {
                     "did": did, "sid": sid, "dname": dev.name, "sname": s.name,
@@ -1549,7 +1709,7 @@ class MonitorState:
                     if dev.webhook_url:
                         _enqueue_webhook(dev.webhook_url, _flap_cap)
                 s._alerted_down    = True
-                s._down_since_ts   = time.time()
+                s._down_since_ts   = _ts_float
 
         # ── Log sample to DB (non-blocking) ──
         # v0.9.7: pass rate so counter-type SNMP sensors store the per-probe
@@ -1639,7 +1799,7 @@ class MonitorState:
             s._consec_threshold = 1
             if _new_thr != "ok" and not _muted:
                 s._threshold_recovery_pending = False
-                s._threshold_triggered_ts = time.time()
+                s._threshold_triggered_ts = _ts_float
                 _tevt = "threshold_critical" if _new_thr == "crit" else "threshold_warning"
                 # Compute display unit + per-event value string up-front so that
                 # both the SSE broadcast AND the persisted flap row carry the
@@ -1726,7 +1886,7 @@ class MonitorState:
                 s._threshold_recovery_pending = True
                 _thr_dur = None
                 if s._threshold_triggered_ts:
-                    _thr_dur = int(time.time() - s._threshold_triggered_ts)
+                    _thr_dur = int(_ts_float - s._threshold_triggered_ts)
                     s._threshold_triggered_ts = None
                 # Build a human-readable current value for the detail field
                 if s._last_rate is not None:
@@ -1781,14 +1941,42 @@ class MonitorState:
         _probe_end_batch.append(("sensor", s.to_dict()))
         _probe_end_batch.append(("device_status", {"did": did, "status": dev.status}))
         self._broadcast_batch(_probe_end_batch)
+        return True
 
-        # Release thread immediately — scheduler fires next probe after interval
-        if s.running:
-            self._scheduler.schedule(did, sid, s.interval)
-        else:
-            self._broadcast("log", {"did": did, "sid": sid,
-                                     "msg": f"[STOP] {s.name}", "type": "info"})
-            s._stopped.set()
+    def apply_probe_assignment(self, pairs):
+        """React to probe_id changes on sensors / devices / sites.
+
+        pairs is a list of (did, sid). For each sensor whose scheduling mode
+        actually changed: newly remote → cancel its central schedule (an
+        in-flight cycle exits at the next precondition or reschedule check);
+        newly central → restart the chain via stop+start (probe-mode sensors
+        have no live chain, so the locked check-and-set can't double-chain).
+        Broadcasts the updated sensor dicts so UI badges flip immediately.
+        """
+        from core.probe_assign import effective_probe
+        batch = []
+        for did, sid in pairs:
+            with self._lock:
+                dev = self.devices.get(did)
+                s = dev.sensors.get(sid) if dev else None
+                if not s:
+                    continue
+                new_mode = "probe" if effective_probe(dev, s) else "central"
+                cur_mode = getattr(s, "_sched_mode", "central")
+                was_running = s.running
+            if new_mode == cur_mode:
+                continue
+            if new_mode == "probe":
+                s._sched_mode = "probe"
+                self._scheduler.cancel(did, sid)
+            elif was_running:
+                self.stop_sensor(did, sid)
+                self.start_sensor(did, sid)   # sets _sched_mode='central'
+            else:
+                s._sched_mode = "central"
+            batch.append(("sensor", s.to_dict()))
+        if batch:
+            self._broadcast_batch(batch)
 
     @staticmethod
     def _poison_sse(q):

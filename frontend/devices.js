@@ -987,15 +987,21 @@ function cardHTML(dev){
   // Vendor chip — show the device's group as a tag (proxy for vendor since
   // PingWatch doesn't track a vendor field on devices)
   const grpChip = dev.group ? `<div class="dcard-vendor">${esc(dev.group)}</div>` : '';
+  // Distributed probes: "via ‹probe›" pill; grey the card while the probe is
+  // offline — its values are stale, NOT a target outage.
+  const _epid = typeof _effectiveProbeFor==='function' ? _effectiveProbeFor(dev,null) : '';
+  const probePill = (_epid && typeof _viaProbePill==='function') ? _viaProbePill(_epid) : '';
+  const staleCls = (_epid && typeof _probeIsStale==='function' && _probeIsStale(_epid))
+    ? ' probe-stale-tile' : '';
   return `
-  <div class="dc dcard ${st}${selCls}" id="dp-${dev.device_id}" onclick="_cardClick(event,'${dev.device_id}')">
+  <div class="dc dcard ${st}${selCls}${staleCls}" id="dp-${dev.device_id}" onclick="_cardClick(event,'${dev.device_id}')">
     <div class="${cbCls}" onclick="event.stopPropagation();_toggleCard(event,'${dev.device_id}')"></div>
     <div class="dc-drag-handle" title="Drag to reorder">⠿</div>
     <div class="dcard-head">
       <div class="dc-bar dcard-stripe ${st}" id="dcbar-${dev.device_id}"></div>
       <div class="dcard-name-wrap">
         <div class="dcard-name">${esc(dev.name)}${adChip}</div>
-        <div class="dcard-meta"><span>${esc(dev.host||'')}</span></div>
+        <div class="dcard-meta"><span>${esc(dev.host||'')}</span>${probePill}</div>
       </div>
       ${grpChip}
     </div>

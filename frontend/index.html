@@ -263,6 +263,9 @@
     <button class="rail-btn" id="tabBackups" onclick="switchMainTab('backups')" title="Backups">
       <span class="rail-ico" aria-hidden="true"></span><span class="rail-tip">Backups</span><span class="rail-label">Backups</span>
     </button>
+    <button class="rail-btn" id="tabProbes" onclick="switchMainTab('probes')" title="Probes (remote agents)">
+      <span class="rail-ico" aria-hidden="true"></span><span class="rail-tip">Probes</span><span class="rail-label">Probes</span>
+    </button>
     <button class="rail-btn rbac-admin" id="tabLogs" onclick="switchMainTab('logs')" title="Logs">
       <span class="rail-ico" aria-hidden="true"></span><span class="rail-tip">Logs</span><span class="rail-label">Logs</span>
     </button>
@@ -539,6 +542,8 @@
     <div id="ipamView" style="display:none;flex-direction:column;flex:1;overflow:hidden;"></div>
     <div id="reportsView" style="display:none;flex-direction:column;flex:1;overflow:hidden;"></div>
     <div id="alertingView" style="display:none;flex-direction:column;flex:1;overflow:hidden;"></div>
+    <!-- Probes (remote agents) view -->
+    <div id="probesView" style="display:none;flex-direction:column;flex:1;overflow-y:auto;"></div>
     <div id="logsView" style="display:none;flex-direction:column;flex:1;overflow:hidden;"></div>
   </div>
 </div>

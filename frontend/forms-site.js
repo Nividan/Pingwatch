@@ -157,6 +157,13 @@ async function openModal(mode, name) {
           '<label>Display name (optional)</label>' +
           '<input id="lm-f-display" type="text" maxlength="100" placeholder="(falls back to Name)" value="' + esc(displayVal) + '"/>' +
         '</div>' +
+        '<div class="lm-field">' +
+          '<label>Measured from (remote probe)</label>' +
+          (typeof _probeSelectHtml === 'function'
+            ? _probeSelectHtml('lm-f-probe', (existing && existing.probe_id) || '', 'Central (this server)')
+            : '<select id="lm-f-probe"><option value="">Central</option></select>') +
+          '<span class="hint">Devices in this site are probed from this agent unless they override it. IPAM scans of subnets tagged with this site also run there.</span>' +
+        '</div>' +
         (mode === 'edit' && nameVal
           ? '<div class="lm-field">' +
               '<label class="check">' +
@@ -206,6 +213,8 @@ async function openModal(mode, name) {
           kind: inKind,
           display_name: inDisplay,
         };
+        { const _pf = document.getElementById('lm-f-probe');
+          if (_pf && _pf.value !== ((existing && existing.probe_id) || '')) body.probe_id = _pf.value; }
         if (inName !== nameVal) {
           body.new_name = inName;
           body.also_rename = renameDevs;
@@ -231,6 +240,17 @@ async function openModal(mode, name) {
         }).then(async function(r) {
           if (!r.ok) { const j = await r.json().catch(function(){return{};}); throw new Error(j.error || r.statusText); }
         });
+        // Probe binding rides a follow-up PUT (the create endpoint is
+        // metadata-only); skipped when left at Central.
+        const _pfNew = document.getElementById('lm-f-probe');
+        if (_pfNew && _pfNew.value) {
+          await fetch('/api/sites/meta/' + encodeURIComponent(inName), {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'same-origin',
+            body: JSON.stringify({ kind: inKind, probe_id: _pfNew.value }),
+          });
+        }
       }
       closeModal();
       _broadcastRefresh();

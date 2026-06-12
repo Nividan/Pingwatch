@@ -9,9 +9,11 @@ function evtSeverity(d) {
   if (dir === 'threshold_ok')                          return 'recovery';
   if (dir === 'license_ok')                            return 'recovery';
   if (dir === 'state_up')                              return 'recovery';
+  if (dir === 'probe_online')                          return 'recovery';
   if (dir === 'down')                                  return 'critical';
   if (dir === 'license_crit')                          return 'critical';
   if (dir === 'state_down')                            return 'critical';
+  if (dir === 'probe_offline')                         return 'critical';
   if (dir === 'reboot')                                return 'critical';
   if (dir === 'license_warn')                          return 'warning';
   if (dir === 'state_change')                          return 'warning';
@@ -53,6 +55,9 @@ function evtIcon(d) {
   if (dir === 'state_change') return '↔️';
   if (dir === 'reboot')       return '♻️';
   if (dir === 'value_change') return '📝';
+  // Distributed probes — agent connectivity events
+  if (dir === 'probe_offline') return '📡';
+  if (dir === 'probe_online')  return '📡';
   return _EVT_ICONS[d.stype] || '⚠️';
 }
 function _trapLabel(d) {

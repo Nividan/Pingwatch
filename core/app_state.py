@@ -12,9 +12,16 @@ from .state import MonitorState
 STATE = MonitorState()
 
 # ── Version & uptime ─────────────────────────────────────────────
-APP_VERSION      = "1.2"
-APP_VERSION_NAME = "bug fixes"
+# Release checklist: bump AGENT_VERSION in agent/agent.py alongside this —
+# the Probes page shows "update available" when a deployed agent differs.
+APP_VERSION      = "1.3"
+APP_VERSION_NAME = "distributed probes"
 SERVER_START = time.time()
+
+# Distributed-probes wire protocol (v1.3). Bump only on breaking changes to
+# the /api/agent/* contract; the server rejects agents whose protocol_version
+# doesn't match with a clear 409 so they fail loudly instead of misbehaving.
+PROBE_PROTOCOL_VERSION = 1
 
 # ── Effective network ports (overwritten by main() from settings) ─
 effective_port      = 7070
