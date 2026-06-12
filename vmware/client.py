@@ -325,24 +325,22 @@ def _get_session(host, user, password, port=443, verify_ssl=False):
 
 
 def _warm_session(si) -> None:
-    """Force the server-side caches a cold session would otherwise miss:
-    ServiceContent, the perf-counter catalog (→ 'metric not available' on the
-    first QueryPerf), and the inventory view (→ 'VM not found' on the first
-    PropertyCollector). Best-effort and time-bounded — never fails the
-    session; a probe racing this still works, it just re-warms."""
-    _, _, vim, _ = _require_pyvmomi()
+    """Force the two server-side caches a cold session would otherwise miss on
+    the first probe: ServiceContent (RetrieveContent) and the perf-counter
+    catalog (→ 'metric not available' on the first QueryPerf). Best-effort and
+    time-bounded — never fails the session; a probe racing this still works.
+
+    Deliberately does NOT enumerate the inventory. The probe path resolves each
+    VM/host/datastore by direct MoRef — vim.VirtualMachine(vm_id, si._stub) +
+    a single-object PropertyCollector (_fetch_single_object_props) — which does
+    not depend on a CreateContainerView, so warming the full inventory bought
+    it nothing. That CreateContainerView + view.view traversal was the heavy
+    per-reconnect cost that, under a synchronized session-expiry herd, piled
+    dozens of full-inventory walks onto vCenter at once and overloaded it."""
     try:
         with _socket_timeout(_WARM_TIMEOUT_S):
             content = si.RetrieveContent()          # forces ServiceContent
             _ = content.perfManager.perfCounter     # perf-counter catalog
-            view = content.viewManager.CreateContainerView(
-                content.rootFolder,
-                [vim.VirtualMachine, vim.HostSystem], True)
-            try:
-                _ = len(view.view)                  # forces inventory traversal
-            finally:
-                try: view.Destroy()
-                except Exception: pass
     except Exception as e:
         log.debug(f"vmware warm-on-connect skipped: {e}")
 
