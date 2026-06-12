@@ -137,5 +137,7 @@ systemctl restart pingwatch-agent.service
 
 echo ""
 echo "PingWatch agent installed and started."
+echo "  boot   : enabled — starts automatically at boot, auto-restarts on crash"
+echo "           (opt out: systemctl disable pingwatch-agent)"
 echo "  status : systemctl status pingwatch-agent"
 echo "  logs   : journalctl -u pingwatch-agent -f   (or $TARGET/agent.log)"

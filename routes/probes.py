@@ -287,7 +287,8 @@ def handle(h, method, path, body) -> bool:
                                 status=probe.get("status") or "pending")
             try:
                 from core.agent_package import build_agent_package
-                data = build_agent_package(probe, tok, h.headers.get("Host", ""))
+                data = build_agent_package(probe, tok, h.headers.get("Host", ""),
+                                           request_headers=h.headers)
             except Exception as e:
                 h._error(500, "package build failed", e, context="probe_package")
                 return True

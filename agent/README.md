@@ -61,6 +61,22 @@ If the server is unreachable the agent keeps probing and spools results to
 oldest-first — history charts on the server stay gapless, and no alert
 storm replays incidents that already ended.
 
+## Troubleshooting: "certificate fingerprint mismatch"
+
+The package pins the certificate PingWatch itself serves. If agents reach
+the server **through a reverse proxy** (nginx / Let's Encrypt on 443), the
+cert they see belongs to the proxy and the pin fails. Fix in
+`config.json` + restart:
+
+- Proxy / publicly-trusted cert → `"server_cert_sha256": ""`
+  (normal CA validation; survives renewals — the right choice).
+- Self-signed cert that legitimately rotated → paste the full
+  *"server presented …"* fingerprint from the error into
+  `server_cert_sha256`.
+
+Packages downloaded through a proxy now ship with an empty pin
+automatically (the server detects `X-Forwarded-*` headers).
+
 ## Re-enrolling
 
 If the probe credential is revoked on the server, generate a new

@@ -77,13 +77,40 @@ def _guess_server_url(host_header: str) -> str:
     return f"{scheme}://{host}"
 
 
+def _behind_reverse_proxy(headers) -> bool:
+    """True when the download request carries reverse-proxy markers.
+
+    Behind a proxy, the TLS certificate agents will see belongs to the
+    proxy, not to PingWatch — pinning PingWatch's own cert would brick
+    every install with a fingerprint mismatch. CA validation (empty pin)
+    is the correct mode there, since proxies front publicly-trusted certs.
+    """
+    if headers is None:
+        return False
+    for k in ("X-Forwarded-For", "X-Forwarded-Proto", "X-Forwarded-Host",
+              "X-Real-IP", "Forwarded"):
+        try:
+            if headers.get(k):
+                return True
+        except Exception:
+            return False
+    return False
+
+
 def build_agent_package(probe: dict, enrollment_token: str,
-                        host_header: str = "") -> bytes:
+                        host_header: str = "",
+                        request_headers=None) -> bytes:
     """Assemble the zip in memory and return its bytes."""
+    if _behind_reverse_proxy(request_headers):
+        pin = ""
+        log.info("agent package: reverse proxy detected (X-Forwarded-* headers) "
+                 "— omitting cert pin; the agent will use CA validation")
+    else:
+        pin = _server_cert_fingerprint()
     cfg = {
         "server_url":         _guess_server_url(host_header),
         "enrollment_token":   enrollment_token,
-        "server_cert_sha256": _server_cert_fingerprint(),
+        "server_cert_sha256": pin,
         "probe_id":           probe["probe_id"],
         "probe_name":         probe.get("name") or "",
         "checkin_interval":   10,

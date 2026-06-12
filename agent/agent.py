@@ -120,10 +120,16 @@ class PinnedHTTPSConnection(http.client.HTTPSConnection):
         fp = hashlib.sha256(der).hexdigest()
         if fp != self._pin:
             self.close()
+            # ASCII only (branch consoles/log viewers are often cp1252), and
+            # the FULL observed fingerprint so the operator can paste it
+            # straight into config.json if it's legitimate.
             raise ssl.SSLError(
-                f"server certificate fingerprint mismatch "
-                f"(got {fp[:16]}…, pinned {self._pin[:16]}…) — possible MITM "
-                f"or rotated cert; update server_cert_sha256 in config.json")
+                f"server certificate fingerprint mismatch: pinned {self._pin} "
+                f"but the server presented {fp}. If the new cert is "
+                f"legitimate (rotated cert or a reverse proxy in front), set "
+                f"server_cert_sha256 in config.json to the presented value -- "
+                f"or to \"\" to use normal CA validation (the right choice "
+                f"for publicly-trusted certificates).")
 
 
 class ServerClient:
@@ -437,6 +443,7 @@ class Agent:
 
         self.checkin_count = 0
         self.proto_block_logged = 0
+        self._last_terr = ("", 0.0)   # (error key, ts) — transport-warning throttle
 
     # ── Scheduler ────────────────────────────────────────────────
     def _schedule(self, key, delay):
@@ -533,6 +540,18 @@ class Agent:
             return None
         return rate
 
+    def _log_transport(self, where, e, extra=""):
+        """WARN once per distinct transport error, then stay quiet for 60s —
+        a deterministic failure (bad pin, refused connection) otherwise
+        floods the log with an identical line every checkin."""
+        key = f"{where}:{type(e).__name__}:{e}"
+        now = time.time()
+        if key == self._last_terr[0] and now - self._last_terr[1] < 60:
+            return
+        self._last_terr = (key, now)
+        log.warning("%s failed (transport): %s%s (identical errors suppressed for 60s)",
+                    where, e, extra)
+
     # ── Enrollment / auth ────────────────────────────────────────
     def _enroll(self):
         tok = (self.cfg.get("enrollment_token") or "").strip()
@@ -551,7 +570,7 @@ class Agent:
         try:
             status, data = self.client.request("POST", "/api/agent/enroll", body)
         except Exception as e:
-            log.warning("enroll attempt failed (transport): %s", e)
+            self._log_transport("enroll", e)
             return False
         if status == 200 and data.get("probe_token"):
             self.state["probe_token"] = data["probe_token"]
@@ -576,7 +595,7 @@ class Agent:
             status, data = self.client.request(
                 "GET", "/api/agent/config", token=self.state.get("probe_token"))
         except Exception as e:
-            log.warning("config sync failed (transport): %s", e)
+            self._log_transport("config sync", e)
             return
         if status != 200 or not data.get("ok"):
             log.warning("config sync rejected (HTTP %s)", status)
@@ -649,8 +668,8 @@ class Agent:
             status, data = self.client.request("POST", "/api/agent/checkin",
                                                body, token=token)
         except Exception as e:
-            log.warning("checkin failed (transport): %s — spooling %d results",
-                        e, len(batch))
+            self._log_transport("checkin", e,
+                                extra=f" -- spooling {len(batch)} results")
             if origin == "live" and batch:
                 self.spool.append(batch)
             self._overflow_to_spool()
