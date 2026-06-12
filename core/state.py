@@ -252,7 +252,8 @@ class Sensor:
                  snmp_v3_user="", snmp_v3_level="",
                  snmp_v3_auth_proto="", snmp_v3_auth_pass="",
                  snmp_v3_priv_proto="", snmp_v3_priv_pass="",
-                 snmp_v3_context=""):
+                 snmp_v3_context="",
+                 cert_warn_days=0, cert_crit_days=0):
         self.device_id      = device_id
         self.sensor_id      = sensor_id
         self.name           = name
@@ -270,6 +271,11 @@ class Sensor:
         self.dns_record_type       = "A"
         self.dns_server            = ""
         self.http_expected_status  = 0
+        # HTTPS cert-expiry thresholds (days remaining; 0 = off). Independent
+        # of the latency thresholds — an HTTP/S sensor can warn/crit on an
+        # approaching cert expiry while still reporting fast and up.
+        self.cert_warn_days = int(cert_warn_days or 0)
+        self.cert_crit_days = int(cert_crit_days or 0)
         # Debounce — requires N consecutive failures before flap event fires.
         # Default 2 avoids noise from transient single-probe drops (common with ICMP).
         # Alert rules add a second debounce layer (trigger_count / duration).
@@ -366,6 +372,11 @@ class Sensor:
         # the muted "acknowledged-down" tile/card rendering ("known down").
         self._ack_by                      = ""
         self._ack_at                      = 0.0
+        # HTTPS cert-expiry runtime: last measured days-to-expiry (None until
+        # a probe reports one), and whether cert expiry — not latency/loss —
+        # drove the current threshold state (for event detail attribution).
+        self._cert_days                   = None
+        self._cert_caused_thr             = False
         self.history               = collections.deque(maxlen=self.MAX)
         self.thr_history           = collections.deque(maxlen=self.MAX)
         self.total          = 0
@@ -458,7 +469,8 @@ class Sensor:
         if self.stype == "ping": return probe_ping(self.host, self.timeout)
         if self.stype == "tcp":  return probe_tcp(self.host, self.port or 80, self.timeout)
         if self.stype == "http": return probe_http(self.url or self.host, self.timeout,
-                                                   self.verify_ssl, self.http_expected_status)
+                                                   self.verify_ssl, self.http_expected_status,
+                                                   cert_check=bool(self.cert_warn_days or self.cert_crit_days))
         if self.stype == "dns":  return probe_dns(self.host, self.dns_query or self.host,
                                                    self.dns_record_type, self.dns_server,
                                                    self.port or 53, self.timeout)
@@ -549,6 +561,8 @@ class Sensor:
             "dns_record_type":       self.dns_record_type,
             "dns_server":            self.dns_server,
             "http_expected_status":  self.http_expected_status,
+            "cert_warn_days":        self.cert_warn_days,
+            "cert_crit_days":        self.cert_crit_days,
             "fail_after":            self.fail_after,
             "recover_after":         self.recover_after,
             "warn_ms":               self.warn_ms,
@@ -910,30 +924,71 @@ class MonitorState:
         # spray events that auto-resolve one cycle later. _flush_grace()
         # emits whatever is STILL bad when the window closes (with the
         # original transition timestamps); blips vanish without a trace.
-        self._grace_until  = 0.0          # epoch end of window; 0 = inactive
+        self._grace_active = False        # parking on/off (not time-based)
+        self._grace_min_end = 0.0         # earliest flush time (configured grace)
+        self._grace_hardcap = 0.0         # latest flush time (safety bound)
         self._grace_parked = {}           # (did, sid) → {kind: entry}
         self._grace_lock   = threading.Lock()
 
     # ── Startup grace ─────────────────────────────────────────────
     def begin_startup_grace(self):
         """Arm the startup grace window. Called once from server.py main()
-        after settings are loaded; startup_grace_s=0 disables."""
+        after settings are loaded; startup_grace_s=0 disables.
+
+        The window does NOT close on a blind timer: it stays open until the
+        configured grace has elapsed AND every central sensor has produced
+        its first post-boot result (so slow first probes — cold vCenter,
+        big SNMP walks — get parked, not emitted after the window). A hard
+        cap bounds the wait so a permanently-stuck sensor can't defer real
+        alerts forever."""
         try:
             grace = max(0, int(float(_cfg("startup_grace_s", "60") or 0)))
         except (TypeError, ValueError):
             grace = 60
         if not grace:
             return
-        self._grace_until = time.time() + grace
-        t = threading.Timer(grace + 2.0, self._flush_grace)
+        now = time.time()
+        self._grace_active  = True
+        self._grace_min_end = now + grace
+        # Cap the first-cycle wait: never defer events past this even if some
+        # sensor never reports (offline probe, hung host).
+        self._grace_hardcap = now + max(grace * 2, 180)
+        t = threading.Timer(grace + 1.0, self._maybe_flush_grace)
         t.daemon = True
         t.start()
         log_sensors.info(
-            f"Startup grace armed: down/threshold events deferred for {grace}s; "
-            f"sensors still failing at the end emit with their true timestamps")
+            f"Startup grace armed: down/threshold events deferred for ~{grace}s "
+            f"(until the first probe cycle completes, capped at "
+            f"{int(self._grace_hardcap - now)}s); still-failing sensors emit "
+            f"with their true timestamps")
 
     def _in_grace(self) -> bool:
-        return self._grace_until > 0 and time.time() < self._grace_until
+        return self._grace_active
+
+    def _first_cycle_done(self) -> bool:
+        """True once every running central sensor has reported ≥1 result since
+        boot. Probe-measured sensors report via checkin (also bumps total);
+        an offline probe's sensors never do — the hard cap covers that."""
+        with self._lock:
+            for dev in self.devices.values():
+                for s in dev.sensors.values():
+                    if s.running and getattr(s, "total", 0) < 1:
+                        return False
+        return True
+
+    def _maybe_flush_grace(self):
+        """Timer callback: flush once the grace minimum has elapsed and the
+        first probe cycle is done (or the hard cap is hit); otherwise re-arm
+        a short re-check. Keeps parking active until the real flush."""
+        if not self._grace_active:
+            return
+        now = time.time()
+        if now < self._grace_hardcap and not self._first_cycle_done():
+            t = threading.Timer(3.0, self._maybe_flush_grace)
+            t.daemon = True
+            t.start()
+            return
+        self._flush_grace()
 
     def _grace_park(self, did, sid, kind, entry):
         with self._grace_lock:
@@ -965,7 +1020,7 @@ class MonitorState:
         Runs once on a Timer thread."""
         from db import db_log_flap, _db_enqueue
         from db.events import db_auto_resolve_flap
-        self._grace_until = 0.0
+        self._grace_active = False
         with self._grace_lock:
             parked = self._grace_parked
             self._grace_parked = {}
@@ -1188,7 +1243,7 @@ class MonitorState:
             editable = ["name", "stype", "host", "port", "url", "interval", "timeout",
                         "verify_ssl", "snmp_community", "snmp_oid", "snmp_version",
                         "dns_query", "dns_record_type", "dns_server",
-                        "http_expected_status",
+                        "http_expected_status", "cert_warn_days", "cert_crit_days",
                         "warn_ms", "crit_ms", "loss_warn_pct", "loss_crit_pct",
                         "keyword", "keyword_case", "banner_regex", "alerts_muted",
                         "snmp_unit",
@@ -1216,6 +1271,7 @@ class MonitorState:
             # columns reject empty strings at save time. Treat "" as "not provided".
             _nullable_int_fields = {"port", "warn_ms", "crit_ms"}
             _int_fields = {"interval", "timeout", "http_expected_status",
+                           "cert_warn_days", "cert_crit_days",
                            "fail_after", "recover_after",
                            "loss_warn_pct", "loss_crit_pct",
                            "anomaly_enabled", "anomaly_sensitivity", "anomaly_min_samples"}
@@ -1292,6 +1348,12 @@ class MonitorState:
             s._sched_mode = "probe" if _eff else "central"
         if _eff:
             _bump_probe_config(_eff)   # agent re-pulls config → starts probing
+        elif s.stype == "vmware":
+            # Give vCenter prewarm a head start so the FIRST probe reuses a
+            # warm session (cold perfManager/inventory otherwise returns
+            # "VM not found" / "metric not available" → false DOWN that
+            # recovers a cycle later). Mirrors the agent's vmware stagger.
+            self._scheduler.schedule(did, sid, 12.0)
         else:
             self._executor.submit(self._run_once, did, sid)
 
@@ -1527,6 +1589,10 @@ class MonitorState:
             ts_float, datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         _ts_float = ts_float
         _muted = s.alerts_muted or dev.alerts_muted or is_group_muted(dev.group)
+        # HTTPS cert-expiry: the probe (local or agent) reports days remaining
+        # only for https sensors with thresholds set. Absent ⇒ None ⇒ no cert
+        # contribution to this probe's threshold evaluation.
+        s._cert_days = result.get("cert_days")
 
         # Sample buffered after the ok/fail branch so s._last_rate reflects
         # THIS probe's rate (computed in the ok branch below for SNMP
@@ -1922,6 +1988,23 @@ class MonitorState:
                 if evaluate_anomaly(s, s.last_ms) == "warn":
                     _new_thr = "warn"
                     s._anom_caused_warn = True
+        # ── HTTPS cert-expiry threshold (worst-of with latency/loss) ──
+        # An http sensor can warn/crit on an approaching cert expiry while
+        # still fast and up. Cert only *escalates* — if latency/loss already
+        # set a worse-or-equal state, that keeps the attribution.
+        s._cert_caused_thr = False
+        if s.stype == "http" and result["ok"] and s._cert_days is not None:
+            _cw = int(getattr(s, "cert_warn_days", 0) or 0)
+            _cc = int(getattr(s, "cert_crit_days", 0) or 0)
+            _cert_sev = "ok"
+            if _cc and s._cert_days <= _cc:
+                _cert_sev = "crit"
+            elif _cw and s._cert_days <= _cw:
+                _cert_sev = "warn"
+            _rank = {"ok": 0, "warn": 1, "crit": 2}
+            if _rank[_cert_sev] > _rank[_new_thr]:
+                _new_thr = _cert_sev
+                s._cert_caused_thr = True
         if _new_thr != s._threshold_state:
             # State CHANGED — reset counter, do full broadcast
             _prev_thr = s._threshold_state
@@ -1955,25 +2038,39 @@ class MonitorState:
                 if s._anom_caused_warn:
                     from monitoring.anomaly import format_anomaly_detail
                     _val_disp = format_anomaly_detail(s, s.last_ms)
-                # Resolve the flap direction once.
+                if s._cert_caused_thr:
+                    _cd = s._cert_days
+                    _val_disp = (f"Certificate expires in {_cd}d"
+                                 if _cd is not None and _cd >= 0
+                                 else f"Certificate expired {abs(_cd)}d ago")
+                    _unit = 'days'
+                # Resolve the flap direction once. Cert-expiry reuses the
+                # threshold_* directions (the detail names the cause) so the
+                # Events/ack/resolve pipeline needs no new direction.
                 if _new_thr == "crit":
                     _thr_dir = "threshold_crit"
                 elif s._anom_caused_warn:
                     _thr_dir = "anomaly_warn"
                 else:
                     _thr_dir = "threshold_warn"
-                # Pick the metric name that matches what was actually compared.
-                if s._last_rate is not None:
+                # Pick the metric name + comparison values that match the cause.
+                if s._cert_caused_thr:
+                    _metric = "cert_days"
+                    _ctx_actual = s._cert_days
+                    _ctx_limit  = s.cert_crit_days if _new_thr == "crit" else s.cert_warn_days
+                elif s._last_rate is not None:
                     _metric = "rate"
-                elif s.stype in ("snmp", "tls", "vmware"):
-                    _metric = "value"
+                    _ctx_actual = _thr_chk
+                    _ctx_limit  = s.crit_ms if _new_thr == "crit" else s.warn_ms
                 else:
-                    _metric = "ms"
+                    _metric = "value" if s.stype in ("snmp", "tls", "vmware") else "ms"
+                    _ctx_actual = _thr_chk
+                    _ctx_limit  = s.crit_ms if _new_thr == "crit" else s.warn_ms
                 _thr_ctx = {
                     "metric": _metric,
-                    "actual": _thr_chk,
+                    "actual": _ctx_actual,
                     "unit": _unit.strip() if _unit else "",
-                    "limit": s.crit_ms if _new_thr == "crit" else s.warn_ms,
+                    "limit": _ctx_limit,
                     "prev_state": _prev_thr,
                 }
                 _thr_raw_json = json.dumps(build_flap_raw_data(
@@ -2010,11 +2107,11 @@ class MonitorState:
                 else:
                     self._broadcast(_tevt, _thr_evt_data)
                     if _new_thr == "crit":
-                        log_sensors.error(f"THRESHOLD CRIT: {dev.name}/{s.name} — {_val_disp} (limit {s.crit_ms}{_unit})")
+                        log_sensors.error(f"THRESHOLD CRIT: {dev.name}/{s.name} — {_val_disp} (limit {_ctx_limit}{_unit})")
                     elif s._anom_caused_warn:
                         log_sensors.warning(f"ANOMALY WARN: {dev.name}/{s.name} — {_val_disp}")
                     else:
-                        log_sensors.warning(f"THRESHOLD WARN: {dev.name}/{s.name} — {_val_disp} (limit {s.warn_ms}{_unit})")
+                        log_sensors.warning(f"THRESHOLD WARN: {dev.name}/{s.name} — {_val_disp} (limit {_ctx_limit}{_unit})")
                     _db_enqueue(lambda _f=_thr_flap: db_log_flap(_f))
                     # Escalation / de-escalation (warn↔crit) — auto-resolve the
                     # PREVIOUS active threshold entry so only the current state

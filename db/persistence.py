@@ -160,7 +160,9 @@ def _pg_save(state):
              getattr(s, "snmp_v3_priv_proto", ""),
              getattr(s, "snmp_v3_priv_pass", ""),
              getattr(s, "snmp_v3_context", ""),
-             getattr(s, "probe_id", "") or "")
+             getattr(s, "probe_id", "") or "",
+             int(getattr(s, "cert_warn_days", 0) or 0),
+             int(getattr(s, "cert_crit_days", 0) or 0))
             for dev in state.devices.values()
             for s in dev.sensors.values()
         ]
@@ -236,7 +238,8 @@ def _pg_save(state):
                     "sftp_remote_path,sftp_expected_sha256,"
                     "radius_secret,radius_test_level,radius_username,radius_password,radius_nas_id,"
                     "snmp_v3_user,snmp_v3_level,snmp_v3_auth_proto,snmp_v3_auth_pass,"
-                    "snmp_v3_priv_proto,snmp_v3_priv_pass,snmp_v3_context,probe_id) "
+                    "snmp_v3_priv_proto,snmp_v3_priv_pass,snmp_v3_context,probe_id,"
+                    "cert_warn_days,cert_crit_days) "
                     "VALUES %s "
                     "ON CONFLICT (did, sid) DO UPDATE SET "
                     "name=EXCLUDED.name, stype=EXCLUDED.stype, host=EXCLUDED.host, "
@@ -281,7 +284,9 @@ def _pg_save(state):
                     "snmp_v3_priv_proto=EXCLUDED.snmp_v3_priv_proto, "
                     "snmp_v3_priv_pass=EXCLUDED.snmp_v3_priv_pass, "
                     "snmp_v3_context=EXCLUDED.snmp_v3_context, "
-                    "probe_id=EXCLUDED.probe_id",
+                    "probe_id=EXCLUDED.probe_id, "
+                    "cert_warn_days=EXCLUDED.cert_warn_days, "
+                    "cert_crit_days=EXCLUDED.cert_crit_days",
                     snr_rows,
                 )
             # Delete orphaned sensors
@@ -405,7 +410,9 @@ def db_save(state):
              getattr(s, "snmp_v3_priv_proto", ""),
              getattr(s, "snmp_v3_priv_pass", ""),
              getattr(s, "snmp_v3_context", ""),
-             getattr(s, "probe_id", "") or "")
+             getattr(s, "probe_id", "") or "",
+             int(getattr(s, "cert_warn_days", 0) or 0),
+             int(getattr(s, "cert_crit_days", 0) or 0))
             for dev in state.devices.values()
             for s in dev.sensors.values()
         ]
@@ -452,8 +459,9 @@ def db_save(state):
             "sftp_remote_path,sftp_expected_sha256,"
             "radius_secret,radius_test_level,radius_username,radius_password,radius_nas_id,"
             "snmp_v3_user,snmp_v3_level,snmp_v3_auth_proto,snmp_v3_auth_pass,"
-            "snmp_v3_priv_proto,snmp_v3_priv_pass,snmp_v3_context,probe_id) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "snmp_v3_priv_proto,snmp_v3_priv_pass,snmp_v3_context,probe_id,"
+            "cert_warn_days,cert_crit_days) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             snr_rows
         )
         if live_sids:
@@ -549,7 +557,9 @@ def _pg_load(state):
                 "COALESCE(snmp_v3_priv_proto,'') AS snmp_v3_priv_proto,"
                 "COALESCE(snmp_v3_priv_pass,'') AS snmp_v3_priv_pass,"
                 "COALESCE(snmp_v3_context,'') AS snmp_v3_context,"
-                "COALESCE(probe_id,'') AS probe_id "
+                "COALESCE(probe_id,'') AS probe_id,"
+                "COALESCE(cert_warn_days,0) AS cert_warn_days,"
+                "COALESCE(cert_crit_days,0) AS cert_crit_days "
                 "FROM sensors"
             )
             srows = cur.fetchall()
@@ -670,6 +680,8 @@ def _pg_load(state):
         s.snmp_v3_priv_pass    = row[66] or "" if len(row) > 66 else ""
         s.snmp_v3_context      = row[67] or "" if len(row) > 67 else ""
         s.probe_id             = row[68] or "" if len(row) > 68 else ""
+        s.cert_warn_days       = int(row[69] or 0) if len(row) > 69 else 0
+        s.cert_crit_days       = int(row[70] or 0) if len(row) > 70 else 0
         dev.sensors[row[1]] = s
 
     state._did_ctr = max_did
@@ -797,7 +809,8 @@ def db_load(state):
             "COALESCE(snmp_v3_auth_proto,''),COALESCE(snmp_v3_auth_pass,''),"
             "COALESCE(snmp_v3_priv_proto,''),COALESCE(snmp_v3_priv_pass,''),"
             "COALESCE(snmp_v3_context,''),"
-            "COALESCE(probe_id,'') "
+            "COALESCE(probe_id,''),"
+            "COALESCE(cert_warn_days,0),COALESCE(cert_crit_days,0) "
             "FROM sensors"
         ).fetchall()
     except Exception as e:
@@ -884,7 +897,8 @@ def db_load(state):
          snmp_v3_user, snmp_v3_level,
          snmp_v3_auth_proto, snmp_v3_auth_pass,
          snmp_v3_priv_proto, snmp_v3_priv_pass,
-         snmp_v3_context, snr_probe_id) in srows:
+         snmp_v3_context, snr_probe_id,
+         snr_cert_warn_days, snr_cert_crit_days) in srows:
         dev = state.devices.get(did)
         if not dev: continue
         s = Sensor(did, sid, name, stype, host or dev.host,
@@ -944,6 +958,8 @@ def db_load(state):
         s.snmp_v3_priv_pass    = snmp_v3_priv_pass or ""
         s.snmp_v3_context      = snmp_v3_context or ""
         s.probe_id             = snr_probe_id or ""
+        s.cert_warn_days       = int(snr_cert_warn_days or 0)
+        s.cert_crit_days       = int(snr_cert_crit_days or 0)
         dev.sensors[sid] = s
 
     state._did_ctr = max_did

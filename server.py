@@ -621,11 +621,12 @@ def _start_http_redirect(http_port: int, https_port: int):
 
 
 def _start_vmware_prewarm():
-    """Background-login to every distinct vCenter used by centrally-run
-    vmware sensors. A cold pyvmomi SmartConnect takes 5-20s — longer than
-    most sensor timeouts — so without this the first probe cycle after a
-    restart fails and sprays DOWN events that resolve one cycle later
-    (startup grace hides them from Events; this removes the failures)."""
+    """Background-login AND warm (perf catalog + inventory) every distinct
+    vCenter used by centrally-run vmware sensors, so the first probe reuses a
+    warm session instead of racing a cold one (which returns "VM not found" /
+    "metric not available" → false DOWN that recovers a cycle later). Each
+    vCenter warms on its own thread so the head start (start_sensor delays
+    vmware first probes ~12s) covers them all in parallel, not serially."""
     from core.probe_assign import effective_probe
     from db.backups import decrypt_pw
     specs = {}
@@ -651,16 +652,17 @@ def _start_vmware_prewarm():
     if not specs:
         return
 
-    def _warm():
+    def _warm_one(host, user, pw, port, vssl):
         try:
             from vmware.client import prewarm_session
         except Exception:
             return                      # pyvmomi shim/module unavailable
-        for host, user, pw, port, vssl in specs.values():
-            ok = prewarm_session(host, user, pw, port=port, verify_ssl=vssl)
-            log.info(f"vCenter session prewarm "
-                     f"{'ok' if ok else 'failed'}: {host}:{port}")
-    threading.Thread(target=_warm, daemon=True, name="vmw-prewarm").start()
+        ok = prewarm_session(host, user, pw, port=port, verify_ssl=vssl)
+        log.info(f"vCenter session prewarm "
+                 f"{'ok' if ok else 'failed'}: {host}:{port}")
+    for host, user, pw, port, vssl in specs.values():
+        threading.Thread(target=_warm_one, args=(host, user, pw, port, vssl),
+                         daemon=True, name="vmw-prewarm").start()
 
 
 # ── Entry point ───────────────────────────────────────────────────

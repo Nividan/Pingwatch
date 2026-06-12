@@ -154,9 +154,65 @@ def probe_tcp(host, port, timeout=5):
             except Exception: pass
 
 
-def probe_http(url, timeout=8, verify_ssl=True, expected_status=0):
+def _peer_cert_expiry_days(host, port, timeout, verify_ssl=True):
+    """Best-effort days until the TLS cert at host:port expires (negative if
+    already expired), or None when it can't be determined — no cert returned,
+    an untrusted chain while verifying, verify disabled (CERT_NONE hides the
+    parsed cert), or any handshake error. Backs the optional cert-expiry
+    thresholds on HTTP/S sensors; never raises, so it can't turn a healthy
+    HTTP check into a failure."""
+    import datetime
+    ctx = ssl.create_default_context()
+    if not verify_ssl:
+        ctx.check_hostname = False
+        ctx.verify_mode    = ssl.CERT_NONE
+    else:
+        try:
+            from core.ssl_trust import apply_trusted_cas
+            apply_trusted_cas(ctx)
+        except Exception:
+            pass
+    raw = conn = None
+    try:
+        raw = _connect_bounded(host, int(port), timeout)
+        conn = ctx.wrap_socket(raw, server_hostname=host)
+        raw = None  # ownership transferred to conn
+        cert = conn.getpeercert()
+        not_after = (cert or {}).get("notAfter", "")
+        if not not_after:
+            return None
+        exp = datetime.datetime.strptime(not_after, "%b %d %H:%M:%S %Y %Z")
+        now = datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None)
+        return (exp - now).days
+    except Exception:
+        return None
+    finally:
+        for _s in (conn, raw):
+            if _s is not None:
+                try: _s.close()
+                except Exception: pass
+
+
+def probe_http(url, timeout=8, verify_ssl=True, expected_status=0, cert_check=False):
     if not url.startswith("http"):
         url = "http://" + url
+
+    def _cert_days():
+        # Only peek for https URLs when the sensor has cert-expiry thresholds.
+        # Done on the up paths only (a separate, bounded TLS handshake — does
+        # not count toward the HTTP latency `ms`).
+        if not (cert_check and url.startswith("https://")):
+            return None
+        try:
+            from urllib.parse import urlparse
+            u = urlparse(url)
+            if u.hostname:
+                return _peer_cert_expiry_days(u.hostname, u.port or 443,
+                                              timeout, verify_ssl)
+        except Exception:
+            return None
+        return None
+
     t0 = time.time()
     try:
         ctx = None
@@ -175,12 +231,20 @@ def probe_http(url, timeout=8, verify_ssl=True, expected_status=0):
             code = resp.getcode()
             ssl_note = " [SSL ignored]" if not verify_ssl else ""
             ok = (code == expected_status) if expected_status else (200 <= code < 400)
-            return {"ok": ok, "ms": ms,
-                    "detail": f"HTTP {code} ({ms}ms){ssl_note}", "code": code}
+            result = {"ok": ok, "ms": ms,
+                      "detail": f"HTTP {code} ({ms}ms){ssl_note}", "code": code}
+            _cd = _cert_days()
+            if _cd is not None:
+                result["cert_days"] = _cd
+            return result
     except urllib.error.HTTPError as e:
         ms = round((time.time() - t0) * 1000, 1)
         ok = (e.code == expected_status) if expected_status else (e.code < 400)
-        return {"ok": ok, "ms": ms, "detail": f"HTTP {e.code}", "code": e.code}
+        result = {"ok": ok, "ms": ms, "detail": f"HTTP {e.code}", "code": e.code}
+        _cd = _cert_days()
+        if _cd is not None:
+            result["cert_days"] = _cd
+        return result
     except urllib.error.URLError as e:
         return {"ok": False, "ms": None, "detail": str(e.reason)[:80]}
     except Exception as e:

@@ -55,7 +55,7 @@ import probes  # noqa: E402  (verbatim copy of the server's monitoring/probes.py
 
 # Keep AGENT_VERSION in lock-step with the server's APP_VERSION at release
 # time — the Probes page flags agents whose version differs.
-AGENT_VERSION = "1.3"
+AGENT_VERSION = "1.4"
 PROTOCOL_VERSION = 1
 
 CONFIG_PATH = os.path.join(BASE_DIR, "config.json")
@@ -319,7 +319,8 @@ def run_probe(cfg):
         if st == "http":
             return probes.probe_http(cfg.get("url") or host, timeout,
                                      bool(cfg.get("verify_ssl", True)),
-                                     int(cfg.get("http_expected_status") or 0))
+                                     int(cfg.get("http_expected_status") or 0),
+                                     cert_check=bool(cfg.get("cert_check")))
         if st == "dns":
             return probes.probe_dns(host, cfg.get("dns_query") or host,
                                     cfg.get("dns_record_type") or "A",
@@ -740,8 +741,11 @@ class Agent:
         return True
 
     def _prewarm_vmware(self):
-        """Log into each distinct vCenter once, before its sensors first
-        fire — prevents the false-DOWN burst after an agent restart."""
+        """Log into and warm each distinct vCenter once, before its sensors
+        first fire — prevents the false-DOWN burst after an agent restart
+        (cold perfManager/inventory → 'VM not found' / 'metric not
+        available'). One thread per vCenter so the first-probe head start
+        covers them in parallel."""
         specs = {}
         for cfg in list(self.sensors.values()):
             if cfg.get("stype") != "vmware":
@@ -760,10 +764,15 @@ class Agent:
             from vmware.client import prewarm_session
         except Exception:
             return                      # vmware module / pyvmomi not present
-        for host, user, pw, port, vssl in specs.values():
+
+        def _warm_one(host, user, pw, port, vssl):
             ok = prewarm_session(host, user, pw, port=port, verify_ssl=vssl)
             log.info("vCenter session prewarm %s: %s:%s",
                      "ok" if ok else "failed", host, port)
+        for host, user, pw, port, vssl in specs.values():
+            threading.Thread(target=_warm_one,
+                             args=(host, user, pw, port, vssl),
+                             daemon=True, name="pwa-vmw-warm").start()
 
     # ── Main loop ────────────────────────────────────────────────
     def run(self):
@@ -782,7 +791,7 @@ class Agent:
         threading.Thread(target=self._prewarm_vmware, daemon=True,
                          name="pwa-vmw-warm").start()
         for key in list(self.sensors):
-            _first = 8.0 if (self.sensors[key].get("stype") == "vmware") else 1.0
+            _first = 12.0 if (self.sensors[key].get("stype") == "vmware") else 1.0
             self._schedule(key, _first)
 
         last_full_sync = 0.0

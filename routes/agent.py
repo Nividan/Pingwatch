@@ -256,6 +256,9 @@ def _ingest_results(probe: dict, results: list) -> tuple:
         if r.get("rate") is not None:
             try: result["rate"] = float(r["rate"])
             except (TypeError, ValueError): pass
+        if r.get("cert_days") is not None:   # HTTPS cert-expiry (http sensors)
+            try: result["cert_days"] = int(r["cert_days"])
+            except (TypeError, ValueError): pass
         # Spooled backfill older than the staleness cutoff is persisted as
         # samples only — no state/event/alert replay of finished history.
         stale_cutoff = max(120.0, 2.0 * float(s.interval or 5))
@@ -573,6 +576,11 @@ def _build_agent_config(pid: str) -> list:
             cfg.update({"http_expected_status": int(s.http_expected_status or 0),
                         "keyword": s.keyword or "",
                         "keyword_case": bool(s.keyword_case)})
+            if s.stype == "http":
+                # Tell the agent to also report cert days-to-expiry; the
+                # server still owns the warn/crit thresholds.
+                cfg["cert_check"] = bool(getattr(s, "cert_warn_days", 0)
+                                         or getattr(s, "cert_crit_days", 0))
         elif s.stype == "banner":
             cfg["banner_regex"] = s.banner_regex or ""
         elif s.stype == "smtp":

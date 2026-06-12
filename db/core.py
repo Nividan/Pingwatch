@@ -865,6 +865,15 @@ def db_init():
                 con.commit()
             except Exception:
                 pass
+        # HTTPS cert-expiry thresholds (days remaining; 0 = off) — lets an
+        # http sensor warn/crit on an approaching cert expiry alongside its
+        # latency check, without a separate TLS sensor.
+        for _col in ("cert_warn_days", "cert_crit_days"):
+            try:
+                con.execute(f"ALTER TABLE sensors ADD COLUMN {_col} INTEGER DEFAULT 0")
+                con.commit()
+            except Exception:
+                pass
         # Anomaly detection — EWMA baseline checkpoints (restored on startup)
         con.execute("""
             CREATE TABLE IF NOT EXISTS sensor_anomaly_baselines (

@@ -980,7 +980,7 @@ def handle(h, method, path, body):
         for k in ["name", "stype", "host", "url", "interval", "timeout",
                   "verify_ssl", "snmp_community", "snmp_oid", "snmp_version",
                   "dns_query", "dns_record_type", "dns_server",
-                  "http_expected_status",
+                  "http_expected_status", "cert_warn_days", "cert_crit_days",
                   "warn_ms", "crit_ms",
                   "loss_warn_pct", "loss_crit_pct",
                   "keyword", "keyword_case", "banner_regex", "alerts_muted",
@@ -1016,6 +1016,13 @@ def handle(h, method, path, body):
                 kwargs["anomaly_min_samples"] = max(5, min(10000, _m))
             except (TypeError, ValueError):
                 h._json(400, {"error": "anomaly_min_samples must be an integer"}); return True
+        # HTTPS cert-expiry thresholds (days; 0 = off) — clamp to a sane range
+        for _cf in ("cert_warn_days", "cert_crit_days"):
+            if _cf in kwargs and kwargs[_cf] not in (None, ""):
+                try:
+                    kwargs[_cf] = max(0, min(3650, int(kwargs[_cf])))
+                except (TypeError, ValueError):
+                    h._json(400, {"error": f"{_cf} must be an integer"}); return True
         # VMware password: encrypt if provided, skip if empty (keep existing)
         if body.get("vmware_password"):
             from db.backups import encrypt_pw
@@ -1197,6 +1204,8 @@ def handle(h, method, path, body):
             cms   = int(body["crit_ms"])  if body.get("crit_ms")  else None
             lwp   = int(body.get("loss_warn_pct", 0) or 0)
             lcp   = int(body.get("loss_crit_pct", 0) or 0)
+            cwd   = max(0, min(3650, int(body.get("cert_warn_days", 0) or 0)))
+            ccd   = max(0, min(3650, int(body.get("cert_crit_days", 0) or 0)))
         except (TypeError, ValueError):
             h._json(400, {"error": "Numeric fields must be integers"}); return True
         kw    = body.get("keyword", "")
@@ -1359,6 +1368,8 @@ def handle(h, method, path, body):
                 s2.dns_record_type      = body.get("dns_record_type", "A")
                 s2.dns_server           = body.get("dns_server", "")
                 s2.http_expected_status = xstat
+                s2.cert_warn_days       = cwd
+                s2.cert_crit_days       = ccd
                 # Distributed probes: per-sensor override must land BEFORE the
                 # sensor starts so start_sensor resolves the right scheduler.
                 _new_probe = str(body.get("probe_id") or "").strip()

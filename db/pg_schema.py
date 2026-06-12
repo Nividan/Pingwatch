@@ -282,6 +282,8 @@ def pg_create_main_schema(cur):
             dns_record_type      TEXT DEFAULT 'A',
             dns_server           TEXT DEFAULT '',
             http_expected_status INTEGER DEFAULT 0,
+            cert_warn_days       INTEGER DEFAULT 0,
+            cert_crit_days       INTEGER DEFAULT 0,
             fail_after           INTEGER DEFAULT 2,
             recover_after        INTEGER DEFAULT 1,
             warn_ms              INTEGER,
@@ -400,6 +402,9 @@ def pg_create_main_schema(cur):
         ("sensors",      "probe_id",                "TEXT DEFAULT ''"),
         ("main.sites",   "probe_id",                "TEXT DEFAULT ''"),
         ("main.api_tokens", "probe_id",             "TEXT DEFAULT NULL"),
+        # v1.4 — HTTPS cert-expiry thresholds on http sensors (days; 0 = off)
+        ("sensors", "cert_warn_days", "INTEGER DEFAULT 0"),
+        ("sensors", "cert_crit_days", "INTEGER DEFAULT 0"),
     ]
     for _tbl, _col, _typedef in _migrations:
         try:

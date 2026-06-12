@@ -26,6 +26,13 @@ _DISCOVER_TIMEOUT_S = 120
 # reconnect — not wait 60s for the default SmartConnect timeout.
 _HEALTH_CHECK_TIMEOUT_S = 5
 
+# Warm-on-connect budget. A freshly-connected vCenter session returns
+# "VM not found" / "metric not available" on the very first PropertyCollector
+# / QueryPerf calls until ServiceContent + the perf-counter catalog + the
+# inventory view are populated server-side. _warm_session() forces that once
+# per new session so the first real probe succeeds instead of false-failing.
+_WARM_TIMEOUT_S = 25
+
 
 @contextmanager
 def _socket_timeout(seconds: float):
@@ -257,6 +264,10 @@ def _get_session(host, user, password, port=443, verify_ssl=False):
             raise ConnectionError("Connection timed out (60s) — check vCenter/ESXi host is reachable")
         raise ConnectionError(f"Connection failed: {err}")
 
+    # Warm the heavy server-side caches before the session is used, so the
+    # first probe doesn't race a cold perfManager/inventory. Best-effort.
+    _warm_session(si)
+
     # Publish the new session. If another thread raced us and already cached
     # one, Disconnect the loser so it doesn't leak.
     with _sessions_lock:
@@ -265,6 +276,29 @@ def _get_session(host, user, password, port=443, verify_ssl=False):
     if prev is not None:
         _disconnect_quietly(Disconnect, prev[0])
     return si
+
+
+def _warm_session(si) -> None:
+    """Force the server-side caches a cold session would otherwise miss:
+    ServiceContent, the perf-counter catalog (→ 'metric not available' on the
+    first QueryPerf), and the inventory view (→ 'VM not found' on the first
+    PropertyCollector). Best-effort and time-bounded — never fails the
+    session; a probe racing this still works, it just re-warms."""
+    _, _, vim, _ = _require_pyvmomi()
+    try:
+        with _socket_timeout(_WARM_TIMEOUT_S):
+            content = si.RetrieveContent()          # forces ServiceContent
+            _ = content.perfManager.perfCounter     # perf-counter catalog
+            view = content.viewManager.CreateContainerView(
+                content.rootFolder,
+                [vim.VirtualMachine, vim.HostSystem], True)
+            try:
+                _ = len(view.view)                  # forces inventory traversal
+            finally:
+                try: view.Destroy()
+                except Exception: pass
+    except Exception as e:
+        log.debug(f"vmware warm-on-connect skipped: {e}")
 
 
 def _disconnect_quietly(Disconnect, si) -> None:
@@ -287,12 +321,13 @@ def _invalidate_session(host, user):
 
 
 def prewarm_session(host, user, password, port=443, verify_ssl=False) -> bool:
-    """Establish and cache a vCenter session ahead of the first probe.
+    """Establish, warm, and cache a vCenter session ahead of the first probe.
 
-    A cold SmartConnect login takes 5-20s — longer than most sensor
-    timeouts — so the first probe cycle after a (server or agent) restart
-    would otherwise fail and spray DOWN events that resolve one cycle
-    later. Called from a background thread at startup; never raises.
+    _get_session both logs in (a cold SmartConnect takes 5-20s) and warms the
+    server-side caches (_warm_session: perf catalog + inventory) — so the
+    first probe cycle after a (server or agent) restart reuses a fully warm
+    session instead of false-failing with "VM not found" / "metric not
+    available". Called from a background thread at startup; never raises.
     """
     try:
         _get_session(host, user, password, port=port, verify_ssl=verify_ssl)
