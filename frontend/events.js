@@ -207,6 +207,41 @@ async function _evtFlapResolve(flapId) {
   if (typeof _scheduleBadgePoll === 'function') _scheduleBadgePoll();
 }
 
+// ── Group-level ACK / Resolve (collapse view) ─────────────────────
+// Fan the per-flap endpoint out over every member event still pending,
+// then refresh once at the end. The backend propagates each flap
+// ACK/resolve to its matching alert events, so no separate alert-event
+// calls are needed.
+async function _evtGroupAck(g) {
+  const ids = g.events
+    .filter(m => m.id && (m.ack_state || 'active') === 'active')
+    .map(m => m.id);
+  if (!ids.length) { toast('No active events to acknowledge', 'info'); return; }
+  const res = await Promise.all(ids.map(id =>
+    api('POST', `/api/flaps/${id}/ack`).catch(() => null)));
+  const n = res.filter(r => r && r.ok).length;
+  if (n) toast(`Acknowledged ${n} event${n === 1 ? '' : 's'}`, 'ok');
+  else   toast('Failed to acknowledge', 'err');
+  await Promise.all([_refreshAlertCache(), _refreshFlapList()]);
+  _renderEvtView();
+  if (typeof _scheduleBadgePoll === 'function') _scheduleBadgePoll();
+}
+
+async function _evtGroupResolve(g) {
+  const ids = g.events
+    .filter(m => m.id && (m.ack_state || 'active') !== 'resolved')
+    .map(m => m.id);
+  if (!ids.length) { toast('No events to resolve', 'info'); return; }
+  const res = await Promise.all(ids.map(id =>
+    api('POST', `/api/flaps/${id}/resolve`).catch(() => null)));
+  const n = res.filter(r => r && r.ok).length;
+  if (n) toast(`Resolved ${n} event${n === 1 ? '' : 's'}`, 'ok');
+  else   toast('Failed to resolve', 'err');
+  await Promise.all([_refreshAlertCache(), _refreshFlapList()]);
+  _renderEvtView();
+  if (typeof _scheduleBadgePoll === 'function') _scheduleBadgePoll();
+}
+
 async function _evtResolveAll() {
   const alertCount = _alertEvtCache.filter(a => a.state === 'active' || a.state === 'acknowledged').length;
   const flapCount  = (typeof FLAPS !== 'undefined' ? FLAPS : []).filter(f => f.id && (f.ack_state || 'active') !== 'resolved').length;
@@ -745,6 +780,17 @@ function _buildEvtGroupTableRow(g) {
     : (time || '');
   const dispDate = g.ts ? (g.ts.split('T')[0] || date || '') : (date || '');
 
+  // Group-level ACK / Resolve — mirror the per-row button rules: ACK while
+  // any member is still active, Resolve while any member is unresolved.
+  const grpAnyActive  = g.events.some(m => m.id && (m.ack_state || 'active') === 'active');
+  const grpAnyPending = g.events.some(m => m.id && (m.ack_state || 'active') !== 'resolved');
+  const grpBtns = grpAnyPending
+    ? `<div class="aev-btns">` +
+        (grpAnyActive ? `<button class="aev-btn-ack">✓ ACK</button>` : '') +
+        `<button class="aev-btn-res">◉ Resolve</button>` +
+      `</div>`
+    : '';
+
   // ── Summary row (same 8 columns as a regular event row) ──
   const sumRow = document.createElement('tr');
   sumRow.className = 'evt-group-sum-row';
@@ -760,7 +806,13 @@ function _buildEvtGroupTableRow(g) {
     `<td>&mdash;</td>` +
     `<td style="color:var(--text3)">Burst of related events — click to expand</td>` +
     `<td class="evt-td-dur">${spanStr}</td>` +
-    `<td><span class="evt-group-count">${g.events.length} events</span></td>`;
+    `<td class="aev-cell"><span class="evt-group-count">${g.events.length} events</span>${grpBtns}</td>`;
+  sumRow.querySelector('.aev-btn-ack')?.addEventListener('click', (e) => {
+    e.stopPropagation(); _evtGroupAck(g);
+  });
+  sumRow.querySelector('.aev-btn-res')?.addEventListener('click', (e) => {
+    e.stopPropagation(); _evtGroupResolve(g);
+  });
 
   // ── Detail row (hidden by default; nested inner table on expand) ──
   const detRow = document.createElement('tr');
