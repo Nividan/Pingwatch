@@ -897,6 +897,107 @@ class MonitorState:
         # Bumped on every alert profile/template write — sensors compare this
         # to their cached _resolved_profile_ver to know when to re-resolve.
         self._profile_cache_ver = 0
+        # Startup grace (settings: startup_grace_s): down/threshold events
+        # born in the first seconds after boot are parked here instead of
+        # emitted — cold vCenter sessions and slow first probes otherwise
+        # spray events that auto-resolve one cycle later. _flush_grace()
+        # emits whatever is STILL bad when the window closes (with the
+        # original transition timestamps); blips vanish without a trace.
+        self._grace_until  = 0.0          # epoch end of window; 0 = inactive
+        self._grace_parked = {}           # (did, sid) → {kind: entry}
+        self._grace_lock   = threading.Lock()
+
+    # ── Startup grace ─────────────────────────────────────────────
+    def begin_startup_grace(self):
+        """Arm the startup grace window. Called once from server.py main()
+        after settings are loaded; startup_grace_s=0 disables."""
+        try:
+            grace = max(0, int(float(_cfg("startup_grace_s", "60") or 0)))
+        except (TypeError, ValueError):
+            grace = 60
+        if not grace:
+            return
+        self._grace_until = time.time() + grace
+        t = threading.Timer(grace + 2.0, self._flush_grace)
+        t.daemon = True
+        t.start()
+        log_sensors.info(
+            f"Startup grace armed: down/threshold events deferred for {grace}s; "
+            f"sensors still failing at the end emit with their true timestamps")
+
+    def _in_grace(self) -> bool:
+        return self._grace_until > 0 and time.time() < self._grace_until
+
+    def _grace_park(self, did, sid, kind, entry):
+        with self._grace_lock:
+            self._grace_parked.setdefault((did, sid), {})[kind] = entry
+
+    def _grace_unpark(self, did, sid, kind):
+        """Pop a parked entry (recovery during grace ⇒ the blip dissolves).
+        Cheap no-op outside grace — the dict is empty then."""
+        if not self._grace_parked:
+            return None
+        with self._grace_lock:
+            kinds = self._grace_parked.get((did, sid))
+            if not kinds:
+                return None
+            entry = kinds.pop(kind, None)
+            if not kinds:
+                self._grace_parked.pop((did, sid), None)
+            return entry
+
+    def _grace_has(self, did, sid) -> bool:
+        if not self._grace_parked:
+            return False
+        with self._grace_lock:
+            return (did, sid) in self._grace_parked
+
+    def _flush_grace(self):
+        """End of startup grace: emit parked incidents whose sensor is still
+        in the bad state; everything else was a restart blip and is dropped.
+        Runs once on a Timer thread."""
+        from db import db_log_flap, _db_enqueue
+        from db.events import db_auto_resolve_flap
+        self._grace_until = 0.0
+        with self._grace_lock:
+            parked = self._grace_parked
+            self._grace_parked = {}
+        if not parked:
+            return
+        emitted = 0
+        total = sum(len(kinds) for kinds in parked.values())
+        for (did, sid), kinds in parked.items():
+            with self._lock:
+                dev = self.devices.get(did)
+                s = dev.sensors.get(sid) if dev else None
+            if not s:
+                continue
+            e = kinds.get("down")
+            if e and s._alerted_down:
+                flap = e["flap"]
+                log_sensors.warning(
+                    f"DOWN (confirmed after startup grace): "
+                    f"{flap.get('dname')}/{flap.get('sname')} — {flap.get('detail')}")
+                self._broadcast("flap_down", flap)
+                _db_enqueue(lambda _f=flap: db_log_flap(_f))
+                if e.get("webhook"):
+                    _enqueue_webhook(e["webhook"], flap)
+                emitted += 1
+            e = kinds.get("thr")
+            if e and s._threshold_state == e.get("state"):
+                log_sensors.warning(
+                    f"THRESHOLD {str(e.get('state')).upper()} (confirmed after "
+                    f"startup grace): {e['flap'].get('dname')}/{e['flap'].get('sname')}")
+                self._broadcast(e["evt"], e["evt_data"])
+                _db_enqueue(lambda _f=e["flap"]: db_log_flap(_f))
+                if e.get("resolve_prev"):
+                    _d, _s2, _t, _dir = e["resolve_prev"]
+                    _db_enqueue(lambda _a=_d, _b=_s2, _c=_t, _e=_dir:
+                                db_auto_resolve_flap(_a, _b, _c, directions=(_e,)))
+                emitted += 1
+        log_sensors.info(
+            f"Startup grace ended: {emitted} still-failing incident(s) emitted, "
+            f"{total - emitted} restart blip(s) suppressed")
 
     def get_runtime_snapshot(self) -> dict:
         """Cheap read-only snapshot for the Diagnostics tab. No locks held
@@ -1656,9 +1757,16 @@ class MonitorState:
                     "duration_s": _flap_dur,
                 }
                 if not _muted:
-                    self._broadcast("flap_recovered", rec_data)
-                    log_sensors.info(f"RECOVERED: {dev.name}/{s.name} ({s.host})")
                     _rec_cap = dict(rec_data)
+                    if self._grace_unpark(did, sid, "down"):
+                        # Down began inside startup grace and was never
+                        # emitted — the restart blip dissolves eventlessly.
+                        log_sensors.info(f"RECOVERED (startup-grace blip suppressed): {dev.name}/{s.name} ({s.host})")
+                    else:
+                        self._broadcast("flap_recovered", rec_data)
+                        log_sensors.info(f"RECOVERED: {dev.name}/{s.name} ({s.host})")
+                    # Resolve runs either way — no-op for a parked blip, but
+                    # closes any pre-restart unresolved down row.
                     _db_enqueue(lambda: db_auto_resolve_flap(
                         _rec_cap["did"], _rec_cap["sid"], _rec_cap["ts"],
                         directions=("down",)
@@ -1702,12 +1810,21 @@ class MonitorState:
                     s, result, "down", {"consec_fail": s._consec_fail}
                 ))
                 if not _muted:
-                    self._broadcast("flap_down", flap_data)
-                    log_sensors.warning(f"DOWN: {dev.name}/{s.name} ({s.host}) — {result['detail']}")
-                    _flap_cap = dict(flap_data)
-                    _db_enqueue(lambda: db_log_flap(_flap_cap))
-                    if dev.webhook_url:
-                        _enqueue_webhook(dev.webhook_url, _flap_cap)
+                    if self._in_grace():
+                        # Startup grace: park — _flush_grace emits it (with
+                        # this original ts) only if still down at window end.
+                        self._grace_park(did, sid, "down", {
+                            "flap": dict(flap_data),
+                            "webhook": dev.webhook_url or "",
+                        })
+                        log_sensors.info(f"DOWN (startup grace, parked): {dev.name}/{s.name} ({s.host}) — {result['detail']}")
+                    else:
+                        self._broadcast("flap_down", flap_data)
+                        log_sensors.warning(f"DOWN: {dev.name}/{s.name} ({s.host}) — {result['detail']}")
+                        _flap_cap = dict(flap_data)
+                        _db_enqueue(lambda: db_log_flap(_flap_cap))
+                        if dev.webhook_url:
+                            _enqueue_webhook(dev.webhook_url, _flap_cap)
                 s._alerted_down    = True
                 s._down_since_ts   = _ts_float
 
@@ -1858,29 +1975,46 @@ class MonitorState:
                     "raw_data": _thr_raw_json,
                     "detail": _val_disp,
                 }
-                self._broadcast(_tevt, _thr_evt_data)
-                if _new_thr == "crit":
-                    log_sensors.error(f"THRESHOLD CRIT: {dev.name}/{s.name} — {_val_disp} (limit {s.crit_ms}{_unit})")
-                elif s._anom_caused_warn:
-                    log_sensors.warning(f"ANOMALY WARN: {dev.name}/{s.name} — {_val_disp}")
-                else:
-                    log_sensors.warning(f"THRESHOLD WARN: {dev.name}/{s.name} — {_val_disp} (limit {s.warn_ms}{_unit})")
                 _thr_flap = dict(_thr_evt_data)
                 _thr_flap["direction"] = _thr_dir
-                _db_enqueue(lambda _f=_thr_flap: db_log_flap(_f))
-                # Escalation / de-escalation (warn↔crit) — auto-resolve the
-                # PREVIOUS active threshold entry so only the current state
-                # stays "active". Without this, a warn→crit transition leaves
-                # the old warn row unresolved forever (OK → LIMIT 1 can't
-                # catch up). Only fires for transitions between warn/crit;
-                # ok→warn and ok→crit have nothing to resolve.
-                if _prev_thr in ("warn", "crit"):
-                    _esc_ts  = _ts
-                    _esc_did = did
-                    _esc_sid = sid
-                    _prev_dir = "threshold_crit" if _prev_thr == "crit" else "threshold_warn"
-                    _db_enqueue(lambda _d=_esc_did, _s=_esc_sid, _t=_esc_ts, _dir=_prev_dir:
-                                db_auto_resolve_flap(_d, _s, _t, directions=(_dir,)))
+                if self._in_grace():
+                    # Startup grace: park instead of emitting — _flush_grace
+                    # emits it only if the sensor is still in this state when
+                    # the window closes. An escalation during grace simply
+                    # replaces the parked entry (last state wins).
+                    _resolve_prev = None
+                    if _prev_thr in ("warn", "crit"):
+                        _resolve_prev = (did, sid, _ts,
+                                         "threshold_crit" if _prev_thr == "crit"
+                                         else "threshold_warn")
+                    self._grace_park(did, sid, "thr", {
+                        "state": _new_thr, "evt": _tevt,
+                        "evt_data": dict(_thr_evt_data), "flap": _thr_flap,
+                        "resolve_prev": _resolve_prev,
+                    })
+                    log_sensors.info(f"THRESHOLD {_new_thr.upper()} (startup grace, parked): {dev.name}/{s.name} — {_val_disp}")
+                else:
+                    self._broadcast(_tevt, _thr_evt_data)
+                    if _new_thr == "crit":
+                        log_sensors.error(f"THRESHOLD CRIT: {dev.name}/{s.name} — {_val_disp} (limit {s.crit_ms}{_unit})")
+                    elif s._anom_caused_warn:
+                        log_sensors.warning(f"ANOMALY WARN: {dev.name}/{s.name} — {_val_disp}")
+                    else:
+                        log_sensors.warning(f"THRESHOLD WARN: {dev.name}/{s.name} — {_val_disp} (limit {s.warn_ms}{_unit})")
+                    _db_enqueue(lambda _f=_thr_flap: db_log_flap(_f))
+                    # Escalation / de-escalation (warn↔crit) — auto-resolve the
+                    # PREVIOUS active threshold entry so only the current state
+                    # stays "active". Without this, a warn→crit transition leaves
+                    # the old warn row unresolved forever (OK → LIMIT 1 can't
+                    # catch up). Only fires for transitions between warn/crit;
+                    # ok→warn and ok→crit have nothing to resolve.
+                    if _prev_thr in ("warn", "crit"):
+                        _esc_ts  = _ts
+                        _esc_did = did
+                        _esc_sid = sid
+                        _prev_dir = "threshold_crit" if _prev_thr == "crit" else "threshold_warn"
+                        _db_enqueue(lambda _d=_esc_did, _s=_esc_sid, _t=_esc_ts, _dir=_prev_dir:
+                                    db_auto_resolve_flap(_d, _s, _t, directions=(_dir,)))
             elif _new_thr == "ok" and _prev_thr != "ok" and not _muted:
                 # Threshold recovered — broadcast and resolve existing event
                 s._threshold_recovery_pending = True
@@ -1909,11 +2043,18 @@ class MonitorState:
                     "duration_s": _thr_dur,
                     "detail": _rec_detail,
                 }
-                self._broadcast("threshold_ok", _thr_rec_data)
-                log_sensors.info(f"THRESHOLD OK: {dev.name}/{s.name} — value back within limits")
                 _thr_rec_ts = _ts
                 _thr_rec_did = did
                 _thr_rec_sid = sid
+                if self._grace_unpark(did, sid, "thr"):
+                    # Triggered and cleared inside startup grace — no event
+                    # row was written, nothing to broadcast.
+                    log_sensors.info(f"THRESHOLD OK (startup-grace blip suppressed): {dev.name}/{s.name}")
+                else:
+                    self._broadcast("threshold_ok", _thr_rec_data)
+                    log_sensors.info(f"THRESHOLD OK: {dev.name}/{s.name} — value back within limits")
+                # Resolve runs either way — no-op for a parked blip, but
+                # closes any pre-restart unresolved threshold row.
                 _db_enqueue(lambda: db_auto_resolve_flap(
                     _thr_rec_did, _thr_rec_sid, _thr_rec_ts,
                     directions=("threshold_warn", "threshold_crit")
@@ -1926,7 +2067,11 @@ class MonitorState:
                 s._threshold_recovery_pending = False
 
         # ── Alert profile evaluation (PRTG-style state-trigger system) ──
-        if not _muted:
+        # Skipped while this sensor has a grace-parked incident: profiles fire
+        # once the incident survives _flush_grace, with stage delays measured
+        # from the real transition ts — so a "notify after 5 min" stage isn't
+        # even delayed by the grace window.
+        if not _muted and not self._grace_has(did, sid):
             try:
                 from monitoring.alert_profile_engine import evaluate_and_fire
                 evaluate_and_fire(dev, s)

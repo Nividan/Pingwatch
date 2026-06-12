@@ -391,6 +391,10 @@ def db_init():
             # Distributed probes (v1.3) — optional probe-offline email
             ("probe_offline_email",            "0"),
             ("probe_offline_email_to",         ""),
+            # Startup grace: seconds after boot during which down/threshold
+            # events are deferred (still-failing sensors emit at the end).
+            # Soaks up restart blips (cold vCenter sessions etc.). 0 = off.
+            ("startup_grace_s",                "60"),
         ]:
             if not con.execute("SELECT 1 FROM app_settings WHERE key=?", (_k,)).fetchone():
                 con.execute("INSERT INTO app_settings VALUES (?,?)", (_k, _v))

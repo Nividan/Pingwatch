@@ -1178,6 +1178,10 @@ def pg_seed_defaults(cur):
         # Distributed probes (v1.3) — optional probe-offline email
         ("probe_offline_email",            "0"),
         ("probe_offline_email_to",         ""),
+        # Startup grace: seconds after boot during which down/threshold
+        # events are deferred (still-failing sensors emit at the end).
+        # Soaks up restart blips (cold vCenter sessions etc.). 0 = off.
+        ("startup_grace_s",                "60"),
     ]
     for k, v in _defaults:
         cur.execute(

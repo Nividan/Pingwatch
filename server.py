@@ -620,6 +620,49 @@ def _start_http_redirect(http_port: int, https_port: int):
         log.warning(f"HTTP redirect server could not bind to port {http_port}: {_e}")
 
 
+def _start_vmware_prewarm():
+    """Background-login to every distinct vCenter used by centrally-run
+    vmware sensors. A cold pyvmomi SmartConnect takes 5-20s — longer than
+    most sensor timeouts — so without this the first probe cycle after a
+    restart fails and sprays DOWN events that resolve one cycle later
+    (startup grace hides them from Events; this removes the failures)."""
+    from core.probe_assign import effective_probe
+    from db.backups import decrypt_pw
+    specs = {}
+    with app_state.STATE._lock:
+        pairs = [(d, s) for d in app_state.STATE.devices.values()
+                 for s in d.sensors.values()]
+    for d, s in pairs:
+        if s.stype != "vmware" or not s.running:
+            continue
+        if effective_probe(d, s):
+            continue                    # measured from a remote probe
+        user = s.vmware_user or getattr(d, "vmware_user_default", "") or ""
+        pw_enc = (s.vmware_password or
+                  getattr(d, "vmware_password_default", "") or "")
+        try:
+            pw = decrypt_pw(pw_enc) if pw_enc else ""
+        except Exception:
+            continue
+        if not (s.host and user and pw):
+            continue
+        specs[(s.host, user, int(s.port or 443))] = (
+            s.host, user, pw, int(s.port or 443), bool(s.verify_ssl))
+    if not specs:
+        return
+
+    def _warm():
+        try:
+            from vmware.client import prewarm_session
+        except Exception:
+            return                      # pyvmomi shim/module unavailable
+        for host, user, pw, port, vssl in specs.values():
+            ok = prewarm_session(host, user, pw, port=port, verify_ssl=vssl)
+            log.info(f"vCenter session prewarm "
+                     f"{'ok' if ok else 'failed'}: {host}:{port}")
+    threading.Thread(target=_warm, daemon=True, name="vmw-prewarm").start()
+
+
 # ── Entry point ───────────────────────────────────────────────────
 
 def main():
@@ -971,6 +1014,21 @@ def main():
                          name="probe-watchdog").start()
     except Exception as _e:
         log.warning(f"Probe watchdog did not start: {_e}")
+
+    # Startup grace — defer down/threshold events while first probes settle
+    # (cold vCenter sessions, slow first probes); sensors still failing at
+    # the end of the window emit with their true transition timestamps.
+    try:
+        app_state.STATE.begin_startup_grace()
+    except Exception as _e:
+        log.warning(f"Startup grace not armed: {_e}")
+
+    # Pre-warm vCenter sessions so the first vmware probe cycle reuses a
+    # cached login instead of paying SmartConnect and tripping false DOWNs.
+    try:
+        _start_vmware_prewarm()
+    except Exception as _e:
+        log.warning(f"vmware prewarm did not start: {_e}")
 
     threading.Thread(target=server.serve_forever, daemon=True).start()
 

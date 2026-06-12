@@ -739,6 +739,32 @@ class Agent:
             self._sync_config()
         return True
 
+    def _prewarm_vmware(self):
+        """Log into each distinct vCenter once, before its sensors first
+        fire — prevents the false-DOWN burst after an agent restart."""
+        specs = {}
+        for cfg in list(self.sensors.values()):
+            if cfg.get("stype") != "vmware":
+                continue
+            host = cfg.get("host") or ""
+            user = cfg.get("vmware_user") or ""
+            pw = cfg.get("vmware_password") or ""
+            if not (host and user and pw):
+                continue
+            specs[(host, user, int(cfg.get("port") or 443))] = (
+                host, user, pw, int(cfg.get("port") or 443),
+                bool(cfg.get("verify_ssl", True)))
+        if not specs:
+            return
+        try:
+            from vmware.client import prewarm_session
+        except Exception:
+            return                      # vmware module / pyvmomi not present
+        for host, user, pw, port, vssl in specs.values():
+            ok = prewarm_session(host, user, pw, port=port, verify_ssl=vssl)
+            log.info("vCenter session prewarm %s: %s:%s",
+                     "ok" if ok else "failed", host, port)
+
     # ── Main loop ────────────────────────────────────────────────
     def run(self):
         log.info("PingWatch agent %s starting (probe=%s, server=%s, verify=%s)",
@@ -749,8 +775,15 @@ class Agent:
                  if self.client.ca_file else "system-ca")
         threading.Thread(target=self._scheduler_loop, daemon=True,
                          name="pwa-sched").start()
+        # vCenter sessions are cached in-memory — cold after a restart, and
+        # a fresh SmartConnect login (5-20s) outlives most sensor timeouts.
+        # Warm them in the background and give vmware sensors a small head
+        # start so their first probe finds a cached session.
+        threading.Thread(target=self._prewarm_vmware, daemon=True,
+                         name="pwa-vmw-warm").start()
         for key in list(self.sensors):
-            self._schedule(key, 1.0)
+            _first = 8.0 if (self.sensors[key].get("stype") == "vmware") else 1.0
+            self._schedule(key, _first)
 
         last_full_sync = 0.0
         while not self.stop.is_set():

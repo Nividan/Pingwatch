@@ -28,6 +28,21 @@ _SWEEP_INTERVAL_S = 10
 _TASK_EXPIRE_S = 3600
 
 _stop = threading.Event()
+_BOOT_MONO = time.monotonic()
+
+
+def _startup_holdoff_s() -> float:
+    """No probe_offline verdicts until the server has been up long enough
+    for agents to reconnect: right after a restart every probe's persisted
+    last_seen is necessarily stale (the watchdog wasn't watching while the
+    server was down), so the first sweep would false-flag them all. Honors
+    startup_grace_s when it's larger than the offline threshold."""
+    try:
+        import core.settings as _settings
+        grace = float(_settings.get("startup_grace_s", "60") or 0)
+    except Exception:
+        grace = 60.0
+    return max(PROBE_OFFLINE_AFTER_S + 10.0, grace)
 
 
 def _iso(ts: float) -> str:
@@ -114,7 +129,10 @@ def _sweep():
     from db.probes import db_list_probes, db_probe_checkin, db_expire_stale_tasks
     from db.helpers import db_execute
     now = time.time()
-    for p in db_list_probes():
+    # Boot holdoff — agents reconnect within ~10s of the server coming back;
+    # only after the holdoff is silence meaningful. Task expiry still runs.
+    holdoff = (time.monotonic() - _BOOT_MONO) < _startup_holdoff_s()
+    for p in (() if holdoff else db_list_probes()):
         if p.get("status") != "enrolled":
             continue
         last_seen = float(p.get("last_seen") or 0)

@@ -286,6 +286,22 @@ def _invalidate_session(host, user):
             pass
 
 
+def prewarm_session(host, user, password, port=443, verify_ssl=False) -> bool:
+    """Establish and cache a vCenter session ahead of the first probe.
+
+    A cold SmartConnect login takes 5-20s — longer than most sensor
+    timeouts — so the first probe cycle after a (server or agent) restart
+    would otherwise fail and spray DOWN events that resolve one cycle
+    later. Called from a background thread at startup; never raises.
+    """
+    try:
+        _get_session(host, user, password, port=port, verify_ssl=verify_ssl)
+        return True
+    except Exception as e:
+        log.debug(f"vmware prewarm {host}:{port} failed: {e}")
+        return False
+
+
 # ---------------------------------------------------------------------------
 # PropertyCollector helper — one SOAP call for N objects × M properties
 # ---------------------------------------------------------------------------
