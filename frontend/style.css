@@ -5592,3 +5592,23 @@ label.toggle input:checked + .tsl:before{transform:translateX(18px);background:#
 
 /* Stale sensors (their probe is offline) — grey the tile, keep it legible */
 .probe-stale-tile{opacity:.55;filter:saturate(.4);}
+
+/* ── Acknowledged incident ("known down") ─────────────────────────
+   Still red-family — the problem is real — but muted, with a ✓ ACK badge.
+   Deliberately NOT grey (grey = paused/stale). Hover restores full
+   intensity so details stay readable. Colors ride the --down vars, so
+   dark and light themes both work. */
+.stl.ack,.vm-row.ack{opacity:.62;filter:saturate(.55);
+                     transition:opacity .15s,filter .15s;}
+.stl.ack:hover,.vm-row.ack:hover{opacity:.95;filter:saturate(.95);}
+.stl-ackb{flex:0 0 auto;font-size:9px;font-weight:700;letter-spacing:.5px;
+          padding:1px 5px;border-radius:4px;white-space:nowrap;cursor:default;
+          color:var(--down);background:var(--down-bg);
+          border:1px solid var(--down-border);}
+.dcard.ack{opacity:.65;filter:saturate(.6);transition:opacity .15s,filter .15s;}
+.dcard.ack:hover{opacity:.97;filter:saturate(1);}
+.dc-list-row.ack{opacity:.65;}
+.dc-ack-flag{display:inline-block;font-size:9px;font-weight:700;
+             letter-spacing:.5px;padding:0 4px;margin-left:4px;
+             border-radius:4px;color:var(--down);background:var(--down-bg);
+             border:1px solid var(--down-border);}

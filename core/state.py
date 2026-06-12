@@ -361,6 +361,11 @@ class Sensor:
         self._threshold_recovery_pending  = False   # keep sending threshold_ok events to engine
         self._threshold_triggered_ts      = None    # wall-clock time threshold first fired (for duration)
         self._down_since_ts               = None    # wall-clock time sensor first went down (for duration)
+        # Event-ACK reflection: set when an operator acknowledges this
+        # sensor's active incident in Events; cleared on recovery. Drives
+        # the muted "acknowledged-down" tile/card rendering ("known down").
+        self._ack_by                      = ""
+        self._ack_at                      = 0.0
         self.history               = collections.deque(maxlen=self.MAX)
         self.thr_history           = collections.deque(maxlen=self.MAX)
         self.total          = 0
@@ -588,6 +593,8 @@ class Sensor:
             "has_radius_secret":     bool(self.radius_secret),
             "has_radius_password":   bool(self.radius_password),
             "threshold_state":       self._threshold_state,
+            "ack_by":                self._ack_by,
+            "ack_at":                self._ack_at,
             "anomaly_enabled":       int(getattr(self, "anomaly_enabled", 0) or 0),
             "anomaly_sensitivity":   int(getattr(self, "anomaly_sensitivity", 2) or 2),
             "anomaly_min_samples":   int(getattr(self, "anomaly_min_samples", 50) or 50),
@@ -1675,6 +1682,8 @@ class MonitorState:
                                     s._threshold_recovery_pending = False
                                     s._alerted_down               = False
                                     s._email_sent_down            = False
+                                    s._ack_by                     = ""
+                                    s._ack_at                     = 0.0
                                 else:
                                     s._threshold_triggered_ts     = _ts_float
                                     s._threshold_recovery_pending = False
@@ -1773,6 +1782,11 @@ class MonitorState:
                     ))
                 s._alerted_down    = False
                 s._email_sent_down = False
+                # ACK covered this incident only — a future down starts loud.
+                # Kept while a threshold incident is still open on the sensor.
+                if s._threshold_state == "ok":
+                    s._ack_by = ""
+                    s._ack_at = 0.0
                 s._recovery_pending = True
                 s._consec_ok       = 0
             elif s._recovery_pending and not _muted:
@@ -2046,6 +2060,11 @@ class MonitorState:
                 _thr_rec_ts = _ts
                 _thr_rec_did = did
                 _thr_rec_sid = sid
+                # Threshold incident over — drop the ACK badge unless the
+                # sensor is also down (that incident still owns it).
+                if not s._alerted_down:
+                    s._ack_by = ""
+                    s._ack_at = 0.0
                 if self._grace_unpark(did, sid, "thr"):
                     # Triggered and cleared inside startup grace — no event
                     # row was written, nothing to broadcast.

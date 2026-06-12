@@ -52,6 +52,19 @@ function _tileDetail(s, tgt) {
   return s.last_detail || tgt;
 }
 
+// ── Acknowledged-incident state ("known down") ────────────────────
+// A sensor renders muted when its ACTIVE incident (down / threshold breach)
+// was ACKed in Events. The server sets ack_by on the live sensor at ACK time
+// and clears it on recovery, so the badge can never outlive the incident.
+function _sensorAcked(s){
+  return !!(s&&s.ack_by&&(s.alive===false||(s.threshold_state&&s.threshold_state!=='ok')));
+}
+function _ackTitle(s){
+  if(!s||!s.ack_by) return '';
+  const t=s.ack_at?new Date(s.ack_at*1000).toLocaleString():'';
+  return `Acknowledged by ${s.ack_by}${t?' · '+t:''} — known issue, clears on recovery`;
+}
+
 function tileHTML(s){
   const st=s.alive===true?'up':s.alive===false?'down':'';
   const isSnmp=s.stype==='snmp';
@@ -98,6 +111,7 @@ function tileHTML(s){
     <div class="stl-tbdg ${s.stype}">${sIco(s.stype)} ${s.stype.toUpperCase().replace('_',' ')}</div>
     <div class="stl-nm">${esc(s.name)}</div>
     <span class="stl-muted" id="sm-muted-${s.device_id}_${s.sensor_id}" title="Alerts muted" style="${isMuted?'':'display:none'}">🔕</span>
+    <span class="stl-ackb" id="sm-ack-${s.device_id}_${s.sensor_id}" title="${esc(_ackTitle(s))}" style="${_sensorAcked(s)?'':'display:none'}">✓ ACK</span>
     <button class="stl-hist" onclick="event.stopPropagation();openDetail('${s.device_id}','${s.sensor_id}','history')" title="History">⌚</button>
     <div class="stl-sdot ${st}"></div>
   </div>
@@ -261,7 +275,7 @@ function renderTile(did,s){
     const key=`${did}/${s.sensor_id}`;
     const old=document.getElementById(`t-${key.replace('/','_')}`);
     const t=document.createElement('div');
-    t.className=`vm-row ${s.alive===true?'up':s.alive===false?'down':''}`;
+    t.className=`vm-row ${s.alive===true?'up':s.alive===false?'down':''}${_sensorAcked(s)?' ack':''}`;
     t.id=`t-${key.replace('/','_')}`;
     t.dataset.sid=s.sensor_id;
     t.onclick=()=>openDetail(did,s.sensor_id);
@@ -291,7 +305,7 @@ function renderTile(did,s){
   const old=document.getElementById(`t-${key.replace('/','_')}`);
   const t=document.createElement('div');
   const _thr=s.threshold_state&&s.threshold_state!=='ok'&&s.alive!==false?' thr-'+s.threshold_state:'';
-  t.className=`stl ${s.alive===true?'up':s.alive===false?'down':''}${_thr} stl-enter`;
+  t.className=`stl ${s.alive===true?'up':s.alive===false?'down':''}${_thr}${_sensorAcked(s)?' ack':''} stl-enter`;
   t.id=`t-${key.replace('/','_')}`;
   t.dataset.sid=s.sensor_id;
   t.onclick=()=>openDetail(did,s.sensor_id);
@@ -328,7 +342,7 @@ function updateTile(s){
   const tile=document.getElementById(`t-${key.replace('/','_')}`);
   if(!tile)return;
   if(s.stype==='vmware'&&s.vmware_vm_id){
-    tile.className=`vm-row ${s.alive===true?'up':s.alive===false?'down':''}`;
+    tile.className=`vm-row ${s.alive===true?'up':s.alive===false?'down':''}${_sensorAcked(s)?' ack':''}`;
     const dot=tile.querySelector('.stl-sdot');
     if(dot) dot.className=`stl-sdot ${s.alive===true?'up':s.alive===false?'down':''}`;
     const vc=s.alive===false?'b':(s.threshold_state&&s.threshold_state!=='ok'?(s.threshold_state==='crit'?'r':'w'):(s.alive===true?'g':'m'));
@@ -345,7 +359,7 @@ function updateTile(s){
     return;
   }
   const _newThr=s.threshold_state&&s.threshold_state!=='ok'&&s.alive!==false?' thr-'+s.threshold_state:'';
-  tile.className=`stl ${s.alive===true?'up':s.alive===false?'down':''}${_newThr}`;
+  tile.className=`stl ${s.alive===true?'up':s.alive===false?'down':''}${_newThr}${_sensorAcked(s)?' ack':''}`;
   const dot=tile.querySelector('.stl-sdot');
   if(dot)dot.className=`stl-sdot ${s.alive===true?'up':s.alive===false?'down':''}`;
   const isSnmp=s.stype==='snmp';
@@ -375,6 +389,8 @@ function updateTile(s){
   if(vel){vel.textContent=vt;vel.className=`stl-val ${vc}`;}
   const mutedBadge=document.getElementById(`sm-muted-${sk}`);
   if(mutedBadge){const isMuted2=s.alerts_muted||S.devices[s.device_id]?.alerts_muted;mutedBadge.style.display=isMuted2?'':'none';}
+  const ackBadge=document.getElementById(`sm-ack-${sk}`);
+  if(ackBadge){const _ak=_sensorAcked(s);ackBadge.style.display=_ak?'':'none';if(_ak)ackBadge.title=_ackTitle(s);}
   const del=document.getElementById(`std-${sk}`);
   if(del){
     const _tgtLive=s.stype==='http'?(s.url||s.host):s.stype==='tcp'?`${s.host}:${s.port}`:s.stype==='snmp'?`${s.host} OID:${(s.snmp_oid||'').split('.').slice(-3).join('.')}`:s.stype==='dns'?`${s.dns_query||s.host} (${s.dns_record_type||'A'})`:s.host;
@@ -830,6 +846,17 @@ function drawSpk(key,history){
 }
 
 // ── Device status recalc ─────────────────────────────────────────
+// True when the device's failing sensors are ALL acknowledged — one fresh
+// (un-ACKed) failure keeps the card loud red.
+function _devAllAck(did){
+  const keys=S._devSensors?.[did]||new Set();
+  const devMuted=S.devices[did]?.alerts_muted;
+  const bad=[...keys].map(k=>S.sensors[k])
+    .filter(s=>s&&!s.alerts_muted&&!devMuted)
+    .filter(s=>s.alive===false||(s.threshold_state&&s.threshold_state!=='ok'));
+  return bad.length>0&&bad.every(s=>!!s.ack_by);
+}
+
 function recalcDevStatus(did){
   const keys=S._devSensors?.[did]||new Set();
   const devMuted=S.devices[did]?.alerts_muted;
@@ -842,7 +869,10 @@ function recalcDevStatus(did){
   else if(thresholds.some(t=>t==='warn'))st='warn';
   else if(alives.every(a=>a===true))st='up';
   else if(alives.some(a=>a===true))st='warn';
-  if(S.devices[did])S.devices[did].status=st;
+  if(S.devices[did]){
+    S.devices[did].status=st;
+    S.devices[did]._allAck=(st==='down'||st==='warn')&&_devAllAck(did);
+  }
   updateDpHeader(did,st);
 }
 function updateDpHeader(did,st){

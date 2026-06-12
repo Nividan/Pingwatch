@@ -993,8 +993,12 @@ function cardHTML(dev){
   const probePill = (_epid && typeof _viaProbePill==='function') ? _viaProbePill(_epid) : '';
   const staleCls = (_epid && typeof _probeIsStale==='function' && _probeIsStale(_epid))
     ? ' probe-stale-tile' : '';
+  // Acknowledged rollup — muted card when every failing sensor is ACKed.
+  const ackOn = (st==='down'||st==='warn') &&
+    typeof _devAllAck==='function' && _devAllAck(dev.device_id);
+  const ackCls = ackOn ? ' ack' : '';
   return `
-  <div class="dc dcard ${st}${selCls}${staleCls}" id="dp-${dev.device_id}" onclick="_cardClick(event,'${dev.device_id}')">
+  <div class="dc dcard ${st}${selCls}${staleCls}${ackCls}" id="dp-${dev.device_id}" onclick="_cardClick(event,'${dev.device_id}')">
     <div class="${cbCls}" onclick="event.stopPropagation();_toggleCard(event,'${dev.device_id}')"></div>
     <div class="dc-drag-handle" title="Drag to reorder">⠿</div>
     <div class="dcard-head">
@@ -1007,8 +1011,8 @@ function cardHTML(dev){
     </div>
     <div class="dcard-tiles" id="dcsnr-${dev.device_id}">${tilesHtml}</div>
     <div class="dcard-foot">
-      <span class="dc-status ${st}" id="dcst-${dev.device_id}">
-        <div class="dc-sdot ${st==='up'?'up':''}"></div>${lbl}
+      <span class="dc-status ${st}" id="dcst-${dev.device_id}" title="${ackOn?'All failing sensors acknowledged':''}">
+        <div class="dc-sdot ${st==='up'?'up':''}"></div>${lbl}${ackOn?' <span class="dc-ack-flag">✓ ACK</span>':''}
       </span>
       <span class="seen">${sensorCount} sensor${sensorCount===1?'':'s'}</span>
     </div>
@@ -1137,19 +1141,24 @@ function listRowHTML(dev){
 
 function updateCardStatus(did,st){
   const lbl={up:'Up',down:'Down',warn:'Warning',unknown:'Unknown'}[st]||st;
+  const ack=!!(S.devices[did]&&S.devices[did]._allAck);
   const card=document.getElementById(`dp-${did}`);
   if(card){
     // Preserve selected + dcard classes when swapping status
     const wasSel = card.classList.contains('selected');
-    card.className=`dc dcard ${st}${wasSel?' selected':''}`;
+    card.className=`dc dcard ${st}${ack?' ack':''}${wasSel?' selected':''}`;
     const bar=document.getElementById(`dcbar-${did}`);
     if(bar)bar.className=`dc-bar dcard-stripe ${st}`;
     const badge=document.getElementById(`dcst-${did}`);
-    if(badge){badge.className=`dc-status ${st}`;badge.innerHTML=`<div class="dc-sdot ${st==='up'?'up':''}"></div>${lbl}`;}
+    if(badge){
+      badge.className=`dc-status ${st}`;
+      badge.title=ack?'All failing sensors acknowledged':'';
+      badge.innerHTML=`<div class="dc-sdot ${st==='up'?'up':''}"></div>${lbl}${ack?' <span class="dc-ack-flag">✓ ACK</span>':''}`;
+    }
   }
   // Also update list row
   const lr=document.getElementById(`dpl-${did}`);
-  if(lr) lr.className=`dc-list-row ${st}`;
+  if(lr) lr.className=`dc-list-row ${st}${ack?' ack':''}`;
   // Refresh summary badge
   const sumEl=document.getElementById(`dlr-sum-${did}`);
   if(sumEl){ const h=_devSnrSummaryHtml(did); if(h) sumEl.outerHTML=h; }

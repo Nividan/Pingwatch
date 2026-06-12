@@ -670,6 +670,7 @@ def db_load_unresolved_flap_state(state):
 
     log.info("db_load_unresolved_flap_state: scanning flap_log for unresolved entries...")
     rows = []
+    ack_rows = []
     if is_pg():
         from db.pg_pool import pg_cursor
         try:
@@ -683,6 +684,15 @@ def db_load_unresolved_flap_state(state):
                     _ALL_DIRS
                 )
                 rows = [(r["did"], r["sid"], r["direction"], r["first_ts"]) for r in cur.fetchall()]
+                # Acknowledged-but-unresolved incidents → re-seed the
+                # sensor's "acknowledged-down" badge across restarts.
+                cur.execute(
+                    f"SELECT did, sid, ack_by, ack_at FROM flap_log "
+                    f"WHERE direction IN ({ph}) AND ack_state = 'acknowledged'",
+                    _ALL_DIRS
+                )
+                ack_rows = [(r["did"], r["sid"], r["ack_by"], r["ack_at"])
+                            for r in cur.fetchall()]
         except Exception as e:
             log.error(f"db_load_unresolved_flap_state error: {e}")
             return
@@ -698,11 +708,27 @@ def db_load_unresolved_flap_state(state):
                 f"GROUP BY did, sid, direction",
                 _ALL_DIRS
             ).fetchall()
+            ack_rows = con.execute(
+                f"SELECT did, sid, ack_by, ack_at FROM flap_log "
+                f"WHERE direction IN ({ph}) AND ack_state = 'acknowledged'",
+                _ALL_DIRS
+            ).fetchall()
         except Exception as e:
             log.error(f"db_load_unresolved_flap_state error: {e}")
             return
         finally:
             if con: con.close()
+
+    # Latest ACK per sensor (a sensor can have several acked open rows).
+    ack_map = {}
+    for did, sid, ack_by, ack_at in ack_rows:
+        try:
+            at = float(ack_at or 0)
+        except (TypeError, ValueError):
+            at = 0.0
+        prev = ack_map.get((did, sid))
+        if prev is None or at > prev[1]:
+            ack_map[(did, sid)] = (str(ack_by or ""), at)
     log.info(f"db_load_unresolved_flap_state: found {len(rows)} unresolved flap_log row(s)")
 
     # Aggregate per (did, sid): note which categories matched + earliest ts each.
@@ -761,6 +787,11 @@ def db_load_unresolved_flap_state(state):
                 s._threshold_triggered_ts = slot["warn_ts"]
             flags.append("warn")
         if flags:
+            ack = ack_map.get((did, sid))
+            if ack:
+                s._ack_by = ack[0]
+                s._ack_at = ack[1]
+                flags.append(f"ack:{ack[0]}")
             restored += 1
             log.info(f"Restored flap state for {dev.name}/{s.name} (did={did} sid={sid}): {','.join(flags)}")
     log.info(

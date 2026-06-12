@@ -30,6 +30,8 @@ Remote agents that run sensor probes inside branch offices, DR sites, and custom
 
 ### UI
 
+**Acknowledged-down state (PRTG-style).** ACKing an event now marks the *live sensor*, not just the event row: its tile renders muted red with a **✓ ACK** badge (tooltip: who + when), and the device card mutes with an ACK chip only when **every** failing sensor on it is acknowledged — one fresh failure keeps the card loud. The flag lives on the sensor runtime (set by the ACK endpoint, pushed over SSE so open browsers flip instantly), **clears automatically on recovery** (a future down starts loud again, including threshold/SNMP-state recoveries), and survives restarts via the unresolved-flap re-hydration in [db/events.py](db/events.py). Deliberately not grey — grey means paused/stale; muted red means *known down, someone owns it*.
+
 New **Probes** sidebar page (live status dot, last seen, agent version + *update available* badge, clock-skew warning, capability chips, spool depth, bound sites, sensor counts; add / download package / re-enroll / revoke / delete-with-reassign-dialog). "Measured from" dropdowns in the device, sensor, and site editors; a "via ‹probe›" pill on device cards with stale-grey rendering while the probe is offline; `probe_offline` / `probe_online` rows in Events. The Add/Edit Site dialog now uses the standard app modal style in the main app (the neon look remains Live-Map-only, [frontend/forms-site.js](frontend/forms-site.js)), and its probe dropdown no longer shows a duplicate "Central (this server)" entry.
 
 ### Observability
