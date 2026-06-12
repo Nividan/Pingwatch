@@ -19,6 +19,16 @@ sudo bash install.sh
 
 Installs to `/opt/pingwatch-agent` and registers the
 `pingwatch-agent` systemd service (auto-restart, starts at boot).
+When run in a terminal it detects missing optional capabilities
+(`snmpget` for SNMP sensors, paramiko for SSH/SFTP) and offers to
+install them. For unattended installs use flags instead of prompts:
+
+```bash
+sudo bash install.sh --all-optional     # or --with-snmp / --with-ssh / --no-optional
+```
+
+Re-running the installer later is safe — e.g. `--with-ssh` once SSH
+sensors get assigned to this probe.
 
 **Windows** (elevated prompt)
 
@@ -27,6 +37,8 @@ install.bat
 ```
 
 Registers a Scheduled Task `PingWatchAgent` that runs at boot as SYSTEM.
+Offers to `pip install paramiko` for SSH/SFTP sensors; SNMP needs the
+net-snmp `snmpget.exe` installed manually (the installer points there).
 
 **Manual / test run**
 
@@ -60,10 +72,14 @@ enrollment token (Probes page → Re-enroll), paste it into `config.json` as
 | Sensors      | Needs on this host                                    |
 |--------------|-------------------------------------------------------|
 | snmp         | `snmpget` binary (net-snmp)                            |
-| ssh / sftp   | `pip install paramiko`                                 |
+| ssh / sftp   | paramiko                                               |
 | vmware       | `pip install pyvmomi` (+ vmware/ package from server)  |
 
-Everything else is Python 3.8+ stdlib.
+The installers offer snmp/ssh automatically (see above); vmware stays
+manual. Everything else is Python 3.8+ stdlib. A declined or missing
+capability is never fatal — those sensors just report *"capability
+missing on probe"* until it's added (no agent restart needed; the
+capability chips on the server's Probes page update within ~5 minutes).
 
 ## Files
 

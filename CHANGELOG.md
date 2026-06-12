@@ -24,7 +24,7 @@ Remote agents that run sensor probes inside branch offices, DR sites, and custom
 
 ### Agent package
 
-`agent/` in the repo + [core/agent_package.py](core/agent_package.py) builder: the Probes page downloads a zip containing `agent.py` (stdlib-only core), **verbatim copies** of `monitoring/probes.py` and `core/radius_auth.py` (tiny `core/` shims satisfy their imports), installers (`install.sh` → systemd, `install.bat` → Scheduled Task), and a generated `config.json`. ssh/sftp need paramiko, snmp needs the `snmpget` binary — the agent reports capabilities at checkin and the UI shows them as chips.
+`agent/` in the repo + [core/agent_package.py](core/agent_package.py) builder: the Probes page downloads a zip containing `agent.py` (stdlib-only core), **verbatim copies** of `monitoring/probes.py` and `core/radius_auth.py` (tiny `core/` shims satisfy their imports), installers (`install.sh` → systemd, `install.bat` → Scheduled Task), and a generated `config.json`. ssh/sftp need paramiko, snmp needs the `snmpget` binary — the installers detect what's missing and offer to install it (interactive prompt; `--with-snmp` / `--with-ssh` / `--all-optional` / `--no-optional` flags for unattended Linux installs), and the agent reports capabilities at checkin so the UI shows them as chips.
 
 ### UI
 
