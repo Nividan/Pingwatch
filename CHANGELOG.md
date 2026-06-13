@@ -36,11 +36,11 @@ After a restart the first probe cycle used to spray DOWN events that auto-resolv
 
 A bad `git pull` (a syntax error in a pulled file) followed by a restart used to send the systemd unit into an **unbounded crash loop**: `Restart=on-failure` with `RestartSec=5` and — fatally — `StartLimitIntervalSec=0` (the start-rate limiter *disabled*) meant it relaunched every 5 seconds forever, each launch spraying a full startup banner into the logs until someone noticed. Three layers now prevent this:
 
-- **`linux/deploy.sh`** — the recommended way to update a running install. It pulls (`--ff-only`), byte-compiles every source file with `compileall`, and **only restarts if the compile is clean** — a broken pull leaves the currently-running instance untouched and prints the error, so a typo never causes downtime. It then confirms the service came back up, with a `journalctl` hint if it didn't.
+- **Safe-deploy scripts** ([linux/deploy.sh](linux/deploy.sh), [windows/deploy.ps1](windows/deploy.ps1)) — the recommended way to update a running install on either platform. They pull (`--ff-only`), byte-compile every source file with `compileall`, and **only restart/relaunch if the compile is clean** — a broken pull leaves the currently-running instance untouched and prints the error, so a typo never causes downtime. The Linux script then confirms the service came back up, with a `journalctl` hint if it didn't.
 - **systemd compile gate** ([linux/pingwatch.service](linux/pingwatch.service)) — `ExecStartPre` runs `compileall` before every start, so even a manual `systemctl restart` of broken code fails fast and cleanly instead of half-starting. `compileall` is purely syntactic (no imports, no side effects); the venv is excluded.
 - **Bounded restarts** — `StartLimitIntervalSec=120` + `StartLimitBurst=5` replace the old unlimited setting: after 5 failed starts in 2 minutes systemd gives up and parks the unit in `failed`, so a genuinely broken deploy stops looping (and stops flooding the log) instead of retrying until manually halted.
 
-Existing installs pick this up by re-running `sudo bash linux/start.sh --install-service` once (re-patches the unit + `daemon-reload`); routine updates then use `bash linux/deploy.sh`.
+Existing Linux installs pick up the unit hardening by re-running `sudo bash linux/start.sh --install-service` once (re-patches the unit + `daemon-reload`); routine updates then use `bash linux/deploy.sh`. Windows has no service supervisor — so no crash loop to bound — but `windows/deploy.ps1` provides the same compile-before-relaunch protection (a failed check skips the relaunch and keeps the old instance running).
 
 ### Audit log no longer dumps binary blobs
 

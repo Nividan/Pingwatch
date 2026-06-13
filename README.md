@@ -158,15 +158,21 @@ journalctl -u pingwatch -f                     # live logs
 sudo bash linux/start.sh --uninstall-service
 ```
 
-### Updating a running install (Linux)
+### Updating a running install
 
-Update with the safe-deploy script rather than a manual `git pull` + restart. It pulls the latest code, syntax-checks **every** source file, and restarts **only if the check passes** — so a bad pull can't take your server down:
+Update with the safe-deploy script for your platform rather than a manual `git pull` + restart. Each one pulls the latest code, syntax-checks **every** source file, and restarts **only if the check passes** — so a bad pull can't take your server down.
 
+**Linux:**
 ```bash
 bash linux/deploy.sh
 ```
-
 If the pulled code has a syntax error, the script aborts and leaves the running instance untouched (it keeps serving the previous version) so you can fix and re-pull. The systemd service is also hardened to back this up: it refuses to start code that won't compile, and caps restart attempts so a failed update parks the unit in a clear `failed` state instead of crash-looping. After upgrading from a version that predates this script, run `sudo bash linux/start.sh --install-service` once to refresh the unit file.
+
+**Windows:**
+```powershell
+powershell -ExecutionPolicy Bypass -File windows\deploy.ps1
+```
+Same flow — pull → compile-check → relaunch only if clean — so a failed check leaves the running instance serving the old code. A successful relaunch runs `windows\start.bat`, whose launcher frees the ports by stopping the old instance and then starts the new code. (Windows has no service supervisor, so there's no crash-loop to guard against, but the relaunch is a hard restart with no graceful drain.)
 
 ### Air-Gapped Installation
 
