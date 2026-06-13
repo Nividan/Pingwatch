@@ -727,9 +727,18 @@ class Device:
         # list() snapshot: this property is read from probe/HTTP/broadcast
         # threads while routes mutate the sensors dict. Iterating the live
         # view raises "dictionary changed size during iteration".
-        active = [s for s in list(self.sensors.values()) if not s.alerts_muted and s.running]
+        sensors = list(self.sensors.values())
+        running = [s for s in sensors if s.running]
+        active  = [s for s in running if not s.alerts_muted]
         vals = [s.alive for s in active]
-        if not vals or all(v is None for v in vals):
+        if sensors and not running:
+            # Every sensor is explicitly stopped — the device is paused, not
+            # down or unknown. A distinct status lets the UI grey it out and
+            # the Pause filter / dashboard pie count it instead of lumping a
+            # deliberately-stopped device in with real outages. (A device with
+            # no sensors at all still falls through to "unknown".)
+            result = "pause"
+        elif not vals or all(v is None for v in vals):
             result = "unknown"
         elif any(v is False for v in vals):
             result = "down"
@@ -1573,6 +1582,14 @@ class MonitorState:
             dev = self.devices.get(did)
             s   = dev.sensors.get(sid) if dev else None
         if not s or dev is None:
+            return False
+
+        # Sensor was stopped while this probe was in flight. _run_once_inner
+        # guards at entry, but a probe that already started when stop_sensor
+        # ran still lands here — process it and we'd record a sample, flip
+        # alive, and possibly fire a flap/alert for a sensor the user just
+        # paused. Drop it: a stopped sensor records nothing.
+        if not s.running:
             return False
 
         if source == "probe":

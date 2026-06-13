@@ -65,7 +65,7 @@ def _site_of(device) -> str:
 
 
 def _device_status(device) -> str:
-    """Return 'up' | 'warn' | 'down' | 'unknown' for a device."""
+    """Return 'up' | 'warn' | 'down' | 'pause' | 'unknown' for a device."""
     try:
         return device.status or "unknown"
     except Exception:

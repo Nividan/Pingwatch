@@ -1401,16 +1401,19 @@ let _hbSparkData     = [];    // [{ts, pct}] — latest fetch
 let _hbSparkEvents   = [];    // [{ts, type, label}]
 let _hbSparkRange    = '24h';
 function _hbUpdate() {
-  const devs = Object.values(S.devices);
-  if (!devs.length) return;
+  const allDevs = Object.values(S.devices);
+  if (!allDevs.length) return;
   const bar = document.getElementById('healthBar');
   if (!bar) return;
   bar.style.display = '';
+  // Paused devices are intentionally not monitored — exclude them so pausing a
+  // device for maintenance doesn't drag the health percentage down.
+  const devs = allDevs.filter(d => d.status !== 'pause');
   const up  = devs.filter(d => d.status === 'up').length;
   const dn  = devs.filter(d => d.status === 'down').length;
   const wn  = devs.filter(d => d.status === 'warn').length;
   const tot = devs.length;
-  const pct = Math.round(up / tot * 100);
+  const pct = tot ? Math.round(up / tot * 100) : 100;
   const cls = pct >= 90 ? 'healthy' : pct >= 70 ? 'degraded' : 'critical';
   const lbl = pct >= 90 ? 'Healthy' : pct >= 70 ? 'Degraded' : 'Critical';
   const fill = document.getElementById('hb-bar-fill');

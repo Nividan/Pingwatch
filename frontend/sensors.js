@@ -66,7 +66,10 @@ function _ackTitle(s){
 }
 
 function tileHTML(s){
-  const st=s.alive===true?'up':s.alive===false?'down':'';
+  // Paused (sensor stopped) beats every live state: a manually-stopped sensor
+  // greys out and reads "PAUSED" instead of showing its stale last result.
+  const paused=!s.running;
+  const st=paused?'pause':(s.alive===true?'up':s.alive===false?'down':'');
   const isSnmp=s.stype==='snmp';
   const isDns  =s.stype==='dns';
   const isTls  =s.stype==='tls';
@@ -116,7 +119,7 @@ function tileHTML(s){
     <div class="stl-sdot ${st}"></div>
   </div>
   <div class="stl-body">
-    <div class="stl-val ${vc}" id="stv-${s.device_id}_${s.sensor_id}">${esc(vt)}</div>
+    <div class="stl-val ${paused?'m':vc}" id="stv-${s.device_id}_${s.sensor_id}">${paused?'PAUSED':esc(vt)}</div>
     <div class="stl-det" title="${esc(s.last_detail||'')}">
       <span id="std-${s.device_id}_${s.sensor_id}">${esc(_tileDetail(s, tgt))}</span>
     </div>
@@ -275,7 +278,7 @@ function renderTile(did,s){
     const key=`${did}/${s.sensor_id}`;
     const old=document.getElementById(`t-${key.replace('/','_')}`);
     const t=document.createElement('div');
-    t.className=`vm-row ${s.alive===true?'up':s.alive===false?'down':''}${_sensorAcked(s)?' ack':''}`;
+    t.className=`vm-row ${!s.running?'pause':(s.alive===true?'up':s.alive===false?'down':'')}${_sensorAcked(s)?' ack':''}`;
     t.id=`t-${key.replace('/','_')}`;
     t.dataset.sid=s.sensor_id;
     t.onclick=()=>openDetail(did,s.sensor_id);
@@ -304,8 +307,9 @@ function renderTile(did,s){
   const key=`${did}/${s.sensor_id}`;
   const old=document.getElementById(`t-${key.replace('/','_')}`);
   const t=document.createElement('div');
-  const _thr=s.threshold_state&&s.threshold_state!=='ok'&&s.alive!==false?' thr-'+s.threshold_state:'';
-  t.className=`stl ${s.alive===true?'up':s.alive===false?'down':''}${_thr}${_sensorAcked(s)?' ack':''} stl-enter`;
+  const _base=!s.running?'pause':(s.alive===true?'up':s.alive===false?'down':'');
+  const _thr=(s.running&&s.threshold_state&&s.threshold_state!=='ok'&&s.alive!==false)?' thr-'+s.threshold_state:'';
+  t.className=`stl ${_base}${_thr}${_sensorAcked(s)?' ack':''} stl-enter`;
   t.id=`t-${key.replace('/','_')}`;
   t.dataset.sid=s.sensor_id;
   t.onclick=()=>openDetail(did,s.sensor_id);
@@ -342,15 +346,16 @@ function updateTile(s){
   const tile=document.getElementById(`t-${key.replace('/','_')}`);
   if(!tile)return;
   if(s.stype==='vmware'&&s.vmware_vm_id){
-    tile.className=`vm-row ${s.alive===true?'up':s.alive===false?'down':''}${_sensorAcked(s)?' ack':''}`;
+    const _base=!s.running?'pause':(s.alive===true?'up':s.alive===false?'down':'');
+    tile.className=`vm-row ${_base}${_sensorAcked(s)?' ack':''}`;
     const dot=tile.querySelector('.stl-sdot');
-    if(dot) dot.className=`stl-sdot ${s.alive===true?'up':s.alive===false?'down':''}`;
+    if(dot) dot.className=`stl-sdot ${_base}`;
     const vc=s.alive===false?'b':(s.threshold_state&&s.threshold_state!=='ok'?(s.threshold_state==='crit'?'r':'w'):(s.alive===true?'g':'m'));
     const _rv=s.last_value||s.last_detail||'—';
     const _rv2=parseFloat(s.last_value);
     const vt=s.alive===false?'FAIL':(!isNaN(_rv2)?_fmtVmVal(_rv2,_VM_UNITS[s.vmware_metric]||''):(_rv.length>12?_rv.slice(0,12)+'…':_rv));
     const vel=document.getElementById(`stv-${sk}`);
-    if(vel){vel.textContent=vt;vel.className=`vm-row-val ${vc}`;}
+    if(vel){vel.textContent=s.running?vt:'PAUSED';vel.className=`vm-row-val ${s.running?vc:'m'}`;}
     const mutedBadge=document.getElementById(`sm-muted-${sk}`);
     if(mutedBadge){const isMuted=s.alerts_muted||S.devices[s.device_id]?.alerts_muted;mutedBadge.style.display=isMuted?'':'none';}
     drawSpk(key,s.history||[]);
@@ -358,10 +363,11 @@ function updateTile(s){
     updateDetailWin(s.device_id,s.sensor_id,s);
     return;
   }
-  const _newThr=s.threshold_state&&s.threshold_state!=='ok'&&s.alive!==false?' thr-'+s.threshold_state:'';
-  tile.className=`stl ${s.alive===true?'up':s.alive===false?'down':''}${_newThr}${_sensorAcked(s)?' ack':''}`;
+  const _base=!s.running?'pause':(s.alive===true?'up':s.alive===false?'down':'');
+  const _newThr=(s.running&&s.threshold_state&&s.threshold_state!=='ok'&&s.alive!==false)?' thr-'+s.threshold_state:'';
+  tile.className=`stl ${_base}${_newThr}${_sensorAcked(s)?' ack':''}`;
   const dot=tile.querySelector('.stl-sdot');
-  if(dot)dot.className=`stl-sdot ${s.alive===true?'up':s.alive===false?'down':''}`;
+  if(dot)dot.className=`stl-sdot ${_base}`;
   const isSnmp=s.stype==='snmp';
   const isDns2  =s.stype==='dns';
   const isTls2  =s.stype==='tls';
@@ -386,7 +392,7 @@ function updateTile(s){
   const _counterThrColor2 = _isCounter2 ? (s.threshold_state==='crit'?'r':s.threshold_state==='warn'?'w':'g') : null;
   const vc=s.alive===false?'b':(_isCounter2?_counterThrColor2:_snmpThrColor2||((isSnmp||isDns2||isTls2)?(_snmpStrVal2?'w':(s.alive===true?'g':'m')):(s.last_ms!==null?msC(s.last_ms,s):'m')));
   const vel=document.getElementById(`stv-${sk}`);
-  if(vel){vel.textContent=vt;vel.className=`stl-val ${vc}`;}
+  if(vel){vel.textContent=s.running?vt:'PAUSED';vel.className=`stl-val ${s.running?vc:'m'}`;}
   const mutedBadge=document.getElementById(`sm-muted-${sk}`);
   if(mutedBadge){const isMuted2=s.alerts_muted||S.devices[s.device_id]?.alerts_muted;mutedBadge.style.display=isMuted2?'':'none';}
   const ackBadge=document.getElementById(`sm-ack-${sk}`);
@@ -795,11 +801,12 @@ async function _vmEditSave(did, vmid, isHost){
 
 function vmRowHTML(s){
   const sk=`${s.device_id}_${s.sensor_id}`;
-  const st=s.alive===true?'up':s.alive===false?'down':'';
+  const paused=!s.running;
+  const st=paused?'pause':(s.alive===true?'up':s.alive===false?'down':'');
   const _vmRaw=s.last_value||s.last_detail||'—';
   const _vmV=parseFloat(s.last_value);
-  const vt=s.alive===false?'FAIL':(!isNaN(_vmV)?_fmtVmVal(_vmV,_VM_UNITS[s.vmware_metric]||''):(_vmRaw.length>12?_vmRaw.slice(0,12)+'…':_vmRaw));
-  const vc=s.alive===false?'b':(s.threshold_state&&s.threshold_state!=='ok'?(s.threshold_state==='crit'?'r':'w'):(s.alive===true?'g':'m'));
+  const vt=paused?'PAUSED':(s.alive===false?'FAIL':(!isNaN(_vmV)?_fmtVmVal(_vmV,_VM_UNITS[s.vmware_metric]||''):(_vmRaw.length>12?_vmRaw.slice(0,12)+'…':_vmRaw)));
+  const vc=paused?'m':(s.alive===false?'b':(s.threshold_state&&s.threshold_state!=='ok'?(s.threshold_state==='crit'?'r':'w'):(s.alive===true?'g':'m')));
   const metricLabel=(typeof _allVmwareMetrics==='function'?_allVmwareMetrics():(_vmwareMetrics||[])).find(m=>m.v===s.vmware_metric)?.l||s.vmware_metric||s.name;
   const isMuted=s.alerts_muted||S.devices[s.device_id]?.alerts_muted;
   const hist=(s.history||[]).slice(-24);
@@ -860,11 +867,18 @@ function _devAllAck(did){
 function recalcDevStatus(did){
   const keys=S._devSensors?.[did]||new Set();
   const devMuted=S.devices[did]?.alerts_muted;
-  const active=[...keys].map(k=>S.sensors[k]).filter(s=>s&&!s.alerts_muted&&!devMuted);
+  // Mirror the backend Device.status: only running sensors contribute, and a
+  // device whose sensors are all stopped is "pause" (not down/unknown). Without
+  // the running filter a stopped device keeps its stale alive=false → 'down',
+  // overwriting the 'pause' the server just broadcast.
+  const all=[...keys].map(k=>S.sensors[k]).filter(Boolean);
+  const running=all.filter(s=>s.running);
+  const active=running.filter(s=>!s.alerts_muted&&!devMuted);
   const alives=active.map(s=>s.alive);
   const thresholds=active.map(s=>s.threshold_state);
   let st='unknown';
-  if(alives.some(a=>a===false))st='down';
+  if(all.length&&!running.length)st='pause';
+  else if(alives.some(a=>a===false))st='down';
   else if(thresholds.some(t=>t==='crit'))st='down';
   else if(thresholds.some(t=>t==='warn'))st='warn';
   else if(alives.every(a=>a===true))st='up';

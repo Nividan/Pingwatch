@@ -697,7 +697,7 @@ function _updateGrpSummary(group, site){
   const grid=document.getElementById(gridId(key));
   if(!grid){ el.innerHTML=''; return; }
   // Count devices by status in this group (always show, regardless of collapsed state)
-  const counts={up:0,down:0,warn:0};
+  const counts={up:0,down:0,warn:0,pause:0};
   grid.querySelectorAll('.dc:not(.dc-add)').forEach(card=>{
     const did=card.id.replace('dp-','');
     const dev=S.devices[did];
@@ -707,6 +707,7 @@ function _updateGrpSummary(group, site){
   if(counts.up)   parts.push(`<span class="grp-sum-pill up"><span class="grp-sum-dot"></span>${counts.up}</span>`);
   if(counts.warn) parts.push(`<span class="grp-sum-pill warn"><span class="grp-sum-dot"></span>${counts.warn}</span>`);
   if(counts.down) parts.push(`<span class="grp-sum-pill down"><span class="grp-sum-dot"></span>${counts.down}</span>`);
+  if(counts.pause)parts.push(`<span class="grp-sum-pill pause"><span class="grp-sum-dot"></span>${counts.pause}</span>`);
   el.innerHTML=parts.join('');
 }
 
@@ -715,8 +716,9 @@ function _devSnrSummaryHtml(did){
   const _keys=S._devSensors?.[did]||new Set();
   const snrs=[..._keys].map(k=>S.sensors[k]).filter(Boolean);
   if(!snrs.length) return '';
-  let ok=0,warn=0,down=0;
+  let ok=0,warn=0,down=0,pause=0;
   snrs.forEach(s=>{
+    if(!s.running){pause++;return;}   // stopped — not an outage, count separately
     if(s.alerts_muted||dev?.alerts_muted){if(s.alive===true)ok++;return;}
     if(s.alive===false) down++;
     else if(s.threshold_state&&s.threshold_state!=='ok') warn++;
@@ -726,6 +728,7 @@ function _devSnrSummaryHtml(did){
   if(ok)   h+=`<span class="dls-chip up"><span class="dls-dot"></span>${ok}</span>`;
   if(warn) h+=`<span class="dls-chip warn"><span class="dls-dot"></span>${warn}</span>`;
   if(down) h+=`<span class="dls-chip down"><span class="dls-dot"></span>${down}</span>`;
+  if(pause)h+=`<span class="dls-chip pause"><span class="dls-dot"></span>${pause}</span>`;
   return h?`<div class="dlr-summary" id="dlr-sum-${did}">${h}</div>`:'';
 }
 
@@ -968,7 +971,7 @@ function sSnrPreview(did){
 
 function cardHTML(dev){
   const st=dev.status||'unknown';
-  const lbl={up:'Up',down:'Down',warn:'Warning',unknown:'Unknown'}[st]||st;
+  const lbl={up:'Up',down:'Down',warn:'Warning',unknown:'Unknown',pause:'Paused'}[st]||st;
   const adChip = _renderAutoDiscoveryChip(dev);
   const selCls = _selectedDids.has(dev.device_id) ? ' selected' : '';
   const cbCls  = _selectedDids.has(dev.device_id) ? 'dc-sel-cb checked' : 'dc-sel-cb';
@@ -1032,7 +1035,8 @@ function _stileHTML(s){
   const isSnmp = s.stype === 'snmp' || s.stype === 'dns';
   const isVmware = s.stype === 'vmware';
   let st = 'up';
-  if (s.alive === false) st = 'down';
+  if (!s.running) st = 'pause';            // stopped sensor — grey, not stale down
+  else if (s.alive === false) st = 'down';
   else if (isVmware || isSnmp) st = s.alive === true ? 'up' : 'pause';
   else if (s.last_ms != null) {
     const c = typeof msC === 'function' ? msC(s.last_ms, s) : 'g';
@@ -1054,6 +1058,7 @@ function _stileHTML(s){
   } else if (s.alive === false) {
     val = 'DOWN';
   }
+  if (!s.running) val = 'Paused';
   const sparkColor = st === 'down' ? 'var(--down)'
                     : st === 'warn' ? 'var(--warn)'
                     : st === 'pause' ? 'var(--pause)'
@@ -1113,7 +1118,7 @@ function listRowHTML(dev){
     snrHtml+=`<span class="dlr-snr snr-t-${s.stype}">
       <span class="dc-snr-ico ${s.stype}">${sIco(s.stype)}</span>
       <span class="dc-snr-nm">${esc(s.name)}</span>
-      <span class="dc-snr-val ${vc(s)}" id="lsv-${s.device_id}_${s.sensor_id}">${esc(snrVal(s))}</span>
+      <span class="dc-snr-val ${s.running?vc(s):'m'}" id="lsv-${s.device_id}_${s.sensor_id}">${esc(s.running?snrVal(s):'Paused')}</span>
     </span>`;
   });
   if(snrs.length>5) snrHtml+=`<span class="dlr-more">+${snrs.length-5}</span>`;
@@ -1130,7 +1135,7 @@ function listRowHTML(dev){
 }
 
 function updateCardStatus(did,st){
-  const lbl={up:'Up',down:'Down',warn:'Warning',unknown:'Unknown'}[st]||st;
+  const lbl={up:'Up',down:'Down',warn:'Warning',unknown:'Unknown',pause:'Paused'}[st]||st;
   const ack=!!(S.devices[did]&&S.devices[did]._allAck);
   const card=document.getElementById(`dp-${did}`);
   if(card){
@@ -1175,11 +1180,13 @@ function updateCardSensor(s){
     } else {
       v=full.last_ms!=null?`${full.last_ms} ms`:(full.alive===false?'DOWN':'—');
     }
+    if(!full.running) v='Paused';
     vEl.textContent=v;
     // Detect new .stile-val vs legacy .dc-snr-val and update classes appropriately
     if (vEl.classList.contains('stile-val')) {
       let stStr = 'up';
-      if (full.alive === false) stStr = 'down';
+      if (!full.running) stStr = 'pause';
+      else if (full.alive === false) stStr = 'down';
       else if (isVmware || isSnmp) stStr = full.alive === true ? 'up' : 'pause';
       else if (full.last_ms != null) {
         const cc = typeof msC === 'function' ? msC(full.last_ms, full) : 'g';
@@ -1190,8 +1197,8 @@ function updateCardSensor(s){
       if (dEl) dEl.className = `dot ${stStr}`;
     } else {
       const c = full.alive===false?'b':((isSnmp||isVmware)?(full.alive===true?'g':'m'):(full.last_ms!=null?msC(full.last_ms,full):'m'));
-      vEl.className=`dc-snr-val ${c}`;
-      if (dEl) dEl.className = `dc-snr-dot ${s.alive===true?'up':s.alive===false?'down':''}`;
+      vEl.className=`dc-snr-val ${full.running?c:'m'}`;
+      if (dEl) dEl.className = `dc-snr-dot ${!full.running?'pause':s.alive===true?'up':s.alive===false?'down':''}`;
     }
   }
   // Also update list row sensor value
@@ -1205,7 +1212,7 @@ function updateCardSensor(s){
     else if(isSnmp2){ v2=full.alive===false?'FAIL':(full.last_value||'\u2014').slice(0,10); }
     else { v2=full.last_ms!=null?`${full.last_ms}ms`:(full.alive===false?'DOWN':'\u2014'); }
     const c2=full.alive===false?'b':((isSnmp2||isVm2)?(full.alive===true?'g':'m'):(full.last_ms!=null?msC(full.last_ms,full):'m'));
-    lsv.textContent=v2; lsv.className=`dc-snr-val ${c2}`;
+    lsv.textContent=full.running?v2:'Paused'; lsv.className=`dc-snr-val ${full.running?c2:'m'}`;
   }
   // Refresh summary badge for this device
   const sumEl2=document.getElementById(`dlr-sum-${s.device_id}`);
