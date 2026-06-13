@@ -52,8 +52,21 @@ def _socket_timeout(seconds: float):
         socket.setdefaulttimeout(prev)
 
 
+class _ProbeTimeout(ConnectionError):
+    """Raised by _run_with_timeout when the wall-clock cap trips.
+
+    Subclass of ConnectionError so existing `except ConnectionError` sites (the
+    discover functions) still catch it — but the hot probe path catches it
+    separately and does NOT invalidate the shared (host, user) session. A slow
+    vCenter is not a dead session; nuking it would force every sibling sensor on
+    the same vCenter to reconnect into a cold catalog, turning one slow VM into
+    an all-devices 'metric not available' cascade. A genuinely dead session is
+    still caught by the CurrentTime health check on the next _get_session (with
+    the 25-min TTL as a final backstop)."""
+
+
 def _run_with_timeout(label: str, fn, timeout_s: float):
-    """Run `fn()` in a daemon thread and raise ConnectionError if it doesn't
+    """Run `fn()` in a daemon thread and raise _ProbeTimeout if it doesn't
     finish within `timeout_s` seconds.
 
     Why this is needed: pyVmomi's SOAP stub maintains a persistent HTTPS
@@ -84,7 +97,7 @@ def _run_with_timeout(label: str, fn, timeout_s: float):
     th.start()
     th.join(timeout=timeout_s)
     if not result["done"]:
-        raise ConnectionError(
+        raise _ProbeTimeout(
             f"{label} timed out after {timeout_s}s — vCenter is slow or overloaded"
         )
     if result["err"] is not None:
@@ -814,9 +827,16 @@ def vmware_probe(host, user, password, vm_id, metric,
                                        port, verify_ssl, timeout, disk_path),
             _cap,
         )
+    except _ProbeTimeout as e:
+        # Slow vCenter, NOT a dead session — fail only this probe and KEEP the
+        # shared (host, user) session, so sibling sensors on the same vCenter
+        # don't all reconnect into a cold catalog (the 'metric not available'
+        # cascade). A truly dead session is caught by the health check on the
+        # next _get_session, or the 25-min TTL as a backstop.
+        return {"ok": False, "ms": None, "detail": str(e)}
     except ConnectionError as e:
-        # Hard-cap trip or connection failure — invalidate the session so the
-        # next probe reconnects rather than reusing a wedged one.
+        # Real connection/auth drop mid-probe — invalidate so the next probe
+        # reconnects rather than reusing a wedged one.
         _invalidate_session(host, user)
         return {"ok": False, "ms": None, "detail": str(e)}
     except Exception as e:
