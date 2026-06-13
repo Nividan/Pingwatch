@@ -32,6 +32,20 @@ After a restart the first probe cycle used to spray DOWN events that auto-resolv
 - **Startup grace window** (`startup_grace_s` setting, default 60s, 0=off): parks new down/threshold events during settling — probes run, samples record, tiles go red live, but the event row + alerts emit only if the sensor is *still* failing when the window closes, stamped with the **true transition time**; in-window recoveries vanish without a trace, and recoveries/auto-resolves always process immediately. The window no longer closes on a blind timer — it stays open until the **first probe cycle completes** (every central sensor has reported once), bounded by a hard cap, so slow first probes get parked instead of slipping out just after a fixed 60s ([core/state.py](core/state.py) `begin_startup_grace`/`_maybe_flush_grace`/`_flush_grace`).
 - **Watchdog boot holdoff**: the probe watchdog withholds `probe_offline` verdicts until agents have had time to reconnect — right after boot every probe's persisted `last_seen` is stale by definition.
 
+### Safe deploys & crash-loop protection
+
+A bad `git pull` (a syntax error in a pulled file) followed by a restart used to send the systemd unit into an **unbounded crash loop**: `Restart=on-failure` with `RestartSec=5` and — fatally — `StartLimitIntervalSec=0` (the start-rate limiter *disabled*) meant it relaunched every 5 seconds forever, each launch spraying a full startup banner into the logs until someone noticed. Three layers now prevent this:
+
+- **`linux/deploy.sh`** — the recommended way to update a running install. It pulls (`--ff-only`), byte-compiles every source file with `compileall`, and **only restarts if the compile is clean** — a broken pull leaves the currently-running instance untouched and prints the error, so a typo never causes downtime. It then confirms the service came back up, with a `journalctl` hint if it didn't.
+- **systemd compile gate** ([linux/pingwatch.service](linux/pingwatch.service)) — `ExecStartPre` runs `compileall` before every start, so even a manual `systemctl restart` of broken code fails fast and cleanly instead of half-starting. `compileall` is purely syntactic (no imports, no side effects); the venv is excluded.
+- **Bounded restarts** — `StartLimitIntervalSec=120` + `StartLimitBurst=5` replace the old unlimited setting: after 5 failed starts in 2 minutes systemd gives up and parks the unit in `failed`, so a genuinely broken deploy stops looping (and stops flooding the log) instead of retrying until manually halted.
+
+Existing installs pick this up by re-running `sudo bash linux/start.sh --install-service` once (re-patches the unit + `daemon-reload`); routine updates then use `bash linux/deploy.sh`.
+
+### Audit log no longer dumps binary blobs
+
+`settings_update` audit entries recorded a full `old → new` value for every changed setting — including `email_logo_data`, whose value is a base64 PNG data URI. Uploading a logo wrote the entire image (~2.4 MB on one real entry) as a single audit line, in both the audit **log file** and the capped audit **DB table**. The settings handler ([routes/settings.py](routes/settings.py) `_audit_val`) now masks secrets as before, **summarizes opaque blobs by size** (e.g. `email_logo_data: <2400022 bytes>`), and caps any other long value — so the trail still records *that* the logo changed without storing its contents. ([db/audit.py](db/audit.py) independently caps every detail field at 1024 chars as a backstop.)
+
 ---
 
 ## v1.3 — Distributed probes

@@ -158,6 +158,16 @@ journalctl -u pingwatch -f                     # live logs
 sudo bash linux/start.sh --uninstall-service
 ```
 
+### Updating a running install (Linux)
+
+Update with the safe-deploy script rather than a manual `git pull` + restart. It pulls the latest code, syntax-checks **every** source file, and restarts **only if the check passes** — so a bad pull can't take your server down:
+
+```bash
+bash linux/deploy.sh
+```
+
+If the pulled code has a syntax error, the script aborts and leaves the running instance untouched (it keeps serving the previous version) so you can fix and re-pull. The systemd service is also hardened to back this up: it refuses to start code that won't compile, and caps restart attempts so a failed update parks the unit in a clear `failed` state instead of crash-looping. After upgrading from a version that predates this script, run `sudo bash linux/start.sh --install-service` once to refresh the unit file.
+
 ### Air-Gapped Installation
 
 PingWatch has **zero external runtime dependencies** — no CDN fonts, no telemetry, no update checks. It runs fully offline once installed. The only step that needs internet is fetching Python packages, which you do once on a connected machine and transfer to the air-gapped target.

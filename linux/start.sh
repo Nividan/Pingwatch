@@ -9,6 +9,9 @@
 #    sudo bash start.sh --install-service   — install as systemd service
 #    sudo bash start.sh --uninstall-service — remove systemd service
 #
+#  Updating a running install:
+#    bash deploy.sh                  — pull, syntax-check, restart only if clean
+#
 #  Service management (after --install-service):
 #    sudo systemctl start   pingwatch
 #    sudo systemctl stop    pingwatch
