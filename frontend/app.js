@@ -84,6 +84,7 @@ function _parseSSE(e){
 
 // ── SSE ──────────────────────────────────────────────────────────
 function connectSSE(){
+  if(_loggedOut) return;   // logged out / session expired — don't (re)connect
   if(sse)sse.close();
   sse=new EventSource('/events');
   sse.onopen=()=>{
@@ -199,6 +200,7 @@ function connectSSE(){
     _updateLogBadge();
   });
   sse.onerror=()=>{
+    if(_loggedOut) return;   // session ended — don't flash "reconnecting" or retry
     document.getElementById('cbn').style.display='block';
     // Guard: onerror can fire multiple times (browser retries) before the timer fires.
     // Only schedule one reconnect attempt at a time to avoid a reconnect storm.
@@ -219,8 +221,8 @@ async function _sseResync(retryCount = 0, gen = ++_resyncGen) {
   try {
     const r = await fetch('/api/devices');
     if (r.status === 401) {
-      // Server restarted and cleared sessions — show login
-      if (!_loggedOut) showLogin('Server restarted. Please sign in again.');
+      // Server restarted and cleared sessions — show login once, stop the loops
+      _onSessionExpired('Server restarted. Please sign in again.');
       return;
     }
     if (!r.ok) {
@@ -596,6 +598,25 @@ async function doLogout(){
   document.getElementById('usrDd').style.display='none';
   document.getElementById('devActBar').style.display='none';
   showLogin();
+}
+
+// The session died under us — the server clears all sessions on restart, so a
+// 401 from any background source (SSE resync, badge poll, an idle widget fetch)
+// means "sign in again". Handle it exactly ONCE and tear down the live SSE +
+// polling timers so they stop firing fresh 401s. Without this, every background
+// 401 re-invoked showLogin — which reset the form and re-focused the username
+// field — so the login screen appeared to "refresh every few seconds" and the
+// password field "jumped" while the user typed. Re-login restarts everything
+// via onAuthenticated() (which sets _loggedOut=false first).
+function _onSessionExpired(msg){
+  if(_loggedOut) return;   // already handled — don't re-render or nag
+  _loggedOut=true;
+  _stopIdleCheck();
+  if(sse){sse.close();sse=null;}
+  if(_reconnectTimer){clearTimeout(_reconnectTimer);_reconnectTimer=null;}
+  if(_hbSparkInterval){clearInterval(_hbSparkInterval);_hbSparkInterval=null;}
+  if(window._badgePollInterval){clearInterval(window._badgePollInterval);window._badgePollInterval=null;}
+  showLogin(msg||'Session expired. Please sign in again.');
 }
 function _usrDdToggle(e){
   e.stopPropagation();
@@ -1371,7 +1392,7 @@ async function api(method,path,body=null){
   const o={method,headers:{'Content-Type':'application/json'}};
   if(body)o.body=JSON.stringify(body);
   const r=await fetch(path,o);
-  if(r.status===401){if(!_loggedOut)showLogin('Session expired. Please sign in again.');return {};}
+  if(r.status===401){_onSessionExpired('Session expired. Please sign in again.');return {};}
   if(!r.ok){
     const err=await r.json().catch(()=>({error:r.statusText}));
     throw new Error(err.error||r.statusText);

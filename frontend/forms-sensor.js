@@ -1763,7 +1763,7 @@ async function _vmApiTimed(method, path, body, timeoutMs){
     const o = {method, headers:{'Content-Type':'application/json'}, signal: ctrl.signal};
     if (body) o.body = JSON.stringify(body);
     const r = await fetch(path, o);
-    if (r.status === 401) { if (!_loggedOut) showLogin('Session expired. Please sign in again.'); return {}; }
+    if (r.status === 401) { _onSessionExpired('Session expired. Please sign in again.'); return {}; }
     if (!r.ok) {
       const err = await r.json().catch(() => ({error: r.statusText}));
       const e = new Error(err.error || r.statusText);

@@ -177,7 +177,7 @@ async function _ipamExportCsv(btn) {
   if (btn) btn.disabled = true;
   try {
     const r = await fetch('/api/ipam/export', { credentials: 'same-origin' });
-    if (r.status === 401) { if (!_loggedOut) showLogin('Session expired'); return; }
+    if (r.status === 401) { _onSessionExpired('Session expired'); return; }
     if (!r.ok) { toast('Export failed', 'err'); return; }
     const blob = await r.blob();
     const cd = r.headers.get('Content-Disposition') || '';
@@ -203,7 +203,7 @@ let _ipamKnownSites = [];
 
 async function _ipamLoadSubnets() {
   const r = await fetch('/api/ipam/subnets');
-  if (r.status === 401) { if(!_loggedOut)showLogin('Session expired'); return; }
+  if (r.status === 401) { _onSessionExpired('Session expired'); return; }
   if (!r.ok) { toast('Failed to load subnets', 'err'); return; }
   const d = await r.json();
   _ipamSubnets = d.subnets || [];
