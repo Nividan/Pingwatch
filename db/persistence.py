@@ -162,7 +162,8 @@ def _pg_save(state):
              getattr(s, "snmp_v3_context", ""),
              getattr(s, "probe_id", "") or "",
              int(getattr(s, "cert_warn_days", 0) or 0),
-             int(getattr(s, "cert_crit_days", 0) or 0))
+             int(getattr(s, "cert_crit_days", 0) or 0),
+             int(bool(getattr(s, "running", True))))
             for dev in state.devices.values()
             for s in dev.sensors.values()
         ]
@@ -239,7 +240,7 @@ def _pg_save(state):
                     "radius_secret,radius_test_level,radius_username,radius_password,radius_nas_id,"
                     "snmp_v3_user,snmp_v3_level,snmp_v3_auth_proto,snmp_v3_auth_pass,"
                     "snmp_v3_priv_proto,snmp_v3_priv_pass,snmp_v3_context,probe_id,"
-                    "cert_warn_days,cert_crit_days) "
+                    "cert_warn_days,cert_crit_days,running) "
                     "VALUES %s "
                     "ON CONFLICT (did, sid) DO UPDATE SET "
                     "name=EXCLUDED.name, stype=EXCLUDED.stype, host=EXCLUDED.host, "
@@ -286,7 +287,8 @@ def _pg_save(state):
                     "snmp_v3_context=EXCLUDED.snmp_v3_context, "
                     "probe_id=EXCLUDED.probe_id, "
                     "cert_warn_days=EXCLUDED.cert_warn_days, "
-                    "cert_crit_days=EXCLUDED.cert_crit_days",
+                    "cert_crit_days=EXCLUDED.cert_crit_days, "
+                    "running=EXCLUDED.running",
                     snr_rows,
                 )
             # Delete orphaned sensors
@@ -412,7 +414,8 @@ def db_save(state):
              getattr(s, "snmp_v3_context", ""),
              getattr(s, "probe_id", "") or "",
              int(getattr(s, "cert_warn_days", 0) or 0),
-             int(getattr(s, "cert_crit_days", 0) or 0))
+             int(getattr(s, "cert_crit_days", 0) or 0),
+             int(bool(getattr(s, "running", True))))
             for dev in state.devices.values()
             for s in dev.sensors.values()
         ]
@@ -460,8 +463,8 @@ def db_save(state):
             "radius_secret,radius_test_level,radius_username,radius_password,radius_nas_id,"
             "snmp_v3_user,snmp_v3_level,snmp_v3_auth_proto,snmp_v3_auth_pass,"
             "snmp_v3_priv_proto,snmp_v3_priv_pass,snmp_v3_context,probe_id,"
-            "cert_warn_days,cert_crit_days) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "cert_warn_days,cert_crit_days,running) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             snr_rows
         )
         if live_sids:
@@ -559,7 +562,8 @@ def _pg_load(state):
                 "COALESCE(snmp_v3_context,'') AS snmp_v3_context,"
                 "COALESCE(probe_id,'') AS probe_id,"
                 "COALESCE(cert_warn_days,0) AS cert_warn_days,"
-                "COALESCE(cert_crit_days,0) AS cert_crit_days "
+                "COALESCE(cert_crit_days,0) AS cert_crit_days,"
+                "COALESCE(running,1) AS running "
                 "FROM sensors"
             )
             srows = cur.fetchall()
@@ -682,6 +686,7 @@ def _pg_load(state):
         s.probe_id             = row[68] or "" if len(row) > 68 else ""
         s.cert_warn_days       = int(row[69] or 0) if len(row) > 69 else 0
         s.cert_crit_days       = int(row[70] or 0) if len(row) > 70 else 0
+        s._autostart           = bool(row[71]) if len(row) > 71 else True
         dev.sensors[row[1]] = s
 
     state._did_ctr = max_did
@@ -749,9 +754,17 @@ def _pg_load(state):
     except Exception as _e:
         log.error(f"db_load_unresolved_flap_state hook error: {_e}")
 
-    for did in list(state.devices):
-        state.start_device(did)
-    log.info("Auto-started all sensors.")
+    # Auto-start only sensors that were running at last save; sensors paused
+    # before the restart (running=0, persisted) stay stopped so a paused
+    # device/sensor sticks across restarts.
+    started = 0
+    for dev in list(state.devices.values()):
+        for sid in list(dev.sensors):
+            s = dev.sensors.get(sid)
+            if s is not None and getattr(s, "_autostart", True):
+                state.start_sensor(dev.device_id, sid)
+                started += 1
+    log.info(f"Auto-started {started} sensor(s); paused sensors left stopped.")
     _mark_load_ok()
 
 
@@ -810,7 +823,8 @@ def db_load(state):
             "COALESCE(snmp_v3_priv_proto,''),COALESCE(snmp_v3_priv_pass,''),"
             "COALESCE(snmp_v3_context,''),"
             "COALESCE(probe_id,''),"
-            "COALESCE(cert_warn_days,0),COALESCE(cert_crit_days,0) "
+            "COALESCE(cert_warn_days,0),COALESCE(cert_crit_days,0),"
+            "COALESCE(running,1) "
             "FROM sensors"
         ).fetchall()
     except Exception as e:
@@ -898,7 +912,7 @@ def db_load(state):
          snmp_v3_auth_proto, snmp_v3_auth_pass,
          snmp_v3_priv_proto, snmp_v3_priv_pass,
          snmp_v3_context, snr_probe_id,
-         snr_cert_warn_days, snr_cert_crit_days) in srows:
+         snr_cert_warn_days, snr_cert_crit_days, snr_running) in srows:
         dev = state.devices.get(did)
         if not dev: continue
         s = Sensor(did, sid, name, stype, host or dev.host,
@@ -960,6 +974,7 @@ def db_load(state):
         s.probe_id             = snr_probe_id or ""
         s.cert_warn_days       = int(snr_cert_warn_days or 0)
         s.cert_crit_days       = int(snr_cert_crit_days or 0)
+        s._autostart           = bool(snr_running)
         dev.sensors[sid] = s
 
     state._did_ctr = max_did
@@ -1030,9 +1045,17 @@ def db_load(state):
     except Exception as _e:
         log.error(f"db_load_unresolved_flap_state hook error: {_e}")
 
-    for did in list(state.devices):
-        state.start_device(did)
-    log.info("Auto-started all sensors.")
+    # Auto-start only sensors that were running at last save; sensors paused
+    # before the restart (running=0, persisted) stay stopped so a paused
+    # device/sensor sticks across restarts.
+    started = 0
+    for dev in list(state.devices.values()):
+        for sid in list(dev.sensors):
+            s = dev.sensors.get(sid)
+            if s is not None and getattr(s, "_autostart", True):
+                state.start_sensor(dev.device_id, sid)
+                started += 1
+    log.info(f"Auto-started {started} sensor(s); paused sensors left stopped.")
     _mark_load_ok()
 
 

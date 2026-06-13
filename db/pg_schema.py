@@ -405,6 +405,9 @@ def pg_create_main_schema(cur):
         # v1.4 — HTTPS cert-expiry thresholds on http sensors (days; 0 = off)
         ("sensors", "cert_warn_days", "INTEGER DEFAULT 0"),
         ("sensors", "cert_crit_days", "INTEGER DEFAULT 0"),
+        # Pause persistence — 0 = paused (left stopped on restart), 1 = running.
+        # Without this a paused device/sensor came back running after a restart.
+        ("sensors", "running", "INTEGER DEFAULT 1"),
     ]
     for _tbl, _col, _typedef in _migrations:
         try:

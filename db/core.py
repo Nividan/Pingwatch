@@ -874,6 +874,13 @@ def db_init():
                 con.commit()
             except Exception:
                 pass
+        # Pause persistence — 0 = paused (left stopped on restart), 1 = running.
+        # Without this a paused device/sensor came back running after a restart.
+        try:
+            con.execute("ALTER TABLE sensors ADD COLUMN running INTEGER DEFAULT 1")
+            con.commit()
+        except Exception:
+            pass
         # Anomaly detection — EWMA baseline checkpoints (restored on startup)
         con.execute("""
             CREATE TABLE IF NOT EXISTS sensor_anomaly_baselines (
