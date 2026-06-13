@@ -168,6 +168,7 @@ function connectSSE(){
       if('status' in d)         p.status=d.status;
       if('last_seen' in d)      p.last_seen=d.last_seen;
       if('config_version' in d) p.config_version=d.config_version;
+      if('update_state' in d)   p.update_state=d.update_state;
     }
     if(typeof _probesOnStatus==='function') _probesOnStatus(d);
     if(typeof _refreshStaleBadges==='function') _refreshStaleBadges();

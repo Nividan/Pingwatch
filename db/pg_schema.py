@@ -261,6 +261,71 @@ def pg_create_main_schema(cur):
         "CREATE INDEX IF NOT EXISTS idx_agent_tasks_probe_state "
         "ON agent_tasks(probe_id, state)"
     )
+    # ── Managed agent updates (v1.4) ──────────────────────────────────
+    for _col, _ddl in [
+        ("build_id",           "TEXT DEFAULT ''"),
+        ("supervisor",         "INTEGER DEFAULT 0"),
+        ("update_state",       "TEXT DEFAULT ''"),
+        ("update_target",      "TEXT DEFAULT ''"),
+        ("update_campaign_id", "INTEGER DEFAULT NULL"),
+        ("update_attempt_id",  "TEXT DEFAULT ''"),
+        ("update_changed_at",  "DOUBLE PRECISION DEFAULT 0"),
+        ("update_error",       "TEXT DEFAULT ''"),
+    ]:
+        cur.execute(f"ALTER TABLE probes ADD COLUMN IF NOT EXISTS {_col} {_ddl}")
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS agent_update_reports (
+            id           SERIAL PRIMARY KEY,
+            probe_id     TEXT NOT NULL,
+            campaign_id  INTEGER DEFAULT NULL,
+            attempt_id   TEXT DEFAULT '',
+            outcome      TEXT DEFAULT '',
+            from_build   TEXT DEFAULT '',
+            to_build     TEXT DEFAULT '',
+            target_build TEXT DEFAULT '',
+            reason       TEXT DEFAULT '',
+            log          TEXT DEFAULT '',
+            ts           DOUBLE PRECISION DEFAULT 0
+        )""")
+    cur.execute(
+        "CREATE INDEX IF NOT EXISTS idx_update_reports_probe "
+        "ON agent_update_reports(probe_id, ts)"
+    )
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS update_campaigns (
+            id            SERIAL PRIMARY KEY,
+            name          TEXT DEFAULT '',
+            target_build  TEXT NOT NULL,
+            package_sha256 TEXT DEFAULT '',
+            canary        INTEGER DEFAULT 1,
+            batch_size    INTEGER DEFAULT 5,
+            halt_on_fail  INTEGER DEFAULT 1,
+            window_secs   INTEGER DEFAULT 86400,
+            probation_secs INTEGER DEFAULT 120,
+            state         TEXT DEFAULT 'running',
+            note          TEXT DEFAULT '',
+            created_by    TEXT DEFAULT '',
+            created_at    DOUBLE PRECISION DEFAULT 0,
+            started_at    DOUBLE PRECISION DEFAULT 0,
+            finished_at   DOUBLE PRECISION DEFAULT 0
+        )""")
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS campaign_probes (
+            id           SERIAL PRIMARY KEY,
+            campaign_id  INTEGER NOT NULL,
+            probe_id     TEXT NOT NULL,
+            state        TEXT DEFAULT 'queued',
+            attempt_id   TEXT DEFAULT '',
+            wave         INTEGER DEFAULT 0,
+            queued_at    DOUBLE PRECISION DEFAULT 0,
+            started_at   DOUBLE PRECISION DEFAULT 0,
+            finished_at  DOUBLE PRECISION DEFAULT 0,
+            error        TEXT DEFAULT ''
+        )""")
+    cur.execute(
+        "CREATE INDEX IF NOT EXISTS idx_campaign_probes_cs "
+        "ON campaign_probes(campaign_id, state)"
+    )
 
     cur.execute("""
         CREATE TABLE IF NOT EXISTS sensors (

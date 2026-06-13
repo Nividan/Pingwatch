@@ -94,14 +94,18 @@ function _probesRender(){
       `</div>`+
       `<div class="pagehead-r">`+
         `<button class="btn primary rbac-admin" onclick="_pbOpenAdd()">+ Add Probe</button>`+
+        `<button class="btn rbac-admin" onclick="_pbOpenCampaign()" title="Roll out the current agent build to supervisor-managed probes (staged, with auto-rollback)">⬆ Update fleet…</button>`+
         `<button class="btn" onclick="_probesLoad()">Refresh</button>`+
       `</div>`+
     `</div>`+
+    `<div id="pb-campaigns" class="pb-campaigns"></div>`+
     `<div id="pb-list" class="pb-list"></div>`;
 }
 
 async function _probesLoad(){
   await _probesRefreshCache();
+  try{ const b=await api('GET','/api/probes/build'); S._agentBuild=b.build_id||''; }catch(_){}
+  _pbLoadCampaigns();
   const list=document.getElementById('pb-list');
   if(!list) return;
   const probes=Object.values(S.probes).sort((a,b)=>(a.name||'').localeCompare(b.name||''));
@@ -139,10 +143,17 @@ function _pbRow(p){
                  : p.connected          ? 'Connected'
                  : p.status==='pending' ? 'Awaiting enrollment'
                  : 'Disconnected';
-  const srvVer=(window._pwVersion||'');
-  const verBadge=(p.agent_version && srvVer && p.agent_version!==srvVer)
-    ? `<span class="pb-chip pb-chip-warn" title="Agent ${esc(p.agent_version)} ≠ server ${esc(srvVer)} — download a fresh package">update available</span>`
-    : '';
+  const srvBuild=(S._agentBuild||'');
+  // Supervisor-managed probes can take remote updates; legacy ones need a
+  // one-time manual re-install first.
+  const verBadge = p.supervisor
+    ? ((srvBuild && p.build_id && p.build_id!==srvBuild)
+        ? `<span class="pb-chip pb-chip-warn" title="Running ${esc(p.build_id||'?')} — current build is ${esc(srvBuild)}. Use “Update fleet” to roll out.">update available</span>`
+        : (srvBuild && p.build_id===srvBuild
+            ? `<span class="pb-chip pb-chip-ok" title="Running the current build ${esc(srvBuild)}">up to date</span>`
+            : ''))
+    : `<span class="pb-chip pb-chip-off" title="Predates managed updates — re-install the package once to enable remote updates">manual updates</span>`;
+  const updBadge=_pbUpdStateChip(p);
   const skewBadge=(Math.abs(p.clock_skew_s||0)>30)
     ? `<span class="pb-chip pb-chip-warn" title="Agent clock differs from server by ${Math.round(p.clock_skew_s)}s — check NTP at the branch">clock skew ${Math.round(p.clock_skew_s)}s</span>`
     : '';
@@ -160,8 +171,9 @@ function _pbRow(p){
       `<span class="pb-dot ${dotCls}"></span>`+
       `<span class="pb-name">${esc(p.name||p.probe_id)}</span>`+
       `<span class="pb-state">${stateLbl}</span>`+
-      verBadge+skewBadge+enrollNote+
+      verBadge+updBadge+skewBadge+enrollNote+
       `<span class="pb-spacer"></span>`+
+      `<button class="btn-s" onclick='_pbOpenUpdates(${pidq})' title="Update history for this probe">⟳ Updates</button>`+
       `<button class="btn-s rbac-admin" onclick='_pbDownload(${pidq})' title="Download the pre-configured agent zip (issues a fresh one-time token)">⬇ Package</button>`+
       `<button class="btn-s rbac-admin" onclick='_pbReenroll(${pidq})' title="Revoke the agent credential and arm a new one-time enrollment token">↻ Re-enroll</button>`+
       `<button class="btn-s rbac-admin" onclick='_pbRevoke(${pidq})' title="Revoke the agent credential (record kept)">⛔ Revoke</button>`+
@@ -184,6 +196,180 @@ function _pbRow(p){
 
 function _probesOnStatus(_d){
   if(activeMainTab==='probes') _probesLoad();
+}
+
+// ── Managed updates: per-probe state chip ────────────────────────
+function _pbUpdStateChip(p){
+  const st=p.update_state||'';
+  const map={
+    queued:        ['pb-chip-info','update queued'],
+    downloading:   ['pb-chip-info','downloading'],
+    staged:        ['pb-chip-info','staged'],
+    restarting:    ['pb-chip-info','restarting'],
+    verifying:     ['pb-chip-info','verifying'],
+    rolled_back:   ['pb-chip-warn','rolled back'],
+    failed_offline:['pb-chip-err','update failed'],
+  };
+  const m=map[st];
+  if(!m) return '';   // '' or 'succeeded' → no transient chip (the build badge covers it)
+  const inflight=['queued','downloading','staged','restarting','verifying'].includes(st);
+  const tip=(st==='rolled_back'||st==='failed_offline')
+    ? (p.update_error||st) : st;
+  return `<span class="pb-chip ${m[0]}" title="${esc(tip)}">${inflight?'⟳ ':''}${esc(m[1])}</span>`;
+}
+
+// ── Campaigns list (active + recently finished) ──────────────────
+async function _pbLoadCampaigns(){
+  const box=document.getElementById('pb-campaigns');
+  if(!box) return;
+  let camps=[];
+  try{ const r=await api('GET','/api/probes/campaigns'); camps=r.campaigns||[]; }catch(_){}
+  const active=camps.filter(c=>c.state==='running'||c.state==='halted');
+  const recent=camps.filter(c=>c.state!=='running'&&c.state!=='halted').slice(0,3);
+  const show=active.concat(recent);
+  box.innerHTML = show.length
+    ? `<div class="pb-camp-h">Update campaigns</div>`+show.map(_pbCampaignCard).join('')
+    : '';
+}
+
+function _pbCampaignCard(c){
+  const k=c.counts||{};
+  const total=Object.values(k).reduce((a,b)=>a+(b||0),0);
+  const done=k.succeeded||0;
+  const settled=done+(k.rolled_back||0)+(k.failed_offline||0)+(k.expired||0);
+  const pct=total?Math.round(settled/total*100):0;
+  const stateCls={running:'pb-chip-info',halted:'pb-chip-err',done:'pb-chip-ok',
+                  aborted:'pb-chip-off'}[c.state]||'pb-chip-off';
+  const cidq=esc(JSON.stringify(c.id));
+  return `<div class="pb-camp">`+
+    `<div class="pb-camp-row">`+
+      `<span class="pb-chip ${stateCls}">${esc(c.state)}</span>`+
+      `<b>${esc(c.name||('Campaign '+c.id))}</b>`+
+      `<code class="pb-camp-build" title="Target build">${esc(c.target_build||'')}</code>`+
+      `<span class="pb-spacer"></span>`+
+      (c.state==='running'?`<button class="btn-s bulk-danger rbac-admin" onclick='_pbAbortCampaign(${cidq})'>Abort</button>`:'')+
+    `</div>`+
+    `<div class="pb-camp-bar"><span style="width:${pct}%"></span></div>`+
+    `<div class="pb-camp-counts">`+
+      `<span class="pb-chip pb-chip-ok">✓ ${done} updated</span>`+
+      ((k.dispatched||0)?`<span class="pb-chip pb-chip-info">⟳ ${k.dispatched} in progress</span>`:'')+
+      ((k.queued||0)?`<span class="pb-chip">${k.queued} queued</span>`:'')+
+      ((k.rolled_back||0)?`<span class="pb-chip pb-chip-warn">↩ ${k.rolled_back} rolled back</span>`:'')+
+      ((k.failed_offline||0)?`<span class="pb-chip pb-chip-err">✖ ${k.failed_offline} offline</span>`:'')+
+      ((k.expired||0)?`<span class="pb-chip pb-chip-off">${k.expired} expired</span>`:'')+
+      `<span class="pb-camp-total">${total} probe${total===1?'':'s'}</span>`+
+    `</div>`+
+  `</div>`;
+}
+
+async function _pbAbortCampaign(cid){
+  if(!confirm('Abort this campaign? Probes already updating will finish (auto-rollback if needed); no further updates are dispatched.')) return;
+  try{ await api('POST',`/api/probes/campaigns/${cid}/abort`); toast('Campaign aborted','info'); }
+  catch(e){ toast('Abort failed','err'); }
+  _probesLoad();
+}
+
+// ── Launch a rollout campaign ────────────────────────────────────
+function _pbOpenCampaign(){
+  closeM('pb-camp');
+  const build=S._agentBuild||'(unknown)';
+  const enrolled=Object.values(S.probes).filter(p=>p.status==='enrolled');
+  const capable=enrolled.filter(p=>p.supervisor);
+  const legacy =enrolled.filter(p=>!p.supervisor);
+  const rows=capable.map(p=>{
+    const cur=(p.build_id===build);
+    return `<label class="pb-camp-pick">`+
+      `<input type="checkbox" class="pb-camp-cb" value="${esc(p.probe_id)}" ${(cur||!p.connected)?'':'checked'} ${p.connected?'':'disabled'}>`+
+      `<span class="pb-dot ${p.connected?'pb-dot-up':'pb-dot-down'}"></span>`+
+      `<span class="pb-camp-pn">${esc(p.name||p.probe_id)}</span>`+
+      `<code class="pb-camp-pb">${esc(p.build_id||'?')}${cur?' · current':''}</code>`+
+      `${p.connected?'':'<span class="pb-camp-ps">offline</span>'}`+
+    `</label>`;
+  }).join('') || `<div class="pb-hint">No supervisor-managed probes yet — re-install the package on a probe once to enable remote updates.</div>`;
+  const o=document.createElement('div'); o.className='mo'; o.id='pb-camp';
+  _overlayClose(o,()=>closeM('pb-camp'));
+  o.innerHTML=
+    `<div class="mbox" style="max-width:640px">`+
+      `<div class="mhd"><span>Update fleet → <code>${esc(build)}</code></span><button class="mx" onclick="closeM('pb-camp')">✕</button></div>`+
+      `<div class="mbdy">`+
+        `<p class="pb-hint">Rolls out the current agent build to the selected probes. A canary updates first; if it can't re-checkin the update auto-rolls-back and the campaign halts before the rest are touched.</p>`+
+        (legacy.length?`<p class="pb-hint pb-warn-text">${legacy.length} enrolled probe(s) can't update remotely yet (legacy install) — re-install the package on them once.</p>`:'')+
+        `<div class="pb-camp-list">${rows}</div>`+
+        `<div class="pb-camp-policy">`+
+          `<div class="fr"><label class="fl">Canary (update first, gate on success)</label><input type="text" id="pbc-canary" value="1"></div>`+
+          `<div class="fr"><label class="fl">Batch size (concurrent after canary)</label><input type="text" id="pbc-batch" value="5"></div>`+
+          `<div class="fr"><label class="fl">Probation window — must re-checkin within (s)</label><input type="text" id="pbc-prob" value="120"></div>`+
+          `<div class="fr"><label class="pb-camp-chk"><input type="checkbox" id="pbc-halt" checked> Halt the whole campaign if a probe rolls back or goes offline</label></div>`+
+        `</div>`+
+      `</div>`+
+      `<div class="mft">`+
+        `<button class="btn" onclick="closeM('pb-camp')">Cancel</button>`+
+        `<button class="btn primary" onclick="_pbLaunchCampaign()" ${capable.length?'':'disabled'}>Launch rollout</button>`+
+      `</div>`+
+    `</div>`;
+  document.body.appendChild(o);
+}
+
+async function _pbLaunchCampaign(){
+  const ids=[...document.querySelectorAll('.pb-camp-cb:checked')].map(c=>c.value);
+  if(!ids.length){ toast('Select at least one probe','err'); return; }
+  const body={
+    probe_ids:      ids,
+    canary:         parseInt(document.getElementById('pbc-canary').value)||1,
+    batch_size:     parseInt(document.getElementById('pbc-batch').value)||5,
+    probation_secs: parseInt(document.getElementById('pbc-prob').value)||120,
+    halt_on_fail:   document.getElementById('pbc-halt').checked,
+  };
+  try{
+    const r=await api('POST','/api/probes/campaigns',body);
+    const sk=(r.skipped&&r.skipped.length)?`, ${r.skipped.length} skipped`:'';
+    toast(`Rollout started — ${r.selected} probe(s)${sk}`,'ok');
+    closeM('pb-camp');
+    _probesLoad();
+  }catch(e){ toast(String((e&&e.message)||'Launch failed'),'err'); }
+}
+
+// ── Per-probe update history ─────────────────────────────────────
+async function _pbOpenUpdates(pid){
+  closeM('pb-upd');
+  const o=document.createElement('div'); o.className='mo'; o.id='pb-upd';
+  _overlayClose(o,()=>closeM('pb-upd'));
+  o.innerHTML=`<div class="mbox" style="max-width:640px">`+
+    `<div class="mhd"><span>Update history — ${esc(_probeName(pid))}</span><button class="mx" onclick="closeM('pb-upd')">✕</button></div>`+
+    `<div class="mbdy" id="pb-upd-body"><div class="pb-hint">Loading…</div></div>`+
+  `</div>`;
+  document.body.appendChild(o);
+  let ups=[];
+  try{ const r=await api('GET',`/api/probes/${pid}/updates`); ups=r.updates||[]; }catch(_){}
+  const body=document.getElementById('pb-upd-body');
+  if(!body) return;
+  if(!ups.length){ body.innerHTML=`<div class="pb-hint">No update attempts recorded yet.</div>`; return; }
+  body.innerHTML=ups.map(u=>{
+    const ok=u.outcome==='success';
+    const cls=ok?'pb-chip-ok':(u.outcome==='rolled_back'?'pb-chip-warn':'pb-chip-err');
+    const when=u.ts?new Date(u.ts*1000).toLocaleString():'';
+    return `<div class="pb-upd-row">`+
+      `<span class="pb-chip ${cls}">${esc(u.outcome||'?')}</span>`+
+      `<span class="pb-upd-when">${esc(when)}</span>`+
+      `<code class="pb-upd-build">${esc(u.from_build||'?')} → ${esc(u.to_build||u.target_build||'?')}</code>`+
+      (u.reason?`<span class="pb-upd-reason">${esc(u.reason)}</span>`:'')+
+      (ok?'':`<button class="btn-s" onclick="_pbViewLog(${u.id})">View log</button>`)+
+    `</div>`;
+  }).join('');
+}
+
+async function _pbViewLog(rid){
+  let rep=null;
+  try{ rep=await api('GET',`/api/probes/updates/${rid}`); }catch(_){}
+  if(!rep){ toast('Log unavailable','err'); return; }
+  closeM('pb-log');
+  const o=document.createElement('div'); o.className='mo'; o.id='pb-log';
+  _overlayClose(o,()=>closeM('pb-log'));
+  o.innerHTML=`<div class="mbox" style="max-width:780px">`+
+    `<div class="mhd"><span>Update log — ${esc(rep.target_build||'')}</span><button class="mx" onclick="closeM('pb-log')">✕</button></div>`+
+    `<div class="mbdy"><pre class="pb-log">${esc(rep.log||'(no log captured)')}</pre></div>`+
+  `</div>`;
+  document.body.appendChild(o);
 }
 
 // ── Add probe ────────────────────────────────────────────────────

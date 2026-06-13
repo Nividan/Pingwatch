@@ -58,10 +58,53 @@ import probes  # noqa: E402  (verbatim copy of the server's monitoring/probes.py
 AGENT_VERSION = "1.4"
 PROTOCOL_VERSION = 1
 
-CONFIG_PATH = os.path.join(BASE_DIR, "config.json")
-STATE_PATH  = os.path.join(BASE_DIR, "agent_state.json")
-SPOOL_PATH  = os.path.join(BASE_DIR, "spool.jsonl")
-LOG_PATH    = os.path.join(BASE_DIR, "agent.log")
+
+def _arg(name):
+    """Read --name VALUE or --name=VALUE from argv (the supervisor passes these)."""
+    argv = sys.argv[1:]
+    for i, a in enumerate(argv):
+        if a == name and i + 1 < len(argv):
+            return argv[i + 1]
+        if a.startswith(name + "="):
+            return a.split("=", 1)[1]
+    return None
+
+
+# Managed-update model (v1.4+): the supervisor runs agent.py from a swappable
+# releases/<build_id>/ dir and passes --data-dir (the persistent base where
+# config/state/spool/logs + supervisor IPC files live). A standalone / legacy
+# flat install passes nothing, so DATA_DIR defaults to BASE_DIR and the agent
+# behaves exactly as before — backward compatible.
+DATA_DIR = os.path.abspath(_arg("--data-dir")
+                           or os.environ.get("PW_AGENT_DATA_DIR") or BASE_DIR)
+
+
+def _resolve_build_id():
+    bid = _arg("--build-id") or os.environ.get("PW_AGENT_BUILD_ID")
+    if bid:
+        return bid
+    try:   # fallback: BUILD_ID marker the supervisor writes into the release dir
+        with open(os.path.join(BASE_DIR, "BUILD_ID"), "r", encoding="utf-8") as f:
+            return f.read().strip()
+    except Exception:
+        return ""
+
+
+BUILD_ID = _resolve_build_id()
+# "supervisor-managed" = launched by the supervisor (separate data dir) or a
+# supervisor_state.json sits alongside our data. Gates update handling + the
+# health beacon, and is reported so the server knows the probe can be updated.
+MANAGED = (DATA_DIR != BASE_DIR) or os.path.isfile(
+    os.path.join(DATA_DIR, "supervisor_state.json"))
+
+CONFIG_PATH = os.path.join(DATA_DIR, "config.json")
+STATE_PATH  = os.path.join(DATA_DIR, "agent_state.json")
+SPOOL_PATH  = os.path.join(DATA_DIR, "spool.jsonl")
+LOG_PATH    = os.path.join(DATA_DIR, "agent.log")
+HEALTH_PATH         = os.path.join(DATA_DIR, "agent_health.json")
+PENDING_SWITCH_PATH = os.path.join(DATA_DIR, "pending_switch.json")
+UPDATE_REPORT_PATH  = os.path.join(DATA_DIR, "update_report.json")
+RELEASES_DIR        = os.path.join(DATA_DIR, "releases")
 
 _COUNTER_TYPES = {"counter32", "counter64", "counter"}
 
@@ -189,6 +232,42 @@ class ServerClient:
             except Exception:
                 data = {}
             return resp.status, data
+        finally:
+            conn.close()
+
+    def _open(self):
+        if self.scheme == "https":
+            if self.pin:
+                return PinnedHTTPSConnection(self.host, self.port, self.pin,
+                                             self.timeout)
+            ctx = ssl.create_default_context()
+            if self.ca_file:
+                try:
+                    ctx.load_verify_locations(cafile=self.ca_file)
+                except Exception as e:
+                    log.error("failed to load server_ca_file %s: %s",
+                              self.ca_file, e)
+            return http.client.HTTPSConnection(self.host, self.port,
+                                               timeout=self.timeout, context=ctx)
+        return http.client.HTTPConnection(self.host, self.port,
+                                          timeout=self.timeout)
+
+    def request_raw(self, method, path, token=None, timeout=120):
+        """Like request() but returns (status, raw_bytes) — for the binary
+        agent package download. Larger timeout than a checkin (MB payload).
+        Transport is the same TLS + cert-pin / CA-bundle as every other call."""
+        conn = self._open()
+        try:
+            conn.timeout = timeout
+        except Exception:
+            pass
+        try:
+            headers = {}
+            if token:
+                headers["Authorization"] = "Bearer " + token
+            conn.request(method, path, headers=headers)
+            resp = conn.getresponse()
+            return resp.status, resp.read()
         finally:
             conn.close()
 
@@ -476,6 +555,11 @@ class Agent:
         self.checkin_count = 0
         self.proto_block_logged = 0
         self._last_terr = ("", 0.0)   # (error key, ts) — transport-warning throttle
+        # Managed-update bookkeeping: consecutive good checkins feed the
+        # supervisor's probation beacon; _restart_requested makes run() exit so
+        # the supervisor can swap + probate a staged release.
+        self.consecutive_good = 0
+        self._restart_requested = False
 
     # ── Scheduler ────────────────────────────────────────────────
     def _schedule(self, key, delay):
@@ -674,6 +758,65 @@ class Agent:
             self.buf.clear()
         self.spool.append(moved)
 
+    # ── Managed-update support ───────────────────────────────────
+    def _flush_buffer_to_spool(self):
+        """Move all in-memory results to the on-disk spool. Called before an
+        update handoff so nothing buffered is lost across the restart/rollback
+        (the spool lives in the base dir, outside swappable releases)."""
+        with self.buf_lock:
+            moved = list(self.buf)
+            self.buf.clear()
+        if moved:
+            self.spool.append(moved)
+
+    def _write_health(self):
+        """Beacon the supervisor polls during probation: how many consecutive
+        good checkins this build has achieved (commit at GOOD_CHECKINS)."""
+        if not MANAGED:
+            return
+        try:
+            save_json_atomic(HEALTH_PATH, {
+                "build_id": BUILD_ID,
+                "consecutive_good": self.consecutive_good,
+                "ts": time.time(),
+            }, private=True)
+        except Exception:
+            pass
+
+    def request_restart(self):
+        """Exit the run loop so the supervisor takes over (used after staging an
+        update). Daemon threads die with the process; the supervisor sees the
+        clean exit + pending_switch.json and performs the swap."""
+        self._restart_requested = True
+        self.stop.set()
+        self.flush_now.set()
+
+    def _upload_pending_report(self):
+        """On startup, ship any update outcome the supervisor left behind
+        (success one-liner or rollback log tail), then clear it. Runs whether
+        we're the freshly-committed build or the reverted previous one."""
+        if not MANAGED or not os.path.exists(UPDATE_REPORT_PATH):
+            return
+        rep = load_json(UPDATE_REPORT_PATH)
+        if not rep:
+            try:
+                os.remove(UPDATE_REPORT_PATH)
+            except OSError:
+                pass
+            return
+        try:
+            status, _ = self.client.request(
+                "POST", "/api/agent/update-report", rep,
+                token=self.state.get("probe_token"))
+            if status == 200:
+                os.remove(UPDATE_REPORT_PATH)
+                log.info("update report (%s) uploaded", rep.get("outcome"))
+            else:
+                log.warning("update-report upload HTTP %s — will retry", status)
+        except Exception as e:
+            log.warning("update-report upload failed: %s — will retry",
+                        type(e).__name__)
+
     def _checkin_once(self):
         token = self.state.get("probe_token")
         if not token:
@@ -685,6 +828,7 @@ class Agent:
         body = {
             "protocol_version": PROTOCOL_VERSION,
             "agent_version": AGENT_VERSION,
+            "build_id": BUILD_ID,
             "config_version": self.config_version,
             "results": batch,
             "tasks": TASK_RUNNER.progress_payload() if TASK_RUNNER else [],
@@ -695,6 +839,10 @@ class Agent:
                 "capabilities": detect_capabilities(),
                 "spool_depth": self.spool.count + len(self.buf),
                 "agent_now": time.time(),
+                # Supervisor-managed = this probe can take remote updates; the
+                # server gates update campaigns on this and badges legacy probes.
+                "supervisor": MANAGED,
+                "build_id": BUILD_ID,
             }
         try:
             status, data = self.client.request("POST", "/api/agent/checkin",
@@ -796,6 +944,8 @@ class Agent:
 
         last_full_sync = 0.0
         while not self.stop.is_set():
+            # Ship (and retry) any update outcome the supervisor left for us.
+            self._upload_pending_report()
             ok = False
             try:
                 ok = self._checkin_once()
@@ -809,6 +959,13 @@ class Agent:
                     ok = self._checkin_once()
                 except Exception:
                     break
+            # Probation beacon: count consecutive good checkins for the
+            # supervisor; a single failure resets the streak.
+            if ok:
+                self.consecutive_good += 1
+            else:
+                self.consecutive_good = 0
+            self._write_health()
             if ok and time.time() - last_full_sync > 3600:
                 self._sync_config()        # hourly belt-and-braces re-pull
                 last_full_sync = time.time()
@@ -871,6 +1028,9 @@ class TaskRunner:
         tid = int(task.get("task_id"))
         ttype = task.get("task_type") or ""
         payload = task.get("payload") or {}
+        if ttype == "agent_update":
+            self._run_agent_update(tid, payload)
+            return
         if ttype == "device_scan":
             self._run_device_scan(tid, payload)
             return
@@ -1027,6 +1187,94 @@ class TaskRunner:
             self._set(tid, "done")
         else:
             self._set(tid, "error", error="result upload failed")
+
+    def _run_agent_update(self, tid, payload):
+        """Managed self-update: download the target release, verify its
+        checksum, stage it into releases/<build_id>/, then hand off to the
+        supervisor (which swaps + probates + rolls back). The terminal outcome
+        reaches the server via /api/agent/update-report, not this task — this
+        task just tracks download/stage and ends at 'staged'."""
+        if not MANAGED:
+            self._set(tid, "error", error="probe is not supervisor-managed")
+            return
+        target = str(payload.get("build_id") or "")
+        sha = str(payload.get("package_sha256") or "").lower()
+        try:
+            window = int(payload.get("probation_window") or 120)
+        except (TypeError, ValueError):
+            window = 120
+        if not target or len(sha) != 64:
+            self._set(tid, "error", error="missing build_id/package_sha256")
+            return
+        if target == BUILD_ID:
+            self._set(tid, "done")   # already running the target build
+            return
+        log.info("agent_update task %d → build %s", tid, target)
+        self._set(tid, "running", progress=10)            # downloading
+        try:
+            status, data = self.agent.client.request_raw(
+                "GET", "/api/agent/package?build=" + urllib.parse.quote(target),
+                token=self.agent.state.get("probe_token"))
+        except Exception as e:
+            self._set(tid, "error", error=f"download failed: {type(e).__name__}")
+            return
+        if status != 200 or not data:
+            self._set(tid, "error", error=f"download HTTP {status}")
+            return
+        got = hashlib.sha256(data).hexdigest()
+        if got != sha:
+            log.error("agent_update %d checksum mismatch (want %s got %s)",
+                      tid, sha[:12], got[:12])
+            self._set(tid, "error", error="checksum mismatch")
+            return
+        self._set(tid, "running", progress=55)            # staged
+        rel_dir = os.path.join(RELEASES_DIR, target)
+        try:
+            self._extract_release(data, rel_dir)
+        except Exception as e:
+            self._set(tid, "error", error=f"extract failed: {type(e).__name__}")
+            return
+        try:
+            with open(os.path.join(rel_dir, "BUILD_ID"), "w", encoding="utf-8") as f:
+                f.write(target + "\n")
+        except Exception:
+            pass
+        # Flush buffered results to the spool so the restart/rollback loses none.
+        self.agent._flush_buffer_to_spool()
+        # Hand off to the supervisor: it sees the clean exit + this file and
+        # performs the swap + probation.
+        save_json_atomic(PENDING_SWITCH_PATH, {
+            "target_release":   target,
+            "package_sha256":   sha,
+            "probation_window": window,
+            "campaign_id":      payload.get("campaign_id"),
+            "attempt_id":       payload.get("attempt_id"),
+        }, private=True)
+        self._set(tid, "done", progress=100)
+        log.info("agent_update %d staged %s — restarting into supervisor",
+                 tid, target)
+        self.agent.request_restart()
+
+    def _extract_release(self, data, rel_dir):
+        """Extract the payload zip into rel_dir atomically (temp dir → replace),
+        with a zip-slip guard so a crafted package can't escape releases/."""
+        import io as _io
+        import zipfile
+        os.makedirs(os.path.dirname(rel_dir), exist_ok=True)
+        tmp = rel_dir + ".tmp"
+        if os.path.isdir(tmp):
+            shutil.rmtree(tmp, ignore_errors=True)
+        os.makedirs(tmp, exist_ok=True)
+        base = os.path.abspath(tmp)
+        with zipfile.ZipFile(_io.BytesIO(data)) as zf:
+            for m in zf.namelist():
+                dest = os.path.abspath(os.path.join(tmp, m))
+                if dest != base and not dest.startswith(base + os.sep):
+                    raise ValueError("unsafe path in package: " + m)
+            zf.extractall(tmp)
+        if os.path.isdir(rel_dir):
+            shutil.rmtree(rel_dir, ignore_errors=True)
+        os.replace(tmp, rel_dir)
 
     def _enrich(self, ip, ms, targets):
         hostname = ""

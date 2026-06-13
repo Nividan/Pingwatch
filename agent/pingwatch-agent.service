@@ -5,9 +5,12 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-# install.sh patches WorkingDirectory/ExecStart to the install location
+# install.sh patches WorkingDirectory/ExecStart to the install location.
+# The service runs the SUPERVISOR (the stable root); the supervisor launches
+# the agent runtime from the active releases/<build_id>/ dir and handles
+# managed updates + rollback. Restart=always keeps the supervisor alive.
 WorkingDirectory=/opt/pingwatch-agent
-ExecStart=/usr/bin/python3 /opt/pingwatch-agent/agent.py
+ExecStart=/usr/bin/python3 /opt/pingwatch-agent/supervisor.py
 Restart=always
 RestartSec=10
 User=root

@@ -190,10 +190,15 @@ def _status_fields(body: dict) -> dict:
     pv = body.get("protocol_version")
     if isinstance(pv, int):
         fields["protocol_version"] = pv
+    bid = body.get("build_id")
+    if bid is not None:
+        fields["build_id"] = str(bid)[:64]
     st = body.get("status") or {}
     if isinstance(st, dict) and st:
         if st.get("os") is not None:
             fields["os_info"] = str(st["os"])[:200]
+        if "supervisor" in st:
+            fields["supervisor"] = 1 if st.get("supervisor") else 0
         caps = st.get("capabilities")
         if isinstance(caps, dict):
             fields["capabilities"] = json.dumps(
@@ -459,6 +464,67 @@ def handle(h, method, path, body) -> bool:
                       "server_time": time.time(),
                       "checkin_interval": 10,
                       "sensors": sensors})
+        return True
+
+    # ── GET /api/agent/package — managed-update payload download ──
+    if path == "/api/agent/package" and method == "GET":
+        probe = _require_probe(h)
+        if not probe: return True
+        from urllib.parse import parse_qs, urlparse as _up
+        want = (parse_qs(_up(h.path).query).get("build", [""])[0] or "").strip()
+        try:
+            from core.agent_package import build_release_payload
+            data, build_id, sha = build_release_payload()
+        except Exception as e:
+            h._error(500, "package build failed", e, context="agent_package")
+            return True
+        # A campaign pins the target build; if the server's current payload no
+        # longer matches (code changed since launch), refuse rather than ship a
+        # different build — the agent aborts and the campaign halts. (The agent
+        # also checksum-verifies, so this is belt-and-suspenders.)
+        if want and want != build_id:
+            h._json(409, {"error": "build_unavailable", "current_build": build_id})
+            return True
+        h.send_response(200)
+        h.send_header("Content-Type", "application/zip")
+        h.send_header("Content-Length", str(len(data)))
+        h.send_header("X-PingWatch-Build", build_id)
+        h.send_header("X-PingWatch-SHA256", sha)
+        h.send_header("Cache-Control", "no-store")
+        h._sec_headers()
+        h.end_headers()
+        h.wfile.write(data)
+        return True
+
+    # ── POST /api/agent/update-report — terminal update outcome ───
+    if path == "/api/agent/update-report" and method == "POST":
+        probe = _require_probe(h)
+        if not probe: return True
+        pid = probe["probe_id"]
+        rep = body if isinstance(body, dict) else {}
+        outcome = str(rep.get("outcome") or "")[:32]
+        from db.probes import (db_record_update_report,
+                               db_set_probe_update_state,
+                               db_set_campaign_probe_state)
+        db_record_update_report(pid, rep)
+        term = {"success": "succeeded",
+                "rolled_back": "rolled_back"}.get(outcome, outcome or "")
+        db_set_probe_update_state(
+            pid, term, target=str(rep.get("target_build") or "")[:64],
+            error="" if outcome == "success" else str(rep.get("reason") or "")[:500])
+        cid = rep.get("campaign_id")
+        if cid:
+            try:
+                db_set_campaign_probe_state(
+                    int(cid), pid,
+                    "succeeded" if outcome == "success" else "rolled_back",
+                    error=str(rep.get("reason") or ""), finished=True)
+            except (TypeError, ValueError):
+                pass
+        log_probes.info("probe %s update report: %s (%s -> %s)", pid, outcome,
+                        rep.get("from_build"), rep.get("to_build"))
+        STATE._broadcast("probe_status", {"probe_id": pid, "update_state": term})
+        h._json(200, {"ok": True})
         return True
 
     # ── POST /api/agent/tasks/<id>/result ─────────────────────────

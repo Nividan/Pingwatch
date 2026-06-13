@@ -71,8 +71,10 @@ if errorlevel 1 (
 schtasks /Query /TN "PingWatchAgent" >nul 2>&1
 if not errorlevel 1 schtasks /Delete /TN "PingWatchAgent" /F >nul
 
+rem The task runs the SUPERVISOR (stable root); it launches the agent runtime
+rem from the active releases\<build_id>\ dir and manages updates + rollback.
 schtasks /Create /TN "PingWatchAgent" /SC ONSTART /RU SYSTEM /RL HIGHEST ^
-    /TR "\"%PYW%\" \"%DIR%\agent.py\"" /F
+    /TR "\"%PYW%\" \"%DIR%\supervisor.py\"" /F
 if errorlevel 1 (
     echo Failed to create the scheduled task.
     pause

@@ -117,7 +117,10 @@ def db_set_probe_status(probe_id: str, status: str) -> bool:
 # UPDATE builder injection-proof — keys outside this set are ignored.
 _CHECKIN_FIELDS = ("agent_version", "protocol_version", "os_info",
                    "capabilities", "spool_depth", "clock_skew_s",
-                   "offline_alerted")
+                   "offline_alerted",
+                   # Managed updates (v1.4): reported running build + whether
+                   # the probe runs under the supervisor (update-capable).
+                   "build_id", "supervisor")
 
 def db_probe_checkin(probe_id: str, ip: str, fields: dict | None = None) -> bool:
     """Update last_seen/last_checkin_ip plus any whitelisted status fields."""
@@ -288,3 +291,158 @@ def db_expire_stale_tasks(max_age_s: float = 3600) -> int:
     except Exception as e:
         log.error(f"db_expire_stale_tasks failed: {type(e).__name__}: {e}")
         return 0
+
+
+# ── Managed agent updates (v1.4) ─────────────────────────────────
+# Per-probe update lifecycle, the audit log of update attempts, and the
+# campaign orchestration tables. State strings:
+#   queued → downloading → staged → restarting → verifying →
+#   succeeded | rolled_back | failed_offline
+
+def db_set_probe_update_state(probe_id, state, target=None, campaign_id=None,
+                              attempt_id=None, error=""):
+    """Update a probe's in-flight update lifecycle fields."""
+    sets   = ["update_state = ?", "update_changed_at = ?"]
+    params = [state, time.time()]
+    if target is not None:
+        sets.append("update_target = ?");      params.append(target)
+    if campaign_id is not None:
+        sets.append("update_campaign_id = ?"); params.append(campaign_id)
+    if attempt_id is not None:
+        sets.append("update_attempt_id = ?");  params.append(attempt_id)
+    sets.append("update_error = ?");           params.append(str(error or "")[:500])
+    params.append(probe_id)
+    return db_execute("main",
+        f"UPDATE probes SET {', '.join(sets)} WHERE probe_id = ?", tuple(params))
+
+
+def db_record_update_report(probe_id, rep) -> bool:
+    """Persist an agent-reported update outcome — a success one-liner or a
+    rollback with its captured log tail (capped). rep keys: outcome,
+    from_build, to_build, target_build, reason, log, campaign_id, attempt_id."""
+    return db_execute("main",
+        "INSERT INTO agent_update_reports "
+        "(probe_id, campaign_id, attempt_id, outcome, from_build, to_build, "
+        " target_build, reason, log, ts) VALUES (?,?,?,?,?,?,?,?,?,?)",
+        (probe_id, rep.get("campaign_id"),
+         str(rep.get("attempt_id") or "")[:64],
+         str(rep.get("outcome") or "")[:32],
+         str(rep.get("from_build") or "")[:64],
+         str(rep.get("to_build") or "")[:64],
+         str(rep.get("target_build") or "")[:64],
+         str(rep.get("reason") or "")[:500],
+         str(rep.get("log") or "")[:65536],
+         float(rep.get("ts") or time.time())))
+
+
+def db_list_update_reports(probe_id, limit: int = 20) -> list:
+    rows = db_query("main",
+        "SELECT id, campaign_id, attempt_id, outcome, from_build, to_build, "
+        "target_build, reason, ts FROM agent_update_reports "
+        "WHERE probe_id = ? ORDER BY ts DESC LIMIT ?", (probe_id, int(limit)))
+    return [dict(r) for r in rows]
+
+
+def db_get_update_report(report_id) -> dict | None:
+    row = db_query_one("main",
+        "SELECT * FROM agent_update_reports WHERE id = ?", (int(report_id),))
+    return dict(row) if row else None
+
+
+def db_create_campaign(name, target_build, package_sha256, canary, batch_size,
+                       halt_on_fail, window_secs, probation_secs, note,
+                       created_by):
+    """Create a rollout campaign. Returns the new id or None."""
+    now = time.time()
+    cols = ("name, target_build, package_sha256, canary, batch_size, "
+            "halt_on_fail, window_secs, probation_secs, state, note, "
+            "created_by, created_at, started_at")
+    vals = (name, target_build, package_sha256, int(canary), int(batch_size),
+            1 if halt_on_fail else 0, int(window_secs), int(probation_secs),
+            "running", note, created_by, now, now)
+    placeholders = ",".join(["?"] * 13)
+    try:
+        with db_cursor("main") as cur:
+            q = f"INSERT INTO update_campaigns ({cols}) VALUES ({placeholders})"
+            if is_pg():
+                cur.execute(q.replace("?", "%s") + " RETURNING id", vals)
+                return int(cur.fetchone()["id"])
+            cur.execute(q, vals)
+            return int(cur.lastrowid)
+    except Exception as e:
+        log.error(f"db_create_campaign failed: {type(e).__name__}: {e}")
+        return None
+
+
+def db_get_campaign(cid) -> dict | None:
+    row = db_query_one("main", "SELECT * FROM update_campaigns WHERE id = ?",
+                       (int(cid),))
+    return dict(row) if row else None
+
+
+def db_list_campaigns(limit: int = 50) -> list:
+    rows = db_query("main",
+        "SELECT * FROM update_campaigns ORDER BY created_at DESC LIMIT ?",
+        (int(limit),))
+    return [dict(r) for r in rows]
+
+
+def db_set_campaign_state(cid, state, finished: bool = False) -> bool:
+    if finished:
+        return db_execute("main",
+            "UPDATE update_campaigns SET state = ?, finished_at = ? WHERE id = ?",
+            (state, time.time(), int(cid)))
+    return db_execute("main",
+        "UPDATE update_campaigns SET state = ? WHERE id = ?", (state, int(cid)))
+
+
+def db_add_campaign_probes(cid, probe_ids) -> bool:
+    now = time.time()
+    ok = True
+    for pid in probe_ids:
+        ok = db_execute("main",
+            "INSERT INTO campaign_probes (campaign_id, probe_id, state, queued_at) "
+            "VALUES (?,?,?,?)", (int(cid), pid, "queued", now)) and ok
+    return ok
+
+
+def db_list_campaign_probes(cid) -> list:
+    rows = db_query("main",
+        "SELECT * FROM campaign_probes WHERE campaign_id = ? ORDER BY id",
+        (int(cid),))
+    return [dict(r) for r in rows]
+
+
+def db_campaign_probe_counts(cid) -> dict:
+    rows = db_query("main",
+        "SELECT state, COUNT(*) AS n FROM campaign_probes "
+        "WHERE campaign_id = ? GROUP BY state", (int(cid),))
+    return {r["state"]: int(r["n"]) for r in rows}
+
+
+def db_campaign_probes_in_state(cid, state) -> list:
+    rows = db_query("main",
+        "SELECT * FROM campaign_probes WHERE campaign_id = ? AND state = ? "
+        "ORDER BY id", (int(cid), state))
+    return [dict(r) for r in rows]
+
+
+def db_set_campaign_probe_state(cid, probe_id, state, attempt_id=None,
+                                wave=None, error=None, started: bool = False,
+                                finished: bool = False) -> bool:
+    sets   = ["state = ?"]
+    params = [state]
+    if attempt_id is not None:
+        sets.append("attempt_id = ?"); params.append(attempt_id)
+    if wave is not None:
+        sets.append("wave = ?");       params.append(int(wave))
+    if error is not None:
+        sets.append("error = ?");      params.append(str(error)[:500])
+    if started:
+        sets.append("started_at = ?"); params.append(time.time())
+    if finished:
+        sets.append("finished_at = ?"); params.append(time.time())
+    params.extend([int(cid), probe_id])
+    return db_execute("main",
+        f"UPDATE campaign_probes SET {', '.join(sets)} "
+        "WHERE campaign_id = ? AND probe_id = ?", tuple(params))

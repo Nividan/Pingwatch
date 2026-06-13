@@ -1183,6 +1183,78 @@ def db_init():
             "CREATE INDEX IF NOT EXISTS idx_agent_tasks_probe_state "
             "ON agent_tasks(probe_id, state)"
         )
+        # ── Managed agent updates (v1.4) ──────────────────────────────
+        # Per-probe update lifecycle + reported build identity + supervisor
+        # capability, an audit log of every update attempt, and the campaign
+        # orchestration tables (staged rollout / canary / auto-halt).
+        for stmt in [
+            "ALTER TABLE probes ADD COLUMN build_id TEXT DEFAULT ''",
+            "ALTER TABLE probes ADD COLUMN supervisor INTEGER DEFAULT 0",
+            "ALTER TABLE probes ADD COLUMN update_state TEXT DEFAULT ''",
+            "ALTER TABLE probes ADD COLUMN update_target TEXT DEFAULT ''",
+            "ALTER TABLE probes ADD COLUMN update_campaign_id INTEGER DEFAULT NULL",
+            "ALTER TABLE probes ADD COLUMN update_attempt_id TEXT DEFAULT ''",
+            "ALTER TABLE probes ADD COLUMN update_changed_at REAL DEFAULT 0",
+            "ALTER TABLE probes ADD COLUMN update_error TEXT DEFAULT ''",
+        ]:
+            try:
+                con.execute(stmt)
+                con.commit()
+            except Exception:
+                pass  # column already exists
+        con.execute("""
+            CREATE TABLE IF NOT EXISTS agent_update_reports (
+                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                probe_id     TEXT NOT NULL,
+                campaign_id  INTEGER DEFAULT NULL,
+                attempt_id   TEXT DEFAULT '',
+                outcome      TEXT DEFAULT '',
+                from_build   TEXT DEFAULT '',
+                to_build     TEXT DEFAULT '',
+                target_build TEXT DEFAULT '',
+                reason       TEXT DEFAULT '',
+                log          TEXT DEFAULT '',
+                ts           REAL DEFAULT 0
+            )""")
+        con.execute(
+            "CREATE INDEX IF NOT EXISTS idx_update_reports_probe "
+            "ON agent_update_reports(probe_id, ts)"
+        )
+        con.execute("""
+            CREATE TABLE IF NOT EXISTS update_campaigns (
+                id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                name          TEXT DEFAULT '',
+                target_build  TEXT NOT NULL,
+                package_sha256 TEXT DEFAULT '',
+                canary        INTEGER DEFAULT 1,
+                batch_size    INTEGER DEFAULT 5,
+                halt_on_fail  INTEGER DEFAULT 1,
+                window_secs   INTEGER DEFAULT 86400,
+                probation_secs INTEGER DEFAULT 120,
+                state         TEXT DEFAULT 'running',
+                note          TEXT DEFAULT '',
+                created_by    TEXT DEFAULT '',
+                created_at    REAL DEFAULT 0,
+                started_at    REAL DEFAULT 0,
+                finished_at   REAL DEFAULT 0
+            )""")
+        con.execute("""
+            CREATE TABLE IF NOT EXISTS campaign_probes (
+                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                campaign_id  INTEGER NOT NULL,
+                probe_id     TEXT NOT NULL,
+                state        TEXT DEFAULT 'queued',
+                attempt_id   TEXT DEFAULT '',
+                wave         INTEGER DEFAULT 0,
+                queued_at    REAL DEFAULT 0,
+                started_at   REAL DEFAULT 0,
+                finished_at  REAL DEFAULT 0,
+                error        TEXT DEFAULT ''
+            )""")
+        con.execute(
+            "CREATE INDEX IF NOT EXISTS idx_campaign_probes_cs "
+            "ON campaign_probes(campaign_id, state)"
+        )
         # probe_id assignment columns — '' = inherit (sensor→device→site→
         # central), literal 'central' = explicit pin back to central probing.
         for stmt in [

@@ -147,6 +147,12 @@ def _sweep():
     expired = db_expire_stale_tasks(_TASK_EXPIRE_S)
     if expired:
         log_probes.warning(f"agent tasks expired by watchdog: {expired}")
+    # Advance managed-update campaigns (staged rollout / canary / auto-halt).
+    try:
+        from monitoring.update_orchestrator import campaign_tick
+        campaign_tick()
+    except Exception as e:
+        log_probes.error(f"campaign tick failed: {type(e).__name__}: {e}")
 
 
 def probe_watchdog_loop():

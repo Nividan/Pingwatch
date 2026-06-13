@@ -50,9 +50,22 @@ fi
 if [[ "$SRC" != "$TARGET" ]]; then
     echo "Installing to $TARGET ..."
     mkdir -p "$TARGET"
+    # Re-install / update path: preserve the live config.json (server URL +
+    # enrollment) so a re-install never re-enrolls or loses admin edits. The
+    # fresh package carries an unused new token; agent_state.json (the live
+    # probe token) isn't in the package, so enrollment survives regardless.
+    _keep_cfg=""
+    if [[ -f "$TARGET/config.json" ]]; then
+        _keep_cfg="$(mktemp)"; cp "$TARGET/config.json" "$_keep_cfg"
+    fi
     cp -r "$SRC/." "$TARGET/"
+    if [[ -n "$_keep_cfg" ]]; then
+        cp "$_keep_cfg" "$TARGET/config.json"; rm -f "$_keep_cfg"
+        echo "Preserved existing config.json (enrollment kept)."
+    fi
 fi
 chmod 600 "$TARGET/config.json" 2>/dev/null || true
+chmod 600 "$TARGET/supervisor_state.json" 2>/dev/null || true
 
 # ── Optional sensor capabilities ──────────────────────────────────
 # The agent's core sensor types are stdlib-only. SNMP needs the snmpget
@@ -157,7 +170,7 @@ fi
 UNIT_SRC="$TARGET/pingwatch-agent.service"
 UNIT_DST="/etc/systemd/system/pingwatch-agent.service"
 sed -e "s|WorkingDirectory=.*|WorkingDirectory=$TARGET|" \
-    -e "s|ExecStart=.*|ExecStart=$(command -v python3) $TARGET/agent.py|" \
+    -e "s|ExecStart=.*|ExecStart=$(command -v python3) $TARGET/supervisor.py|" \
     "$UNIT_SRC" > "$UNIT_DST"
 systemctl daemon-reload
 systemctl enable pingwatch-agent.service

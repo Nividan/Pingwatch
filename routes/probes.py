@@ -36,6 +36,13 @@ from db.probes import (
 _RE_PROBES     = re.compile(r"^/api/probes$")
 _RE_PROBE      = re.compile(r"^/api/probes/(pr[0-9a-f]{10})$")
 _RE_PROBE_OP   = re.compile(r"^/api/probes/(pr[0-9a-f]{10})/(reenroll|revoke|package)$")
+# Managed agent updates (v1.4)
+_RE_BUILD       = re.compile(r"^/api/probes/build$")
+_RE_CAMPAIGNS   = re.compile(r"^/api/probes/campaigns$")
+_RE_CAMPAIGN    = re.compile(r"^/api/probes/campaigns/(\d+)$")
+_RE_CAMPAIGN_OP = re.compile(r"^/api/probes/campaigns/(\d+)/(abort)$")
+_RE_PROBE_UPD   = re.compile(r"^/api/probes/(pr[0-9a-f]{10})/updates$")
+_RE_UPD_REPORT  = re.compile(r"^/api/probes/updates/(\d+)$")
 
 PROBE_ENROLL_TTL_S = 7 * 86400      # one-time enrollment tokens live 7 days
 PROBE_OFFLINE_AFTER_S = 35          # last_seen older than this = disconnected
@@ -106,6 +113,13 @@ def _probe_view(p: dict, sensor_counts: dict, task_counts: dict) -> dict:
         "pending_tasks":   task_counts.get(p["probe_id"], 0),
         "created_at":      float(p.get("created_at") or 0),
         "created_by":      p.get("created_by") or "",
+        # Managed updates (v1.4)
+        "build_id":        p.get("build_id") or "",
+        "supervisor":      bool(int(p.get("supervisor") or 0)),
+        "update_state":    p.get("update_state") or "",
+        "update_target":   p.get("update_target") or "",
+        "update_changed_at": float(p.get("update_changed_at") or 0),
+        "update_error":    p.get("update_error") or "",
     }
 
 
@@ -145,6 +159,131 @@ def _sensors_under_probe(pid: str) -> list:
 
 
 def handle(h, method, path, body) -> bool:
+    # ── Managed agent updates (v1.4) ──────────────────────────────
+    # GET /api/probes/build — the server's current agent build id (target +
+    # drift detection for the UI).
+    if _RE_BUILD.match(path) and method == "GET":
+        user, _ = h._require("viewer")
+        if not user: return True
+        try:
+            from core.agent_package import compute_build_id
+            h._json(200, {"build_id": compute_build_id()})
+        except Exception as e:
+            h._error(500, "build id unavailable", e, context="probe_build")
+        return True
+
+    # GET /api/probes/campaigns — list rollout campaigns + per-state counts.
+    if _RE_CAMPAIGNS.match(path) and method == "GET":
+        user, _ = h._require("viewer")
+        if not user: return True
+        from db.probes import db_list_campaigns, db_campaign_probe_counts
+        out = []
+        for c in db_list_campaigns(100):
+            c = dict(c)
+            c["counts"] = db_campaign_probe_counts(c["id"])
+            out.append(c)
+        h._json(200, {"campaigns": out})
+        return True
+
+    # POST /api/probes/campaigns — create + launch a staged rollout (admin).
+    if _RE_CAMPAIGNS.match(path) and method == "POST":
+        user, _ = h._require("admin")
+        if not user: return True
+        probe_ids = body.get("probe_ids")
+        if not isinstance(probe_ids, list) or not probe_ids:
+            h._json(400, {"error": "probe_ids required"}); return True
+        from db.probes import (db_get_probe, db_create_campaign,
+                               db_add_campaign_probes)
+        valid, skipped = [], []
+        for pid in probe_ids[:1000]:
+            pr = db_get_probe(pid) if isinstance(pid, str) else None
+            if pr and int(pr.get("supervisor") or 0) and pr.get("status") == "enrolled":
+                valid.append(pid)
+            else:
+                skipped.append(pid)
+        if not valid:
+            h._json(400, {"error": "no supervisor-capable probes selected"})
+            return True
+        # Build the target package ONCE and pin its hash for the whole campaign.
+        try:
+            from core.agent_package import build_release_payload
+            _data, build_id, sha = build_release_payload()
+        except Exception as e:
+            h._error(500, "package build failed", e, context="campaign_build")
+            return True
+        name      = str(body.get("name") or f"Update to {build_id}")[:120]
+        canary    = max(1, min(int(body.get("canary") or 1), len(valid)))
+        batch     = max(1, min(int(body.get("batch_size") or 5), 500))
+        halt      = bool(body.get("halt_on_fail", True))
+        window    = max(300, min(int(body.get("window_secs") or 86400), 30 * 86400))
+        probation = max(30, min(int(body.get("probation_secs") or 120), 900))
+        cid = db_create_campaign(name, build_id, sha, canary, batch, halt,
+                                 window, probation,
+                                 str(body.get("note") or "")[:500], user)
+        if not cid:
+            h._json(500, {"error": "failed to create campaign"}); return True
+        db_add_campaign_probes(cid, valid)
+        db_log_audit(user, h.client_address[0], "update_campaign_create", name,
+                     f"build={build_id} probes={len(valid)} skipped={len(skipped)}")
+        log_probes.info(f"update campaign {cid} by {user}: build {build_id}, "
+                        f"{len(valid)} probe(s), {len(skipped)} skipped")
+        h._json(200, {"ok": True, "campaign_id": cid, "build_id": build_id,
+                      "selected": len(valid), "skipped": skipped})
+        return True
+
+    # GET /api/probes/campaigns/<id> — detail + per-probe states.
+    m = _RE_CAMPAIGN.match(path)
+    if m and method == "GET":
+        user, _ = h._require("viewer")
+        if not user: return True
+        from db.probes import db_get_campaign, db_list_campaign_probes
+        c = db_get_campaign(int(m.group(1)))
+        if not c:
+            h._json(404, {"error": "not found"}); return True
+        c = dict(c)
+        c["probes"] = db_list_campaign_probes(c["id"])
+        h._json(200, c)
+        return True
+
+    # POST /api/probes/campaigns/<id>/abort — stop new dispatch (admin).
+    m = _RE_CAMPAIGN_OP.match(path)
+    if m and method == "POST":
+        user, _ = h._require("admin")
+        if not user: return True
+        from db.probes import db_get_campaign, db_set_campaign_state
+        c = db_get_campaign(int(m.group(1)))
+        if not c:
+            h._json(404, {"error": "not found"}); return True
+        if c.get("state") == "running":
+            db_set_campaign_state(int(m.group(1)), "aborted")
+            db_log_audit(user, h.client_address[0], "update_campaign_abort",
+                         str(c.get("name") or ""))
+        # In-flight probes finish their own probation/rollback; we just stop
+        # dispatching further updates.
+        h._json(200, {"ok": True})
+        return True
+
+    # GET /api/probes/<id>/updates — per-probe update history.
+    m = _RE_PROBE_UPD.match(path)
+    if m and method == "GET":
+        user, _ = h._require("viewer")
+        if not user: return True
+        from db.probes import db_list_update_reports
+        h._json(200, {"updates": db_list_update_reports(m.group(1), 30)})
+        return True
+
+    # GET /api/probes/updates/<report_id> — one report incl. full captured log.
+    m = _RE_UPD_REPORT.match(path)
+    if m and method == "GET":
+        user, _ = h._require("viewer")
+        if not user: return True
+        from db.probes import db_get_update_report
+        rep = db_get_update_report(int(m.group(1)))
+        if not rep:
+            h._json(404, {"error": "not found"}); return True
+        h._json(200, rep)
+        return True
+
     # ── GET /api/probes ───────────────────────────────────────────
     if _RE_PROBES.match(path) and method == "GET":
         user, _ = h._require("viewer")

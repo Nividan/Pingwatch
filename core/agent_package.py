@@ -31,16 +31,90 @@ from core.logger import log
 _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _AGENT_DIR = os.path.join(_REPO_ROOT, "agent")
 
-# Files copied verbatim from elsewhere in the repo into the package root /
-# package core/ — the reason the agent/core shims exist at all. vmware/
-# rides along so VMware sensors only need `pip install pyvmomi` on the
-# branch host (the installers offer it).
+# Files copied verbatim from elsewhere in the repo into the package's release
+# payload — the reason the agent/core shims exist at all. vmware/ rides along
+# so VMware sensors only need `pip install pyvmomi` on the branch host (the
+# installers offer it). These are PAYLOAD: they extract into releases/<id>/.
 _EXTRA_FILES = [
     (os.path.join(_REPO_ROOT, "monitoring", "probes.py"), "probes.py"),
     (os.path.join(_REPO_ROOT, "core", "radius_auth.py"), "core/radius_auth.py"),
     (os.path.join(_REPO_ROOT, "vmware", "__init__.py"), "vmware/__init__.py"),
     (os.path.join(_REPO_ROOT, "vmware", "client.py"), "vmware/client.py"),
 ]
+
+# Managed-update layout (v1.4+): the package splits into two parts.
+#   • PAYLOAD — the swappable agent runtime (agent.py + core/ shims + the
+#     verbatim copies above). It extracts into releases/<build_id>/ and is what
+#     a remote update replaces. Identified by build_id (version + content hash).
+#   • BASE scaffolding — the stable supervisor + installers + generated config.
+#     The supervisor manages releases but is itself only changed by re-install.
+# These top-level names in agent/ are BASE, never payload:
+_BASE_ONLY = {
+    "supervisor.py", "install.sh", "install.bat",
+    "pingwatch-agent.service", "README.md", "requirements-optional.txt",
+}
+# Fixed zip timestamp so an unchanged payload always hashes/zips identically.
+_ZIP_EPOCH = (1980, 1, 1, 0, 0, 0)
+
+
+def _iter_payload_files():
+    """Yield (abs_src, arcname) for every file in the swappable agent runtime
+    (extracts into releases/<build_id>/). Excludes BASE scaffolding."""
+    for root, _dirs, files in os.walk(_AGENT_DIR):
+        for name in files:
+            if name.endswith((".pyc", ".pyo")):
+                continue
+            full = os.path.join(root, name)
+            rel = os.path.relpath(full, _AGENT_DIR).replace(os.sep, "/")
+            top = rel.split("/", 1)[0]
+            if rel in _BASE_ONLY or top in _BASE_ONLY:
+                continue
+            yield full, rel
+    for src, arc in _EXTRA_FILES:
+        yield src, arc
+
+
+def _payload_files_sorted():
+    # Deduplicate by arcname (a verbatim copy could shadow a walked file) and
+    # sort so the content hash and zip layout are deterministic.
+    by_arc = {}
+    for full, arc in _iter_payload_files():
+        by_arc[arc] = full
+    return sorted(by_arc.items(), key=lambda kv: kv[0])
+
+
+def compute_build_id() -> str:
+    """Stable identity of the current agent payload: APP_VERSION + a short
+    content hash over the sorted payload files. Changes whenever any payload
+    file changes — even within the same version — so drift and update targets
+    are precise, not just version-string deep."""
+    import core.app_state as app_state
+    h = hashlib.sha256()
+    for arc, full in _payload_files_sorted():
+        h.update(arc.encode("utf-8") + b"\0")
+        with open(full, "rb") as f:
+            h.update(f.read())
+        h.update(b"\0")
+    return f"{app_state.APP_VERSION}+{h.hexdigest()[:12]}"
+
+
+def build_release_payload() -> tuple:
+    """Zip of just the agent runtime payload — extracts into releases/<id>/.
+    Served by GET /api/agent/package for remote (managed) updates.
+
+    Returns (zip_bytes, build_id, package_sha256). package_sha256 is the hash
+    of the exact bytes returned; a campaign pins it and the agent verifies the
+    download against it before staging."""
+    build_id = compute_build_id()
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        for arc, full in _payload_files_sorted():
+            zi = zipfile.ZipInfo(arc, date_time=_ZIP_EPOCH)
+            zi.compress_type = zipfile.ZIP_DEFLATED
+            with open(full, "rb") as f:
+                zf.writestr(zi, f.read())
+    data = buf.getvalue()
+    return data, build_id, hashlib.sha256(data).hexdigest()
 
 
 def _server_cert_fingerprint() -> str:
@@ -168,25 +242,41 @@ def build_agent_package(probe: dict, enrollment_token: str,
         "spool_max":          50000,
         "protocol_version":   1,
     }
+    build_id = compute_build_id()
     buf = io.BytesIO()
     prefix = "pingwatch-agent/"
+    rel_prefix = f"{prefix}releases/{build_id}/"
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
-        # Everything under agent/ (shims, installers, README, agent.py)
+        # agent/ contents: BASE scaffolding (supervisor, installers, service,
+        # README, reqs) stays at the package root; the agent runtime (payload)
+        # goes under releases/<build_id>/ so the supervisor can swap it.
         for root, _dirs, files in os.walk(_AGENT_DIR):
             for name in files:
-                if name.endswith((".pyc", ".pyo")) or name == "__pycache__":
+                if name.endswith((".pyc", ".pyo")):
                     continue
                 full = os.path.join(root, name)
                 rel = os.path.relpath(full, _AGENT_DIR).replace(os.sep, "/")
-                zf.write(full, prefix + rel)
-        # Canonical copies (probes.py, radius_auth.py)
+                top = rel.split("/", 1)[0]
+                if rel in _BASE_ONLY or top in _BASE_ONLY:
+                    zf.write(full, prefix + rel)
+                else:
+                    zf.write(full, rel_prefix + rel)
+        # Canonical copies (probes.py, radius_auth.py, vmware/) — payload.
         for src, arc in _EXTRA_FILES:
-            zf.write(src, prefix + arc)
+            zf.write(src, rel_prefix + arc)
+        # Marker so the running agent can report exactly which build it is.
+        zf.writestr(rel_prefix + "BUILD_ID", build_id + "\n")
         # CA bundle — server verification AND outbound sensor TLS (the
         # agent's ssl_trust shim reads the same file, so HTTPS/TLS sensors
         # probed from the branch trust internal CAs exactly like central).
+        # Base dir — shared across releases.
         if ca_bundle:
             zf.writestr(prefix + "ca.pem", ca_bundle)
         # Generated config — the one-time token lives only in this download
         zf.writestr(prefix + "config.json", json.dumps(cfg, indent=2) + "\n")
+        # Seed supervisor state: this release is active, nothing to roll back to.
+        sup_state = {"active_release": build_id, "previous_release": None,
+                     "probation": None}
+        zf.writestr(prefix + "supervisor_state.json",
+                    json.dumps(sup_state, indent=2) + "\n")
     return buf.getvalue()
