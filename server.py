@@ -1145,6 +1145,12 @@ def main():
     # keeps total shutdown inside systemd's default 90 s kill window even
     # when a probe is wedged at its hard cap.
     log.info("Shutting down...")
+    # Snapshot each sensor's run/pause intent BEFORE stop_all flips running=False
+    # on every sensor (a clean probe halt, NOT a user pause). The shutdown save
+    # below restores this so a running sensor isn't persisted as paused and left
+    # stopped on the next boot.
+    _run_intent = {(s.device_id, s.sensor_id): s.running
+                   for d in STATE.devices.values() for s in d.sensors.values()}
     # resolve_events=False: restarting the monitor mid-outage must not close
     # open incidents (downtime continuity, ack state, boot re-hydration).
     STATE.stop_all(resolve_events=False)
@@ -1183,6 +1189,13 @@ def main():
     # instead of dispatching alerts and writing to the closing pool — the
     # source of the "PostgreSQL pool is closed" / false "missing template" spam.
     STATE._shutting_down = True
+    # Restore pre-shutdown run/pause intent so db_save persists what the user had
+    # running — not the transient stop_all state (process is exiting; safe).
+    for _d in STATE.devices.values():
+        for _s in _d.sensors.values():
+            _ri = _run_intent.get((_s.device_id, _s.sensor_id))
+            if _ri is not None:
+                _s.running = _ri
     db_save(STATE)
     log.info("Configuration saved.")
     # Flush the in-memory sample buffer BEFORE draining the writer queues —
