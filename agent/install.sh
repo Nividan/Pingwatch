@@ -50,19 +50,14 @@ fi
 if [[ "$SRC" != "$TARGET" ]]; then
     echo "Installing to $TARGET ..."
     mkdir -p "$TARGET"
-    # Re-install / update path: preserve the live config.json (server URL +
-    # enrollment) so a re-install never re-enrolls or loses admin edits. The
-    # fresh package carries an unused new token; agent_state.json (the live
-    # probe token) isn't in the package, so enrollment survives regardless.
-    _keep_cfg=""
-    if [[ -f "$TARGET/config.json" ]]; then
-        _keep_cfg="$(mktemp)"; cp "$TARGET/config.json" "$_keep_cfg"
-    fi
+    # Overlay the package. The package's config.json is AUTHORITATIVE: it holds
+    # the correct server URL + a fresh one-time enrollment token, which the
+    # agent uses if its saved credential was revoked or re-enrolled. The live
+    # probe credential lives in agent_state.json — NOT shipped in the package —
+    # so it's left untouched and an already-enrolled probe keeps its identity
+    # across a plain update (no re-enroll, no duplicate). spool.jsonl / agent.log
+    # are likewise preserved by not being in the package.
     cp -r "$SRC/." "$TARGET/"
-    if [[ -n "$_keep_cfg" ]]; then
-        cp "$_keep_cfg" "$TARGET/config.json"; rm -f "$_keep_cfg"
-        echo "Preserved existing config.json (enrollment kept)."
-    fi
 fi
 chmod 600 "$TARGET/config.json" 2>/dev/null || true
 chmod 600 "$TARGET/supervisor_state.json" 2>/dev/null || true

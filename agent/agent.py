@@ -51,13 +51,6 @@ from logging.handlers import RotatingFileHandler
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, BASE_DIR)   # probes.py + core/ shims live next to us
 
-import probes  # noqa: E402  (verbatim copy of the server's monitoring/probes.py)
-
-# Keep AGENT_VERSION in lock-step with the server's APP_VERSION at release
-# time — the Probes page flags agents whose version differs.
-AGENT_VERSION = "1.4"
-PROTOCOL_VERSION = 1
-
 
 def _arg(name):
     """Read --name VALUE or --name=VALUE from argv (the supervisor passes these)."""
@@ -71,12 +64,21 @@ def _arg(name):
 
 
 # Managed-update model (v1.4+): the supervisor runs agent.py from a swappable
-# releases/<build_id>/ dir and passes --data-dir (the persistent base where
-# config/state/spool/logs + supervisor IPC files live). A standalone / legacy
-# flat install passes nothing, so DATA_DIR defaults to BASE_DIR and the agent
-# behaves exactly as before — backward compatible.
+# releases/<build_id>/ dir and passes --data-dir — the persistent base dir
+# where config/state/spool/logs + the bundled ca.pem live. A standalone /
+# legacy flat install passes nothing, so DATA_DIR defaults to BASE_DIR
+# (backward compatible). Exported BEFORE importing probes so the core/ shims
+# (ssl_trust) resolve ca.pem from the base dir, not the swappable release dir.
 DATA_DIR = os.path.abspath(_arg("--data-dir")
                            or os.environ.get("PW_AGENT_DATA_DIR") or BASE_DIR)
+os.environ["PW_AGENT_DATA_DIR"] = DATA_DIR
+
+import probes  # noqa: E402  (verbatim copy of the server's monitoring/probes.py)
+
+# Keep AGENT_VERSION in lock-step with the server's APP_VERSION at release
+# time — the Probes page flags agents whose version differs.
+AGENT_VERSION = "1.4"
+PROTOCOL_VERSION = 1
 
 
 def _resolve_build_id():
@@ -189,7 +191,9 @@ class ServerClient:
         # verification still applies with a ca file.
         self.ca_file = (cfg.get("server_ca_file") or "").strip()
         if self.ca_file and not os.path.isabs(self.ca_file):
-            self.ca_file = os.path.join(BASE_DIR, self.ca_file)
+            # ca.pem lives in the persistent base dir (alongside config.json),
+            # NOT in the swappable release dir the script runs from.
+            self.ca_file = os.path.join(DATA_DIR, self.ca_file)
         if self.ca_file and not os.path.exists(self.ca_file):
             log.error("server_ca_file not found: %s — falling back to system CAs",
                       self.ca_file)
