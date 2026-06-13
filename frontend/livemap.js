@@ -107,15 +107,16 @@ function renderScopeBar() {
   const focus = LM.currentRoute.view === 'site' ? LM.currentRoute.site : 'NOC';
   $('scope-name').textContent = total + ' SITES · ' + (focus || 'NOC');
 
-  // Pills: up/warn/down/devices (totals)
-  let up = 0, warn = 0, down = 0, devs = 0;
+  // Pills: up/warn/down/pause/devices (totals)
+  let up = 0, warn = 0, down = 0, pause = 0, devs = 0;
   for (const s of LM.sites) {
-    up += s.up; warn += s.warn; down += s.down; devs += s.devices;
+    up += s.up; warn += s.warn; down += s.down; pause += (s.pause || 0); devs += s.devices;
   }
   $('scope-counts').innerHTML =
     '<span class="pill up"><span class="pill-dot" style="background:var(--up)"></span>' + up + ' UP</span>' +
     '<span class="pill warn"><span class="pill-dot" style="background:var(--warn)"></span>' + warn + ' WARN</span>' +
     '<span class="pill down"><span class="pill-dot" style="background:var(--down)"></span>' + down + ' DOWN</span>' +
+    '<span class="pill pause"><span class="pill-dot" style="background:var(--pause)"></span>' + pause + ' PAUSE</span>' +
     '<span class="pill dev"><span class="pill-dot" style="background:var(--accent)"></span>' + devs + ' DEVICES</span>';
 }
 
@@ -575,6 +576,7 @@ function _clusterCard(c, opts) {
              '<span class="cf-up">●' + c.up + '</span>' +
              '<span class="cf-warn">●' + c.warn + '</span>' +
              '<span class="cf-down">●' + c.down + '</span>' +
+             (c.pause ? '<span class="cf-pause">●' + c.pause + '</span>' : '') +
              '<span class="cluster-expand">▸ EXPAND</span>' +
            '</div>' +
          '</div>';
@@ -1812,7 +1814,7 @@ function openDevicePanel(did) {
   const idx = _buildTreeIndex(tree);
   const d = idx.devs[did];
   if (!d) return;
-  const st = d.status === 'up' ? 'up' : (d.status === 'warn' ? 'warn' : (d.status === 'down' ? 'down' : 'unknown'));
+  const st = d.status === 'up' ? 'up' : (d.status === 'warn' ? 'warn' : (d.status === 'down' ? 'down' : (d.status === 'pause' ? 'pause' : 'unknown')));
 
   // Resolve parent refs from the device card / cell when available
   const devCard = [].concat(
@@ -1886,7 +1888,7 @@ function openDevicePanel(did) {
   _devPanelDid    = did;
   _devPanelShowAll = false;
 
-  api('GET', '/api/devices/' + encodeURIComponent(did)).then(function(devDict) {
+  api('GET', '/api/device/' + encodeURIComponent(did)).then(function(devDict) {
     if (myToken !== _devPanelToken) return;
     const slot = document.getElementById('lm-sp-sensors');
     if (!slot) return;

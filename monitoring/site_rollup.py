@@ -145,16 +145,17 @@ def site_summary_list() -> list:
 
     # Bucket devices by site
     by_site = defaultdict(lambda: {"devices": 0, "up": 0, "warn": 0, "down": 0,
-                                   "alerts": 0, "_has_devices": False})
+                                   "pause": 0, "alerts": 0, "_has_devices": False})
     for d in devices:
         name = _site_of(d)
         bucket = by_site[name]
         bucket["devices"] += 1
         bucket["_has_devices"] = True
         st = _device_status(d)
-        if   st == "up":   bucket["up"]   += 1
-        elif st == "warn": bucket["warn"] += 1
-        elif st == "down": bucket["down"] += 1
+        if   st == "up":    bucket["up"]    += 1
+        elif st == "warn":  bucket["warn"]  += 1
+        elif st == "down":  bucket["down"]  += 1
+        elif st == "pause": bucket["pause"] += 1
         bucket["alerts"] += alerts_by_did.get(d.device_id, 0)
 
     # Also include metadata-only sites (rows in `sites` with no devices today)
@@ -179,6 +180,7 @@ def site_summary_list() -> list:
             "up":           b["up"],
             "warn":         b["warn"],
             "down":         b["down"],
+            "pause":        b["pause"],
             "alerts":       b["alerts"],
         })
     return result
@@ -327,7 +329,7 @@ def noc_summary() -> dict:
     sites = site_summary_list()
 
     s_up = s_warn = s_down = 0
-    d_total = d_up = d_warn = d_down = 0
+    d_total = d_up = d_warn = d_down = d_pause = 0
     by_kind = defaultdict(lambda: {"total": 0, "up": 0, "warn": 0, "down": 0, "devices": 0})
     for s in sites:
         # Worst-status rollup for this site
@@ -338,6 +340,7 @@ def noc_summary() -> dict:
         d_up    += s["up"]
         d_warn  += s["warn"]
         d_down  += s["down"]
+        d_pause += s.get("pause", 0)
         k = s["kind"] or "lab"
         bk = by_kind[k]
         bk["total"]   += 1
@@ -357,7 +360,7 @@ def noc_summary() -> dict:
 
     return {
         "sites":     {"up": s_up, "warn": s_warn, "down": s_down, "total": len(sites)},
-        "devices":   {"up": d_up, "warn": d_warn, "down": d_down, "total": d_total},
+        "devices":   {"up": d_up, "warn": d_warn, "down": d_down, "pause": d_pause, "total": d_total},
         "alerts":    {"active": alerts["active"], "down": alerts["down"],
                       "warn":   alerts["warn"],   "ack":  alerts["ack"]},
         "uptime_24h":    _uptime_24h(),

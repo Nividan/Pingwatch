@@ -243,7 +243,7 @@ def _cluster_card(name: str, devs: list, alerts_by_did: dict,
     members disagree (mixed parents), all listed parents are included and
     the frontend draws a line per parent — visually the cluster fans out.
     """
-    up = warn = down = 0
+    up = warn = down = pause = 0
     cells = []
     alerts = 0
     parents = []
@@ -252,9 +252,10 @@ def _cluster_card(name: str, devs: list, alerts_by_did: dict,
     member_parent_sigs = set()
     for d in devs:
         st = _device_status(d)
-        if   st == "up":   up   += 1
-        elif st == "warn": warn += 1
-        elif st == "down": down += 1
+        if   st == "up":    up    += 1
+        elif st == "warn":  warn  += 1
+        elif st == "down":  down  += 1
+        elif st == "pause": pause += 1
         d_parents = _resolve_parents(d, group_parents or {})
         cells.append({
             "did":               d.device_id,
@@ -284,6 +285,7 @@ def _cluster_card(name: str, devs: list, alerts_by_did: dict,
         "up":                up,
         "warn":              warn,
         "down":              down,
+        "pause":             pause,
         "alerts":            alerts,
         "cells":             cells,
         "parent_device_ids": parents,
