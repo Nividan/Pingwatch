@@ -65,6 +65,17 @@ class _ProbeTimeout(ConnectionError):
     the 25-min TTL as a final backstop)."""
 
 
+class _ReconnectInProgress(Exception):
+    """Raised by _get_session(nonblocking_reconnect=True) when another thread is
+    already rebuilding the shared session for this vCenter.
+
+    The hot probe path passes nonblocking_reconnect=True so a sibling probe does
+    NOT queue behind the in-flight reconnect — blocking there is what synchronised
+    every sensor on one vCenter into a single 60s timeout herd. The caller serves
+    a last-good cached sample for this cycle instead. NOT a ConnectionError, so it
+    never trips the session-invalidation path."""
+
+
 def _run_with_timeout(label: str, fn, timeout_s: float):
     """Run `fn()` in a daemon thread and raise _ProbeTimeout if it doesn't
     finish within `timeout_s` seconds.
@@ -263,7 +274,8 @@ def _healthy_cached(entry, now):
         return None
 
 
-def _get_session(host, user, password, port=443, verify_ssl=False):
+def _get_session(host, user, password, port=443, verify_ssl=False,
+                 nonblocking_reconnect=False):
     """Return a cached or fresh ServiceInstance.
 
     Concurrency model — single-flight per (host, user):
@@ -271,9 +283,13 @@ def _get_session(host, user, password, port=443, verify_ssl=False):
         the health check is a network round-trip, and serialising it would let
         one slow vCenter stall probes to every other vCenter.
       * When the session is expired or unhealthy, exactly ONE thread rebuilds
-        it under a per-key connect lock while every sibling probe waits and
-        reuses the result — no login storm, no Disconnect() of an in-flight
-        session (the NotAuthenticated cascade).
+        it under a per-key connect lock. With nonblocking_reconnect=False (admin
+        / discovery callers) siblings wait and reuse the result. With
+        nonblocking_reconnect=True (the hot probe path) a sibling that finds the
+        reconnect already in flight raises _ReconnectInProgress immediately
+        instead of waiting — blocking there synchronised every sensor on one
+        vCenter into a single 60s timeout herd. Either way: no login storm, no
+        Disconnect() of an in-flight session (the NotAuthenticated cascade).
 
     Every ServiceInstance we stop using is Disconnect()-ed (deferred by a grace
     delay — see _disconnect_later) — pyVmomi holds an HTTPS connection AND a
@@ -293,7 +309,12 @@ def _get_session(host, user, password, port=443, verify_ssl=False):
         return si
 
     # ── Slow path: (re)connect under the per-key lock (single-flight) ──
-    with _connect_lock_for(key):
+    lk = _connect_lock_for(key)
+    if not lk.acquire(blocking=not nonblocking_reconnect):
+        # nonblocking_reconnect=True and another probe already holds the
+        # reconnect for this vCenter. Don't queue behind it — that's the herd.
+        raise _ReconnectInProgress(f"{host}: session reconnect already in progress")
+    try:
         # Another thread may have rebuilt the session while we waited on the
         # lock — re-check before logging in again.
         with _sessions_lock:
@@ -335,6 +356,8 @@ def _get_session(host, user, password, port=443, verify_ssl=False):
         with _sessions_lock:
             _sessions[key] = (si, time.monotonic() + _SESSION_TTL)
         return si
+    finally:
+        lk.release()
 
 
 def _warm_session(si) -> None:
@@ -728,6 +751,44 @@ def vmware_discover_datastores(host, user, password, port=443, verify_ssl=False)
 _metric_cache = {}          # (host, vm_id) → {"ts": monotonic, "data": {key: value}}
 _metric_cache_lock = threading.Lock()
 _METRIC_CACHE_TTL = 20      # seconds (matches vSphere realtime interval)
+# How long a last-good perf sample may be served while a transient slow window
+# or in-flight reconnect clears. Beyond this, a real outage is reported DOWN.
+_STALE_SERVE_MAX_S = 180
+
+
+def _resolve_mdef(metric):
+    """Return the metric definition for a metric key (VM / host / datastore)."""
+    if metric.startswith("dstore_"):
+        return _DSTORE_METRIC_BY_KEY.get(metric)
+    if metric.startswith("host_"):
+        return _HOST_METRIC_BY_KEY.get(metric)
+    return _METRIC_BY_KEY.get(metric)
+
+
+def _serve_last_good(cache_key, metric, reason):
+    """Return an ok=True probe result from the last cached perf sample if it is
+    recent enough (< _STALE_SERVE_MAX_S), else None.
+
+    Used on a transient vCenter timeout / in-flight reconnect so a momentary slow
+    window doesn't flap every sensor on the vCenter DOWN together. The detail
+    surfaces the staleness so it's never silently masked. Datastore metrics are
+    not cached, so they correctly fall through to a real failure."""
+    with _metric_cache_lock:
+        cached = _metric_cache.get(cache_key)
+    if not cached:
+        return None
+    age = time.monotonic() - cached["ts"]
+    if age > _STALE_SERVE_MAX_S:
+        return None
+    val = cached["data"].get(metric)
+    if val is None:
+        return None
+    mdef = _resolve_mdef(metric)
+    label = mdef["l"] if mdef else metric
+    unit  = mdef["unit"] if mdef else ""
+    return {"ok": True, "ms": float(val),
+            "detail": f"{label}: {val} {unit} (cached {int(age)}s ago — {reason})",
+            "value": str(val)}
 
 
 def _build_counter_map(perf_manager):
@@ -827,12 +888,24 @@ def vmware_probe(host, user, password, vm_id, metric,
                                        port, verify_ssl, timeout, disk_path),
             _cap,
         )
+    except _ReconnectInProgress:
+        # A sibling probe is rebuilding the shared session right now. Serve this
+        # metric's last-good sample this cycle instead of blocking behind the
+        # reconnect (which is what synchronised a whole vCenter's sensors into
+        # one 60s timeout herd). No stale sample yet (cold) → soft fail.
+        stale = _serve_last_good((host, vm_id), metric, "session reconnecting")
+        if stale is not None:
+            return stale
+        return {"ok": False, "ms": None, "detail": "vCenter session reconnecting"}
     except _ProbeTimeout as e:
-        # Slow vCenter, NOT a dead session — fail only this probe and KEEP the
-        # shared (host, user) session, so sibling sensors on the same vCenter
-        # don't all reconnect into a cold catalog (the 'metric not available'
-        # cascade). A truly dead session is caught by the health check on the
-        # next _get_session, or the 25-min TTL as a backstop.
+        # Slow vCenter, NOT a dead session — KEEP the shared (host, user) session
+        # so sibling sensors don't all reconnect into a cold catalog. Serve the
+        # last-good sample (bounded staleness) so a momentary slow window doesn't
+        # flap the sensor DOWN; only a sustained outage (> _STALE_SERVE_MAX_S)
+        # falls through to a real DOWN.
+        stale = _serve_last_good((host, vm_id), metric, "vCenter slow")
+        if stale is not None:
+            return stale
         return {"ok": False, "ms": None, "detail": str(e)}
     except ConnectionError as e:
         # Real connection/auth drop mid-probe — invalidate so the next probe
@@ -883,8 +956,12 @@ def _vmware_probe_impl(host, user, password, vm_id, metric,
     # ── Cache miss — query vCenter ────────────────────────────────────
     _, _, vim, _ = _require_pyvmomi()
 
+    # nonblocking_reconnect=True: if another probe is already rebuilding this
+    # vCenter's session, raise _ReconnectInProgress (handled in vmware_probe →
+    # serve last-good) rather than queueing behind it and timing out as a herd.
     try:
-        si = _get_session(host, user, password, port, verify_ssl)
+        si = _get_session(host, user, password, port, verify_ssl,
+                          nonblocking_reconnect=True)
     except PermissionError as e:
         _invalidate_session(host, user)
         return {"ok": False, "ms": None, "detail": str(e)}

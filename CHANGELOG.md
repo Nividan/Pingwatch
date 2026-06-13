@@ -32,6 +32,16 @@ After a restart the first probe cycle used to spray DOWN events that auto-resolv
 - **Startup grace window** (`startup_grace_s` setting, default 60s, 0=off): parks new down/threshold events during settling — probes run, samples record, tiles go red live, but the event row + alerts emit only if the sensor is *still* failing when the window closes, stamped with the **true transition time**; in-window recoveries vanish without a trace, and recoveries/auto-resolves always process immediately. The window no longer closes on a blind timer — it stays open until the **first probe cycle completes** (every central sensor has reported once), bounded by a hard cap, so slow first probes get parked instead of slipping out just after a fixed 60s ([core/state.py](core/state.py) `begin_startup_grace`/`_maybe_flush_grace`/`_flush_grace`).
 - **Watchdog boot holdoff**: the probe watchdog withholds `probe_offline` verdicts until agents have had time to reconnect — right after boot every probe's persisted `last_seen` is stale by definition.
 
+### vCenter sensors no longer flap as a herd
+
+A device measuring vCenter could flap an entire host/VM's metrics DOWN together — a synchronized batch of *"timed out after 60s — vCenter is slow or overloaded"* events, all recovering ~50s later. Root cause: every `host_*`/VM sensor on a vCenter shares one session, and when that session needed a reconnect/revalidation during a momentary vCenter slow window, **every sibling sensor serialized behind the single-flight reconnect** and tripped the 60s probe cap together. (The 60s cap, added the day before, is what made the slowness visible as clean DOWN events instead of silent hangs.)
+
+Two changes in [vmware/client.py](vmware/client.py) break the herd:
+- **Non-blocking reconnect** — a probe that finds a reconnect already in flight for its vCenter no longer queues behind it; it raises `_ReconnectInProgress` and serves its last-good sample for that cycle. Exactly one thread rebuilds the session; the rest neither pile on nor time out.
+- **Serve last-good on transient timeout** — on a `_ProbeTimeout` the probe returns the last cached sample (bounded to `_STALE_SERVE_MAX_S` = 180s, with the staleness shown in the detail) rather than flapping DOWN. Only a sustained outage beyond that window reports a real DOWN.
+
+Net: a momentary vCenter slow window costs one reconnect plus a few seconds of slightly-stale samples, not a whole-device DOWN/RECOVERED storm. Distributed-probe agents pick this up by re-downloading their agent package (`vmware/client.py` ships in it verbatim).
+
 ### Safe deploys & crash-loop protection
 
 A bad `git pull` (a syntax error in a pulled file) followed by a restart used to send the systemd unit into an **unbounded crash loop**: `Restart=on-failure` with `RestartSec=5` and — fatally — `StartLimitIntervalSec=0` (the start-rate limiter *disabled*) meant it relaunched every 5 seconds forever, each launch spraying a full startup banner into the logs until someone noticed. Three layers now prevent this:
