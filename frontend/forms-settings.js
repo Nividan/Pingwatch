@@ -1255,6 +1255,10 @@ function _buildSettingsTab_sensors(sr) {
           <div class="fr"><label class="fl">Recover after <span class="fh" style="font-weight:400">(consecutive OKs before UP)</span></label>
             <input type="number" id="st-snr-ra" value="${sr.snr_recover_after||1}" min="1" max="20" style="max-width:100px"/></div>
         </div>
+        <div style="margin-top:12px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+          <button class="btn-s rbac-admin" onclick="_applyGlobalToExisting()" style="font-size:12px;padding:6px 14px">Apply to all existing sensors…</button>
+          <span class="fh" style="flex:1;min-width:240px">Pushes Interval, Timeout, Fail-after &amp; Recover-after onto <b>every existing sensor</b> of every type — the only way to change Fail/Recover after creation. Takes effect within one cycle; no restart.</span>
+        </div>
       </div>
       <div id="sdrTabBody"><div style="color:var(--text3);font-size:12px;padding:8px">Loading…</div></div>
       <div style="margin-top:16px;padding-top:16px;border-top:1px solid var(--border)">
@@ -2392,6 +2396,57 @@ function _sdrToggle(btn){
   btn.textContent = open ? '▾' : '▴';
 }
 
+// Push a single type's row Interval/Timeout onto every existing sensor of that
+// type. Reads the inline row inputs (the per-type defaults the user just edited).
+async function _sdrApplyExisting(stype, cnt){
+  const ivEl = document.getElementById(`sdr_${stype}_interval`);
+  const toEl = document.getElementById(`sdr_${stype}_timeout`);
+  const iv = ivEl ? parseInt(ivEl.value, 10) : NaN;
+  const to = toEl ? parseInt(toEl.value, 10) : NaN;
+  if(!(iv >= 1 && iv <= 3600)){ toast('Enter a valid interval (1–3600s) first','err'); return; }
+  if(!cnt){ toast('No existing sensors of this type','err'); return; }
+  const meta = (typeof _SDR_META!=='undefined' && _SDR_META[stype]) || {label: stype};
+  const lbl = esc(meta.label || stype);
+  const toLine = (to >= 1) ? ` · timeout <b>${to}s</b>` : '';
+  const msg = `Apply interval <b>${iv}s</b>${toLine} to all <b>${cnt}</b> existing ${lbl} sensor(s)?<br><br>
+    <span style="color:var(--text3);font-size:12px">Warn/Crit thresholds stay per-sensor. Takes effect within one cycle — no restart, no probe storm. This does <b>not</b> change the new-sensor default (use “Save Sensor Defaults” for that).</span>`;
+  _pwConfirm(msg, async () => {
+    try{
+      const b = { stype, interval: iv };
+      if(to >= 1) b.timeout = to;
+      const r = await api('POST','/api/sensors/apply-interval', b);
+      if(r && r.error){ toast(r.error,'err'); return; }
+      toast(`Updated ${r.updated} ${lbl} sensor(s)`,'ok');
+    }catch(e){ toast('Apply failed','err'); }
+  }, 'Apply', {danger:false, html:true});
+}
+
+// Push the four Global Defaults (Interval, Timeout, Fail-after, Recover-after)
+// onto every existing sensor of every type. Fail/Recover have no per-sensor
+// editor, so this is the only way to change them after a sensor is created.
+async function _applyGlobalToExisting(){
+  const gi = id => { const e=document.getElementById(id); return e ? parseInt(e.value,10) : NaN; };
+  const iv = gi('st-snr-iv'), to = gi('st-snr-tmo'), fa = gi('st-snr-fa'), ra = gi('st-snr-ra');
+  if(!(iv >= 1 && iv <= 3600)){ toast('Enter a valid Interval (1–3600s)','err'); return; }
+  if(!(to >= 1)){ toast('Enter a valid Timeout','err'); return; }
+  if(!(fa >= 1 && fa <= 20)){ toast('Enter a valid Fail-after (1–20)','err'); return; }
+  if(!(ra >= 1 && ra <= 20)){ toast('Enter a valid Recover-after (1–20)','err'); return; }
+  const total = window._sdrTotalCount || 0;
+  const who = total ? `<b>${total}</b> existing sensor(s)` : 'all existing sensors';
+  const msg = `Apply to ${who} of <b>every</b> type?<br><br>
+    <span style="color:var(--text2);font-size:12px">Interval <b>${iv}s</b> · Timeout <b>${to}s</b> · Fail-after <b>${fa}</b> · Recover-after <b>${ra}</b></span><br><br>
+    <span style="color:var(--warn);font-size:12px">⚠ This overwrites the Interval/Timeout of <b>every</b> sensor, including vmware. To keep a type on its own cadence (e.g. vmware at 60s), set the per-type Interval below and use that row's ⤓ button instead.</span><br>
+    <span style="color:var(--text3);font-size:12px">Timeout is clamped to ≤ each sensor's interval. Warn/Crit stay per-sensor. Takes effect within one cycle — no restart, no probe storm.</span>`;
+  _pwConfirm(msg, async () => {
+    try{
+      const r = await api('POST','/api/sensors/apply-interval',
+                          { interval: iv, timeout: to, fail_after: fa, recover_after: ra });
+      if(r && r.error){ toast(r.error,'err'); return; }
+      toast(`Updated ${r.updated} sensor(s)`,'ok');
+    }catch(e){ toast('Apply failed','err'); }
+  }, 'Apply to all', {danger:false, html:true});
+}
+
 async function loadSensorsDefaultsTab(){
   const el = document.getElementById('sdrTabBody');
   if(!el) return;
@@ -2401,6 +2456,8 @@ async function loadSensorsDefaultsTab(){
     for(const s of (dev.sensors||[]))
       typeCounts[s.stype] = (typeCounts[s.stype]||0) + 1;
   const types = Object.keys(typeCounts).sort();
+  window._sdrTypeCounts = typeCounts;
+  window._sdrTotalCount = Object.values(typeCounts).reduce((a,b)=>a+b,0);
   if(!types.length){ el.innerHTML='<div style="color:var(--text3);font-size:12px;padding:8px">No sensors found.</div>'; return; }
   const td = window._snrTypeDefaults || {};
   const rows = types.map(t => {
@@ -2420,7 +2477,7 @@ async function loadSensorsDefaultsTab(){
       <td><div class="sdr-num-cell"><input type="number" id="sdr_${t}_timeout" value="${to}" min="1" max="60"/><span class="sdr-unit">s</span></div></td>
       <td><div class="sdr-num-cell"><input type="number" id="sdr_${t}_warn_ms" value="${wm}" min="1" placeholder="—"/><span class="sdr-unit">${warnUnit}</span></div></td>
       <td><div class="sdr-num-cell"><input type="number" id="sdr_${t}_crit_ms" value="${cm}" min="1" placeholder="—"/><span class="sdr-unit">${warnUnit}</span></div></td>
-      <td style="text-align:center">${extra ? `<button class="sdr-expand-btn" onclick="_sdrToggle(this)" title="Type-specific settings">▾</button>` : ''}</td>
+      <td style="text-align:center;white-space:nowrap"><button class="sdr-apply-btn rbac-admin" onclick="_sdrApplyExisting('${t}',${cnt})" title="Apply this row's Interval/Timeout to all ${cnt} existing ${esc(m.label)} sensor(s) — Warn/Crit unchanged">⤓</button>${extra ? `<button class="sdr-expand-btn" onclick="_sdrToggle(this)" title="Type-specific settings">▾</button>` : ''}</td>
     </tr>
     ${extra ? `<tr class="sdr-extra-row" data-for="${t}" style="display:none"><td colspan="7"><div class="sdr-extra">${extra}</div></td></tr>` : ''}`;
   }).join('');

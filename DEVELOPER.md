@@ -512,7 +512,7 @@ PDF/CSV report engine. All modules are optional at import time — missing Weasy
 | `groups.py` | `/api/groups`, `/api/group`, `/api/group/{id}`, `/api/group/{id}/members`, `/api/user/group/import_ldap` |
 | `devices.py` | `/api/devices`, `/api/devices/bulk`, `/api/device`, `/api/devices/{did}`, `/api/sensors/{did}/*`, `/api/sensors/{did}/{sid}/anomaly/reset`, `/api/device/{did}/scan` |
 | `monitoring.py` | `/events` (SSE), `/api/flaps`, `/api/traps`, `/api/events/summary`, `/api/snmp/*`, `/api/vmware/metrics`, `/api/vmware/vms` |
-| `settings.py` | `/api/settings`, `/api/server_info`, `/api/settings/smtp_test`, `/api/settings/syslog_test`, `/api/server/restart`, `/api/server/shutdown`, `/api/dashboards`, `/api/dashboards/{id}`, `/api/dashboards/reorder`, `/api/db/stats`, `/api/anomaly/bulk-enable` |
+| `settings.py` | `/api/settings`, `/api/server_info`, `/api/settings/smtp_test`, `/api/settings/syslog_test`, `/api/server/restart`, `/api/server/shutdown`, `/api/dashboards`, `/api/dashboards/{id}`, `/api/dashboards/reorder`, `/api/db/stats`, `/api/anomaly/bulk-enable`, `/api/sensors/apply-interval` |
 | `tls.py` | `/api/tls`, `/api/tls/upload`, `/api/tls/generate` |
 | `topology.py` | `/api/pages`, `/api/nodes`, `/api/links`, `/api/groups`, `/api/settings/{key}` |
 | `export.py` | `/api/db/export`, `/api/db/export/logs`, `/api/db/export/bundle`, `/api/db/import`, `/api/audit`, `/api/logs/{logname}` (admin; `min_level`, `level`, `after`, `before`, `search`, `limit` query params; returns lines + `total` / `filtered` / `shown` / `file_size` / `rotated_count`) |

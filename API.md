@@ -145,6 +145,7 @@ pre-login screen to render SSO buttons.
 | `POST` | `/api/sensors/{did}/{sid}/anomaly/reset` | operator | Wipe the learned anomaly baseline (in-memory + DB row) |
 | `POST` | `/api/device/{did}/scan` | operator | Trigger port scan (async) |
 | `POST` | `/api/anomaly/bulk-enable` | admin | Enable anomaly detection on every supported sensor that's currently off; resets each baseline to a fresh cold-start window |
+| `POST` | `/api/sensors/apply-interval` | admin | Bulk-apply scheduling fields to **existing** sensors. Body: any of `interval`, `timeout`, `fail_after`, `recover_after`, plus optional `stype` (one type; omit for every type). Applied live (no restart/storm), persisted, agents re-pull. Returns `{updated}` |
 
 ---
 
