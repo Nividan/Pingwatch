@@ -2,11 +2,20 @@
 Description=PingWatch Network Monitor
 After=network.target postgresql.service
 Wants=postgresql.service
-StartLimitIntervalSec=0
+# Bound crash loops: if startup fails 5 times within 120s (e.g. a bad deploy
+# with a SyntaxError), give up and enter 'failed' instead of restarting every
+# 5s forever. Previously 0 (unlimited), which let a single bad pull loop
+# indefinitely and flood the logs with startup banners.
+StartLimitIntervalSec=120
+StartLimitBurst=5
 
 [Service]
 Type=simple
 WorkingDirectory=/opt/pingwatch
+# Refuse to start if any source file has a syntax error. compileall is purely
+# syntactic (no imports, no side effects), so a broken deploy fails fast here
+# and counts toward StartLimitBurst instead of half-starting. venv is excluded.
+ExecStartPre=/usr/bin/python3 -m compileall -q -x venv /opt/pingwatch
 ExecStart=/usr/bin/python3 /opt/pingwatch/server.py
 Restart=on-failure
 RestartSec=5

@@ -308,6 +308,22 @@ def handle(h, method, path, body):
         user, _ = h._require("admin")
         if not user: return True
         _MASKED_KEYS = {'smtp_pass'}
+        # Opaque/binary blobs (e.g. base64 logo data URI) — summarize by size in
+        # the audit detail instead of dumping the value. A ~2 MB base64 logo would
+        # otherwise flood the audit log file and DB on every settings save.
+        _REDACT_KEYS = {'email_logo_data'}
+        _AUDIT_VAL_MAX = 120
+
+        def _audit_val(k, v):
+            """Render a setting value for the audit detail: mask secrets,
+            summarize opaque blobs by size, cap anything else to a sane length."""
+            if k in _MASKED_KEYS:
+                return '***'
+            s = str(v)
+            if k in _REDACT_KEYS:
+                return f'<{len(s)} bytes>' if s else '(empty)'
+            return s if len(s) <= _AUDIT_VAL_MAX else f'{s[:_AUDIT_VAL_MAX]}…(+{len(s) - _AUDIT_VAL_MAX} chars)'
+
         _old_vals = {k: ('***' if k in _MASKED_KEYS else str(_settings.get(k, ''))) for k in body}
         ttl = body.get("session_ttl")
         if ttl is not None:
@@ -572,7 +588,7 @@ def handle(h, method, path, body):
             _settings.load({"alert_batch_enabled": _abe})
             _db_enqueue(lambda _v=_abe: db_save_settings({"alert_batch_enabled": _v}))
         _changes = '; '.join(
-            f"{k}: {_old_vals.get(k, '')} → {'***' if k in _MASKED_KEYS else str(body[k])}"
+            f"{k}: {_audit_val(k, _old_vals.get(k, ''))} → {_audit_val(k, body[k])}"
             for k in body
             if k in _MASKED_KEYS or str(_old_vals.get(k, '')) != str(body[k])
         )
