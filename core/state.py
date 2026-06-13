@@ -1343,7 +1343,7 @@ class MonitorState:
         self._scheduler.cancel(did, sid)
         return True
 
-    def start_sensor(self, did, sid):
+    def start_sensor(self, did, sid, first_delay=0.0):
         from core.probe_assign import effective_probe
         with self._lock:
             # Check-and-set must happen under the lock: two concurrent calls
@@ -1369,7 +1369,12 @@ class MonitorState:
             # warm session (cold perfManager/inventory otherwise returns
             # "VM not found" / "metric not available" → false DOWN that
             # recovers a cycle later). Mirrors the agent's vmware stagger.
-            self._scheduler.schedule(did, sid, 12.0)
+            self._scheduler.schedule(did, sid, max(12.0, first_delay))
+        elif first_delay > 0:
+            # Bulk start (boot restore / 'Start all'): spread the first probe so
+            # a few hundred sensors don't fire one synchronized burst (executor
+            # congestion → ping 4s timeouts; vCenter cold-cache reconnect herd).
+            self._scheduler.schedule(did, sid, first_delay)
         else:
             self._executor.submit(self._run_once, did, sid)
 
@@ -1421,9 +1426,25 @@ class MonitorState:
             for sid in sids:
                 _logs_enqueue(lambda d=did, s_=sid: db_resolve_flaps_by_sensor(d, s_))
 
+    def start_sensors_staggered(self, pairs):
+        """Start many sensors with their first probe spread across a window so a
+        bulk start (boot restore or 'Start all') doesn't fire one synchronized
+        probe burst — which congests the executor (ping 4s timeouts) and
+        stampedes vCenter sessions (cold-cache reconnect herd). Returns the
+        number started. Single starts elsewhere stay immediate (first_delay=0)."""
+        _STAGGER_S = 30.0
+        n = len(pairs)
+        if not n:
+            return 0
+        window = _STAGGER_S if n > 1 else 0.0
+        for i, (did, sid) in enumerate(pairs):
+            self.start_sensor(did, sid, first_delay=(i / n) * window)
+        return n
+
     def start_all(self):
-        for did in list(self.devices):
-            self.start_device(did)
+        pairs = [(did, sid) for did in list(self.devices)
+                 for sid in list(self.devices[did].sensors)]
+        self.start_sensors_staggered(pairs)
 
     def stop_all(self, resolve_events=True):
         for did in list(self.devices):

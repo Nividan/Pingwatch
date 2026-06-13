@@ -756,15 +756,16 @@ def _pg_load(state):
 
     # Auto-start only sensors that were running at last save; sensors paused
     # before the restart (running=0, persisted) stay stopped so a paused
-    # device/sensor sticks across restarts.
-    started = 0
-    for dev in list(state.devices.values()):
-        for sid in list(dev.sensors):
-            s = dev.sensors.get(sid)
-            if s is not None and getattr(s, "_autostart", True):
-                state.start_sensor(dev.device_id, sid)
-                started += 1
-    log.info(f"Auto-started {started} sensor(s); paused sensors left stopped.")
+    # device/sensor sticks across restarts. First probes are staggered so a few
+    # hundred sensors don't fire one synchronized burst at boot (ping congestion
+    # + vCenter cold-cache reconnect herd); the startup-grace window stays open
+    # until that staggered first cycle completes.
+    _to_start = [(dev.device_id, sid)
+                 for dev in state.devices.values()
+                 for sid in list(dev.sensors)
+                 if getattr(dev.sensors.get(sid), "_autostart", True)]
+    started = state.start_sensors_staggered(_to_start)
+    log.info(f"Auto-started {started} sensor(s) (staggered); paused sensors left stopped.")
     _mark_load_ok()
 
 
@@ -1047,15 +1048,16 @@ def db_load(state):
 
     # Auto-start only sensors that were running at last save; sensors paused
     # before the restart (running=0, persisted) stay stopped so a paused
-    # device/sensor sticks across restarts.
-    started = 0
-    for dev in list(state.devices.values()):
-        for sid in list(dev.sensors):
-            s = dev.sensors.get(sid)
-            if s is not None and getattr(s, "_autostart", True):
-                state.start_sensor(dev.device_id, sid)
-                started += 1
-    log.info(f"Auto-started {started} sensor(s); paused sensors left stopped.")
+    # device/sensor sticks across restarts. First probes are staggered so a few
+    # hundred sensors don't fire one synchronized burst at boot (ping congestion
+    # + vCenter cold-cache reconnect herd); the startup-grace window stays open
+    # until that staggered first cycle completes.
+    _to_start = [(dev.device_id, sid)
+                 for dev in state.devices.values()
+                 for sid in list(dev.sensors)
+                 if getattr(dev.sensors.get(sid), "_autostart", True)]
+    started = state.start_sensors_staggered(_to_start)
+    log.info(f"Auto-started {started} sensor(s) (staggered); paused sensors left stopped.")
     _mark_load_ok()
 
 
