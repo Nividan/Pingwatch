@@ -192,8 +192,10 @@ def handle(h, method, path, body) -> bool:
         probe_ids = body.get("probe_ids")
         if not isinstance(probe_ids, list) or not probe_ids:
             h._json(400, {"error": "probe_ids required"}); return True
-        from db.probes import (db_get_probe, db_create_campaign,
-                               db_add_campaign_probes)
+        # db_get_probe is already imported at module level — re-importing it
+        # here would make it a function-local for ALL of handle(), breaking
+        # every other handler that uses it (UnboundLocalError).
+        from db.probes import db_create_campaign, db_add_campaign_probes
         valid, skipped = [], []
         for pid in probe_ids[:1000]:
             pr = db_get_probe(pid) if isinstance(pid, str) else None
