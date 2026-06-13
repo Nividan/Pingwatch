@@ -1187,8 +1187,8 @@ def handle(h, method, path, body):
         port  = body.get("port")
         url   = (body.get("url") or "").strip() or None
         try:
-            iv    = max(1, min(3600, int(body.get("interval", 5))))
-            to    = max(1, min(iv, int(body.get("timeout", 4))))
+            iv    = max(1, min(3600, int(body.get("interval", 60))))
+            to    = max(1, min(iv, int(body.get("timeout", 10))))
         except (TypeError, ValueError):
             h._json(400, {"error": "interval and timeout must be integers"}); return True
         vssl  = bool(body.get("verify_ssl", True))
@@ -1317,10 +1317,10 @@ def handle(h, method, path, body):
             h._json(400, {"error": "invalid host"}); return True
         try:
             import core.settings as _settings
-            _fa = int(_settings.get("snr_fail_after",    2) or 2)
-            _ra = int(_settings.get("snr_recover_after", 1) or 1)
+            _fa = int(_settings.get("snr_fail_after",    3) or 3)
+            _ra = int(_settings.get("snr_recover_after", 2) or 2)
         except (TypeError, ValueError):
-            _fa, _ra = 2, 1
+            _fa, _ra = 3, 2
         sid = STATE.add_sensor(did, name, stype, host, port, url,
                                iv, to, vssl, comm, oid, sver,
                                fail_after=_fa, recover_after=_ra,

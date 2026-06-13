@@ -313,10 +313,20 @@ def db_init():
         for _k, _v in [
             ("session_ttl",        "86400"),
             ("retention_days",     "365"),
-            ("snr_interval",       "5"),
-            ("snr_timeout",        "4"),
-            ("snr_fail_after",     "2"),
-            ("snr_recover_after",  "1"),
+            ("snr_interval",       "60"),
+            ("snr_timeout",        "10"),
+            ("snr_fail_after",     "3"),
+            ("snr_recover_after",  "2"),
+            # Scale-safe per-type interval/timeout overrides for new sensors.
+            # Types omitted here inherit the global Interval/Timeout above.
+            ("snr_type_defaults",
+             '{"ping":{"interval":30,"timeout":3},'
+             '"dns":{"interval":60,"timeout":5},'
+             '"snmp":{"interval":120,"timeout":15},'
+             '"ssh":{"interval":120,"timeout":15},'
+             '"sftp":{"interval":120,"timeout":15},'
+             '"smtp":{"interval":120,"timeout":15},'
+             '"vmware":{"interval":60,"timeout":10}}'),
             ("max_flaps_display",  "50"),
             ("max_flap_entries",   "2000"),
             ("max_trap_entries",   "2000"),

@@ -641,9 +641,9 @@ function sensorFormHTML(dev, s=null) {
     <div class="snr-section-lbl">Probe Timing</div>
     <div class="fgrid">
       <div class="fr"><label class="fl">Interval (s)</label>
-        <input type="number" id="as-iv" value="${s?.interval||(window._snrDef?.interval||5)}" min="1" max="300"/></div>
+        <input type="number" id="as-iv" value="${s?.interval||(window._snrDef?.interval||60)}" min="1" max="300"/></div>
       <div class="fr"><label class="fl">Timeout (s)</label>
-        <input type="number" id="as-tmo" value="${s?.timeout||(window._snrDef?.timeout||4)}" min="1" max="60"/></div>
+        <input type="number" id="as-tmo" value="${s?.timeout||(window._snrDef?.timeout||10)}" min="1" max="60"/></div>
     </div>
     <div class="fr" style="margin-top:8px"><label class="fl">Run from <span style="color:var(--text3);font-weight:400;font-size:11px">(override which probe measures this sensor)</span></label>
       ${typeof _probeSelectHtml==='function' ? _probeSelectHtml('as-probe', s?.probe_id||'', 'Inherit from device / site') : '<select id="as-probe"><option value="">Inherit</option></select>'}

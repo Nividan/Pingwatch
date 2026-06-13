@@ -229,11 +229,11 @@ class Sensor:
     MAX = 80
 
     def __init__(self, device_id, sensor_id, name, stype, host,
-                 port=None, url=None, interval=5, timeout=4,
+                 port=None, url=None, interval=60, timeout=10,
                  verify_ssl=True,
                  snmp_community="public", snmp_oid="1.3.6.1.2.1.1.1.0",
                  snmp_version="2c",
-                 fail_after=2, recover_after=1,
+                 fail_after=3, recover_after=2,
                  warn_ms=None, crit_ms=None, loss_warn_pct=0, loss_crit_pct=0,
                  keyword="", keyword_case=False, banner_regex="",
                  alerts_muted=False, snmp_unit="",
@@ -1171,10 +1171,10 @@ class MonitorState:
             return self.devices.get(did)
 
     def add_sensor(self, did, name, stype, host=None,
-                   port=None, url=None, interval=5, timeout=4,
+                   port=None, url=None, interval=60, timeout=10,
                    verify_ssl=True, snmp_community="public",
                    snmp_oid="1.3.6.1.2.1.1.1.0", snmp_version="2c",
-                   fail_after=2, recover_after=1,
+                   fail_after=3, recover_after=2,
                    warn_ms=None, crit_ms=None, loss_warn_pct=0, loss_crit_pct=0,
                    keyword="", keyword_case=False, banner_regex="", snmp_unit="",
                    vmware_user="", vmware_password="",

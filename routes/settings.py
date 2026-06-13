@@ -179,10 +179,10 @@ def handle(h, method, path, body):
             "report_brand_color":    _settings.get("report_brand_color", ""),
             "report_retention_days": int(_settings.get("report_retention_days", 365) or 365),
             # Group A — sensor defaults
-            "snr_interval":      int(_settings.get("snr_interval",      5)),
-            "snr_timeout":       int(_settings.get("snr_timeout",       4)),
-            "snr_fail_after":    int(_settings.get("snr_fail_after",    2)),
-            "snr_recover_after": int(_settings.get("snr_recover_after", 1)),
+            "snr_interval":      int(_settings.get("snr_interval",      60)),
+            "snr_timeout":       int(_settings.get("snr_timeout",       10)),
+            "snr_fail_after":    int(_settings.get("snr_fail_after",    3)),
+            "snr_recover_after": int(_settings.get("snr_recover_after", 2)),
             # Group B — event & history limits
             "max_flaps_display": int(_settings.get("max_flaps_display", 50)),
             "max_flap_entries":  int(_settings.get("max_flap_entries",  2000)),

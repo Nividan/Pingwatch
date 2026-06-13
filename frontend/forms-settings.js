@@ -2499,11 +2499,16 @@ function _scanPortsReset(){
 
 async function resetSensorTypeDefaults(){
   if (!confirm('Reset all sensor type defaults to built-in values?\n\nClick Save Sensor Defaults afterwards to apply.')) return;
+  // Scale-safe per-type interval/timeout (seconds). Types not listed inherit
+  // the global 60s/10s. Keep in sync with the snr_type_defaults seed in
+  // db/core.py + db/pg_schema.py.
+  const IV = {ping:30, dns:60, snmp:120, ssh:120, sftp:120, smtp:120};
+  const TO = {ping:3,  dns:5,  snmp:15,  ssh:15,  sftp:15,  smtp:15};
   const defaults = { vmware: {interval: 60, timeout: 10} };
   for (const t of Object.keys(_SDR_WARN_DEF)) {
     defaults[t] = {
-      interval: 5,
-      timeout:  3,
+      interval: IV[t] ?? 60,
+      timeout:  TO[t] ?? 10,
       warn_ms:  _SDR_WARN_DEF[t],
       crit_ms:  _SDR_CRIT_DEF[t],
     };
