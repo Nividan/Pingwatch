@@ -117,11 +117,24 @@ def run_backup(device: dict, settings: dict) -> dict:
     method = (settings.get('method') or 'ssh').lower()
     log.debug(f"Backup: starting {method} backup for {device.name} ({device.host})")
     if method == 'ssh':
-        return _ssh_backup(device, settings)
+        result = _ssh_backup(device, settings)
     elif method == 'telnet':
-        return _telnet_backup(device, settings)
+        result = _telnet_backup(device, settings)
     else:
         return _fail(method, f"Unsupported backup method: {method}")
+    # A clean transport + auth is not proof the device returned a real config:
+    # an empty reply, a short banner, or a rejected command all come back
+    # "successfully". Demote to a failure when the captured output fails the
+    # configured validation ladder (the empty guard is always on).
+    if result.get('success'):
+        verr = _validate_output(result.get('config', ''), settings)
+        if verr:
+            log.warning(
+                f"Backup: {device.name} ({device.host}) transport OK but "
+                f"output rejected — {verr}"
+            )
+            return _fail(method, verr)
+    return result
 
 
 # ── SSH ──────────────────────────────────────────────────────────────
@@ -401,6 +414,66 @@ def _fail(method: str, error_msg: str) -> dict:
         'sha256':     '',
         'ts':         datetime.datetime.now(datetime.timezone.utc).isoformat(),
     }
+
+
+def _validate_output(config: str, settings: dict) -> str | None:
+    """Validate captured backup output. Return an error string on failure, else None.
+
+    Fail-fast ladder:
+      1. empty / whitespace-only  → always rejected
+      2. min_bytes (0 = off)      → reject output below the size floor
+      3. expected_content (opt)   → case-insensitive substring, or regex when
+                                    expected_is_regex is set (ReDoS-guarded)
+    """
+    text = config or ''
+    if not text.strip():
+        return 'empty response — the command returned no output (it may have been rejected)'
+
+    try:
+        min_bytes = int(settings.get('min_bytes', 0) or 0)
+    except (TypeError, ValueError):
+        min_bytes = 0
+    if min_bytes > 0:
+        nbytes = len(text.encode('utf-8', 'replace'))
+        if nbytes < min_bytes:
+            return f'output too short ({nbytes} B < required {min_bytes} B) — not a full backup'
+
+    expected = (settings.get('expected_content') or '').strip()
+    if expected:
+        if settings.get('expected_is_regex'):
+            matched = _regex_contains(expected, text)
+            if matched is None:
+                return f'invalid expected-content regex: {expected!r}'
+            if not matched:
+                return 'expected pattern not found in output'
+        elif expected.lower() not in text.lower():
+            return f'expected content not found: {expected!r}'
+    return None
+
+
+def _regex_contains(pattern: str, text: str):
+    """Case-insensitive regex search with a ReDoS timeout guard.
+
+    Returns True/False, or None when the pattern is invalid. Mirrors the
+    banner_regex guard used for sensor config: cap length, compile-validate,
+    and run the match in a daemon thread abandoned after 2s (fail-closed).
+    """
+    try:
+        pat = re.compile(pattern[:200], re.IGNORECASE | re.MULTILINE)
+    except re.error:
+        return None
+    out = [None]
+    def _run():
+        try:
+            out[0] = bool(pat.search(text))
+        except Exception:
+            out[0] = False
+    t = threading.Thread(target=_run, daemon=True)
+    t.start()
+    t.join(2.0)
+    if t.is_alive():
+        return False   # pathological pattern — treat as no-match, fail closed
+    return bool(out[0])
 
 
 def _parse_commands(raw) -> list:

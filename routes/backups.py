@@ -167,6 +167,7 @@ def handle(h, method, path, body):
                 'username': '', 'has_password': False, 'has_enable': False,
                 'commands': ['show running-config'], 'paging_cmd': '',
                 'timeout': 30, 'in_schedule': False,
+                'expected_content': '', 'expected_is_regex': False, 'min_bytes': 0,
             }
         h._json(200, {'settings': settings})
         return True
@@ -192,6 +193,24 @@ def handle(h, method, path, body):
                 raise ValueError
         except (TypeError, ValueError):
             h._json(400, {'error': 'Timeout must be an integer between 1 and 300'}); return True
+        # Backup-output validation assertions (all optional).
+        _exp = (body.get('expected_content') or '').strip()
+        if len(_exp) > 200:
+            h._json(400, {'error': 'Expected content too long (max 200 chars)'}); return True
+        if _exp and body.get('expected_is_regex'):
+            import re as _re
+            try:
+                _re.compile(_exp)
+            except _re.error as _rxe:
+                h._json(400, {'error': f'Invalid expected-content regex: {_rxe}'}); return True
+        try:
+            _mb = int(body.get('min_bytes', 0) or 0)
+            if not (0 <= _mb <= 10_000_000):
+                raise ValueError
+        except (TypeError, ValueError):
+            h._json(400, {'error': 'Min size must be an integer between 0 and 10000000 bytes'}); return True
+        body['expected_content'] = _exp
+        body['min_bytes']        = _mb
         db_ensure_backup_device(did)
         db_save_backup_settings(did, body)
         db_log_audit(user, h.client_address[0], 'backup_settings_save', did)

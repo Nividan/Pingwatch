@@ -277,7 +277,10 @@ def db_init():
                 commands     TEXT    DEFAULT '["show running-config"]',
                 paging_cmd   TEXT    DEFAULT '',
                 timeout      INTEGER DEFAULT 30,
-                in_schedule  INTEGER DEFAULT 0
+                in_schedule  INTEGER DEFAULT 0,
+                expected_content  TEXT    DEFAULT '',
+                expected_is_regex INTEGER DEFAULT 0,
+                min_bytes         INTEGER DEFAULT 0
             )""")
         con.execute("""
             CREATE TABLE IF NOT EXISTS backup_runs (
@@ -637,6 +640,18 @@ def db_init():
             con.commit()
         except Exception:
             pass  # column already exists
+        # Backup output validation (v1.4) — assert a real config came back, not
+        # just a clean SSH/auth handshake. See backup/engine._validate_output.
+        for _bk_col_def in (
+            "expected_content TEXT DEFAULT ''",
+            "expected_is_regex INTEGER DEFAULT 0",
+            "min_bytes INTEGER DEFAULT 0",
+        ):
+            try:
+                con.execute(f"ALTER TABLE backup_devices ADD COLUMN {_bk_col_def}")
+                con.commit()
+            except Exception:
+                pass  # column already exists
         # Site grouping on devices (v1.0+) — Site → Group → Device hierarchy.
         # Free-text; sourced via autocomplete from UNION(ipam_subnets.site, devices.site).
         try:

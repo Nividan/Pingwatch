@@ -473,6 +473,10 @@ def pg_create_main_schema(cur):
         # Pause persistence — 0 = paused (left stopped on restart), 1 = running.
         # Without this a paused device/sensor came back running after a restart.
         ("sensors", "running", "INTEGER DEFAULT 1"),
+        # Backup output validation (v1.4) — assert a real config came back.
+        ("backup_devices", "expected_content",  "TEXT DEFAULT ''"),
+        ("backup_devices", "expected_is_regex", "INTEGER DEFAULT 0"),
+        ("backup_devices", "min_bytes",         "INTEGER DEFAULT 0"),
     ]
     for _tbl, _col, _typedef in _migrations:
         try:
@@ -537,7 +541,10 @@ def pg_create_main_schema(cur):
             commands     TEXT    DEFAULT '["show running-config"]',
             paging_cmd   TEXT    DEFAULT '',
             timeout      INTEGER DEFAULT 30,
-            in_schedule  INTEGER DEFAULT 0
+            in_schedule  INTEGER DEFAULT 0,
+            expected_content  TEXT    DEFAULT '',
+            expected_is_regex INTEGER DEFAULT 0,
+            min_bytes         INTEGER DEFAULT 0
         )""")
 
     cur.execute("""
