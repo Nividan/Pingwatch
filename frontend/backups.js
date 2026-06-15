@@ -568,15 +568,15 @@ async function _bkOpenSettings(did) {
         <div class="fr">
           <label class="fl">Expected Content <span style="color:var(--text3);font-size:10px">(optional — fail the backup if the output doesn't contain this)</span></label>
           <input type="text" id="bks-expected" value="${esc(s.expected_content || '')}" placeholder="e.g. hostname    or    ^end$ (regex)"/>
-          <div style="display:flex;align-items:center;gap:20px;margin-top:8px;flex-wrap:wrap">
-            <label class="toggle" style="display:flex;align-items:center;gap:8px;margin:0">
-              <input type="checkbox" id="bks-expected-regex" ${s.expected_is_regex ? 'checked' : ''}><span class="tsl"></span>
-              <span class="fl" style="margin:0">Regex (advanced)</span>
-            </label>
+          <div style="display:flex;align-items:center;gap:28px;margin-top:10px;flex-wrap:wrap">
             <div style="display:flex;align-items:center;gap:8px">
-              <span class="fl" style="margin:0">Min size</span>
-              <input type="number" id="bks-minbytes" value="${s.min_bytes || 0}" min="0" max="10000000" style="max-width:110px"/>
-              <span class="fh" style="margin:0">bytes</span>
+              <label class="toggle"><input type="checkbox" id="bks-expected-regex" ${s.expected_is_regex ? 'checked' : ''}><span class="tsl"></span></label>
+              <span style="font-size:12px;color:var(--text2)">Regex <span style="color:var(--text3)">(advanced)</span></span>
+            </div>
+            <div style="display:flex;align-items:center;gap:8px">
+              <span style="font-size:12px;color:var(--text2)">Min size</span>
+              <input type="number" id="bks-minbytes" value="${s.min_bytes || 0}" min="0" max="10000000" style="max-width:96px"/>
+              <span style="font-size:12px;color:var(--text3)">bytes</span>
             </div>
           </div>
           <div class="fh" style="margin-top:6px">An <b>empty</b> response is always marked failed. Substring match is case-insensitive. Min size 0 = off.</div>
