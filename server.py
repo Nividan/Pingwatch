@@ -170,7 +170,16 @@ def _load_html() -> bytes:
 class QuietServer(http.server.ThreadingHTTPServer):
     """ThreadingHTTPServer that suppresses noisy browser-disconnect errors."""
 
-    _IGNORED = ('ConnectionAbortedError', 'ConnectionResetError', 'BrokenPipeError', 'SSLEOFError')
+    # All of these mean "the client went away mid-request" and are not
+    # actionable. 'SSLError' is the base class and catches the platform-
+    # dependent write-time variants OpenSSL raises when a TLS peer disappears
+    # mid-flush — e.g. "ssl.SSLError: [SYS] unknown error (_ssl.c:NNNN)"
+    # (SSL_ERROR_SYSCALL/EOF) — which 'SSLEOFError' does NOT match as a
+    # substring. 'SSLZeroReturnError' is a clean TLS close_notify. These only
+    # ever reach handle_error per-connection (cert/key load errors surface at
+    # startup, not here), so suppressing the whole family is safe.
+    _IGNORED = ('ConnectionAbortedError', 'ConnectionResetError', 'BrokenPipeError',
+                'SSLEOFError', 'SSLZeroReturnError', 'SSLError')
 
     def handle_error(self, request, client_address):
         if any(e in traceback.format_exc() for e in self._IGNORED):
