@@ -2455,15 +2455,17 @@ async function loadSensorsDefaultsTab(){
   for(const dev of devices)
     for(const s of (dev.sensors||[]))
       typeCounts[s.stype] = (typeCounts[s.stype]||0) + 1;
-  const types = Object.keys(typeCounts).sort();
+  // Show every supported type (from the catalogue) so defaults can be set up
+  // before any sensors exist — union in any live types not in the catalogue
+  // (e.g. vmware) so existing servers still list everything they monitor.
+  const types = [...new Set([...Object.keys(_SDR_META), ...Object.keys(typeCounts)])].sort();
   window._sdrTypeCounts = typeCounts;
   window._sdrTotalCount = Object.values(typeCounts).reduce((a,b)=>a+b,0);
-  if(!types.length){ el.innerHTML='<div style="color:var(--text3);font-size:12px;padding:8px">No sensors found.</div>'; return; }
   const td = window._snrTypeDefaults || {};
   const rows = types.map(t => {
     const m   = _SDR_META[t] || {ico:'?', label:t, desc:''};
     const d   = td[t] || {};
-    const cnt = typeCounts[t];
+    const cnt = typeCounts[t] || 0;
     const iv  = d.interval      != null ? d.interval      : (window._snrDef?.interval||5);
     const to  = d.timeout       != null ? d.timeout       : (window._snrDef?.timeout||3);
     const wm  = d.warn_ms  != null ? d.warn_ms  : (_SDR_WARN_DEF[t] || '');
@@ -2477,7 +2479,9 @@ async function loadSensorsDefaultsTab(){
       <td><div class="sdr-num-cell"><input type="number" id="sdr_${t}_timeout" value="${to}" min="1" max="60"/><span class="sdr-unit">s</span></div></td>
       <td><div class="sdr-num-cell"><input type="number" id="sdr_${t}_warn_ms" value="${wm}" min="1" placeholder="—"/><span class="sdr-unit">${warnUnit}</span></div></td>
       <td><div class="sdr-num-cell"><input type="number" id="sdr_${t}_crit_ms" value="${cm}" min="1" placeholder="—"/><span class="sdr-unit">${warnUnit}</span></div></td>
-      <td style="text-align:center;white-space:nowrap"><button class="sdr-apply-btn rbac-admin" onclick="_sdrApplyExisting('${t}',${cnt})" title="Apply this row's Interval/Timeout to all ${cnt} existing ${esc(m.label)} sensor(s) — Warn/Crit unchanged">⤓</button>${extra ? `<button class="sdr-expand-btn" onclick="_sdrToggle(this)" title="Type-specific settings">▾</button>` : ''}</td>
+      <td style="text-align:center;white-space:nowrap">${cnt
+        ? `<button class="sdr-apply-btn rbac-admin" onclick="_sdrApplyExisting('${t}',${cnt})" title="Apply this row's Interval/Timeout to all ${cnt} existing ${esc(m.label)} sensor(s) — Warn/Crit unchanged">⤓</button>`
+        : `<button class="sdr-apply-btn" disabled title="No existing ${esc(m.label)} sensors to apply to yet">⤓</button>`}${extra ? `<button class="sdr-expand-btn" onclick="_sdrToggle(this)" title="Type-specific settings">▾</button>` : ''}</td>
     </tr>
     ${extra ? `<tr class="sdr-extra-row" data-for="${t}" style="display:none"><td colspan="7"><div class="sdr-extra">${extra}</div></td></tr>` : ''}`;
   }).join('');
