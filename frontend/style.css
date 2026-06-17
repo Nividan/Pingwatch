@@ -2939,6 +2939,26 @@ canvas.dm-hist-canvas{width:100%;height:240px;display:block;border-radius:6px;ba
 .dw-dd-name        {font-size:12px;color:var(--text);font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .dw-dd-host        {font-size:10px;color:var(--text3);font-family:'JetBrains Mono',monospace;}
 .dw-dd-sensors     {font-size:10px;color:var(--down);margin-top:1px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+/* Active Incidents (Root Cause) widget */
+.dw-inc-list       {display:flex;flex-direction:column;gap:5px;overflow-y:auto;}
+.dw-inc            {border:1px solid var(--down-border);border-radius:6px;background:var(--down-bg);overflow:hidden;}
+.dw-inc-head       {display:flex;align-items:center;gap:8px;padding:7px 8px;cursor:pointer;}
+.dw-inc-head:hover {background:rgba(255,255,255,.04);}
+.dw-inc-info       {display:flex;flex-direction:column;gap:1px;flex:1;overflow:hidden;}
+.dw-inc-name       {font-size:12px;color:var(--text);font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.dw-inc-sub        {font-size:10px;color:var(--text3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.dw-inc-conf       {font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;padding:1px 6px;border-radius:8px;flex-shrink:0;}
+.dw-inc-conf-high  {background:var(--down);color:#fff;}
+.dw-inc-conf-medium{background:var(--warn);color:#1a1a1a;}
+.dw-inc-conf-low   {background:var(--pause);color:#fff;}
+.dw-inc-count      {font-size:13px;font-weight:700;color:var(--down);font-family:'JetBrains Mono',monospace;flex-shrink:0;min-width:22px;text-align:right;}
+.dw-inc-chev       {font-size:10px;color:var(--text3);flex-shrink:0;transition:transform .15s;}
+.dw-inc.open .dw-inc-chev{transform:rotate(90deg);}
+.dw-inc-detail     {display:none;padding:0 10px 8px 25px;}
+.dw-inc.open .dw-inc-detail{display:block;}
+.dw-inc-reasons    {font-size:10px;color:var(--warn);margin-bottom:3px;}
+.dw-inc-impacted   {font-size:11px;color:var(--text2);line-height:1.5;}
+.dw-inc-impacted b {color:var(--text3);font-weight:600;}
 /* Top Latency widget */
 .dw-tl-list        {display:flex;flex-direction:column;gap:5px;overflow-y:auto;width:100%;}
 .dw-tl-row         {display:flex;align-items:center;gap:8px;}

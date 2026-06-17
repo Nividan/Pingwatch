@@ -84,7 +84,67 @@ const LM = {
   ssePending:    [],
   sseTimer:      null,
   liveTickTimer: null,      // periodic time-ago refresh
+  // Root-cause overlay: {did→rootDid} + {rootDid→name} from /api/incidents.
+  rca:           { byDid: {}, rootName: {}, ts: 0, loading: false },
+  rcaEnabled:    (function(){ try { return localStorage.getItem('pw_lm_rca') !== '0'; } catch(_) { return true; } })(),
 };
+
+// ─── Root-cause overlay ──────────────────────────────────────
+// Fetch live incidents and mark the root device + its impacted subtree on the
+// drill-in. Read-only; decorates already-rendered cards by data-did/data-cells.
+function fetchIncidents() {
+  const rca = LM.rca;
+  if (rca.loading) return Promise.resolve();
+  rca.loading = true;
+  return fetch('/api/incidents', { credentials: 'same-origin' })
+    .then(function(r) { return r.ok ? r.json() : null; })
+    .then(function(data) {
+      rca.loading = false; rca.ts = Date.now();
+      const byDid = {}, names = {};
+      ((data && data.incidents) || []).forEach(function(inc) {
+        if (!inc.impacted_count) return;           // only correlated clusters
+        const rd = inc.root.did;
+        names[rd] = inc.root.name || rd;
+        byDid[rd] = rd;
+        (inc.impacted || []).forEach(function(c) { byDid[c.did] = rd; });
+      });
+      rca.byDid = byDid; rca.rootName = names;
+    })
+    .catch(function() { rca.loading = false; });
+}
+
+function _applyRcaOverlay(canvas) {
+  if (!canvas) return;
+  const rca = LM.rca || {};
+  const byDid = rca.byDid || {};
+  const on = LM.rcaEnabled && Object.keys(byDid).length > 0;
+  canvas.classList.toggle('rca-on', !!on);
+  canvas.querySelectorAll('.rca-root,.rca-impacted').forEach(function(el) {
+    el.classList.remove('rca-root', 'rca-impacted');
+    el.removeAttribute('data-rca-root');
+  });
+  if (!on) return;
+  canvas.querySelectorAll('.dev[data-did]').forEach(function(el) {
+    const did = el.getAttribute('data-did');
+    const root = byDid[did];
+    if (!root) return;
+    if (root === did) el.classList.add('rca-root');
+    else { el.classList.add('rca-impacted'); el.setAttribute('data-rca-root', rca.rootName[root] || ''); }
+  });
+  canvas.querySelectorAll('.cluster[data-cells]').forEach(function(el) {
+    let cells = [];
+    try { cells = JSON.parse(el.getAttribute('data-cells') || '[]'); } catch (_) {}
+    let isRoot = false, isImp = false, rootName = '';
+    cells.forEach(function(did) {
+      const root = byDid[did];
+      if (!root) return;
+      if (root === did) isRoot = true;
+      else { isImp = true; rootName = rca.rootName[root] || rootName; }
+    });
+    if (isRoot) el.classList.add('rca-root');
+    else if (isImp) { el.classList.add('rca-impacted'); if (rootName) el.setAttribute('data-rca-root', rootName); }
+  });
+}
 
 // Inline SVG icons (Heroicons-ish), kept tiny + cyan-tinted
 const ICONS = {
@@ -685,6 +745,8 @@ function _renderSiteTree(name, tree) {
           '<span class="site-tab-k">SITE</span>' +
           '<span class="site-tab-n">' + esc(name) + '</span>' +
           '<span class="site-tab-s">› SELECTED · MAIN INFRASTRUCTURE</span>' +
+          '<button class="sd-rca-toggle' + (LM.rcaEnabled ? ' on' : '') + '" data-rca-toggle ' +
+            'title="Highlight the root-cause device and its affected downstream subtree">⟁ Root cause</button>' +
         '</div>' +
         '<div class="sd-canvas">' +
           tierRow('isp',  'ISP',              isps,  { render: _ispRow,  center: true }) +
@@ -724,12 +786,17 @@ function _renderSiteTree(name, tree) {
   // we read getBoundingClientRect after the browser has laid the cards out.
   const canvas = main.querySelector('.sd-canvas');
   if (canvas) {
-    requestAnimationFrame(function() { _drawConnections(canvas); });
+    requestAnimationFrame(function() { _drawConnections(canvas); _applyRcaOverlay(canvas); });
     // Redraw on resize — connection coords drift when the panel reflows.
     _bindCanvasResize(canvas);
     // Canvas-level hover tracking: aggregates overlapping hits via
     // elementsFromPoint so a shared trunk shows every line passing through.
     _bindCanvasTooltip(canvas);
+    // Refresh incidents in the background (throttled) and re-apply the overlay
+    // once they arrive, so the root-cause highlight tracks live status.
+    if ((Date.now() - (LM.rca.ts || 0)) > 10000) {
+      fetchIncidents().then(function() { _applyRcaOverlay(main.querySelector('.sd-canvas')); });
+    }
   }
 }
 
@@ -2035,6 +2102,15 @@ window.addEventListener('message', function(e) {
 // Side-panel close + row drill-down binding (delegated)
 document.addEventListener('click', function(e) {
   if (e.target && e.target.id === 'lm-sp-close') { closeSidePanel(); return; }
+  // Root-cause overlay toggle (drill-in header)
+  const rcaBtn = e.target.closest && e.target.closest('[data-rca-toggle]');
+  if (rcaBtn) {
+    LM.rcaEnabled = !LM.rcaEnabled;
+    try { localStorage.setItem('pw_lm_rca', LM.rcaEnabled ? '1' : '0'); } catch (_) {}
+    rcaBtn.classList.toggle('on', LM.rcaEnabled);
+    _applyRcaOverlay(document.querySelector('.sd-canvas'));
+    return;
+  }
   // Sensor section show-all / show-failing toggle — re-render in place using
   // the cached dict so we don't refetch.
   const toggle = e.target.closest && e.target.closest('.lm-sp-toggle');

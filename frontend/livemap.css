@@ -1237,3 +1237,41 @@ body {
 /* Status dot for "unknown" needs a darker gray on light */
 :root[data-theme="light"] .sr-dot.unknown,
 :root[data-theme="light"] .ni-dot.unknown { background: rgba(28,41,52,0.35); }
+
+/* ─── Root-cause overlay ─────────────────────────────────────── */
+.sd-rca-toggle {
+  margin-left: 4px; font-family: 'JetBrains Mono', monospace; font-size: 9px;
+  letter-spacing: 0.5px; cursor: pointer; padding: 2px 8px;
+  border: 1px solid var(--dim); background: transparent; color: var(--dim);
+  border-radius: 3px; transition: all 0.15s;
+}
+.sd-rca-toggle:hover { color: var(--accent); border-color: var(--accent); }
+.sd-rca-toggle.on    { color: var(--down); border-color: var(--down); background: rgba(255,51,102,0.10); }
+
+@keyframes rcaRootPulse {
+  0%,100% { box-shadow: 0 0 12px var(--down), inset 0 0 8px rgba(255,51,102,0.35); }
+  50%     { box-shadow: 0 0 22px var(--down), inset 0 0 14px rgba(255,51,102,0.55); }
+}
+/* When the overlay is on, fade everything slightly so the incident pops. */
+.sd-canvas.rca-on .dev,
+.sd-canvas.rca-on .cluster { opacity: 0.45; transition: opacity 0.2s; }
+/* Root device — pulsing red ring + a corner tag. */
+.sd-canvas.rca-on .dev.rca-root,
+.sd-canvas.rca-on .cluster.rca-root {
+  opacity: 1; border-color: var(--down) !important;
+  animation: rcaRootPulse 1.6s ease-in-out infinite;
+}
+.sd-canvas.rca-on .rca-root::after {
+  content: 'ROOT CAUSE'; position: absolute; top: -8px; right: 6px;
+  font-family: 'JetBrains Mono', monospace; font-size: 8px; font-weight: 700;
+  letter-spacing: 0.5px; color: #fff; background: var(--down);
+  padding: 1px 5px; border-radius: 3px; z-index: 4; white-space: nowrap;
+}
+/* Impacted subtree — kept visible but striped to read as "collateral". */
+.sd-canvas.rca-on .dev.rca-impacted,
+.sd-canvas.rca-on .cluster.rca-impacted {
+  opacity: 0.92;
+  background-image: repeating-linear-gradient(135deg,
+    rgba(255,51,102,0.06) 0 6px, transparent 6px 12px);
+}
+.dev.rca-root, .cluster.rca-root, .dev.rca-impacted, .cluster.rca-impacted { position: relative; }

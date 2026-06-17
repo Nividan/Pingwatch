@@ -1296,6 +1296,20 @@ function _buildSettingsTab_sensors(sr) {
         <div class="fh" style="margin-top:4px">Turns the per-sensor toggle on for every ping / tcp / http / dns / http_keyword / banner sensor. Each gets a fresh cold-start window — no alert storm.</div>
       </div>
       <div style="margin-top:16px;padding-top:16px;border-top:1px solid var(--border)">
+        <div class="fl" style="margin-bottom:4px">🧭 Root-Cause Analysis</div>
+        <div class="fh" style="margin-bottom:12px">Correlates simultaneous outages against the Live-Map dependency graph (device parents). When every parent of a device is down, that device's alerts are treated as downstream symptoms of the upstream root.</div>
+        <div class="fr">
+          <label style="display:flex;align-items:center;gap:8px;cursor:pointer;user-select:none">
+            <input type="checkbox" id="st-rca-suppress" ${sr.rca_suppress_downstream!==0?'checked':''}>
+            <span class="fl" style="margin:0">Suppress downstream alerts while their root is down</span>
+          </label>
+          <div class="fh" style="margin-left:24px;margin-top:3px">PRTG-style dependency: symptom alerts are still recorded (as <b>suppressed</b>) but no email / webhook / syslog is sent. The root device alerts normally. Redundancy-aware — a device with any live uplink is never suppressed. Off = every device alerts independently.</div>
+        </div>
+        <div class="fr" style="margin-top:10px"><label class="fl">Correlation window (s)</label>
+          <input type="number" id="st-rca-window" value="${sr.rca_correlation_window_s??120}" min="30" max="3600" style="max-width:100px"/>
+          <div class="fh">Timing window used for root-cause evidence (“went down first”, link-down traps) and for clustering past outages in the incident history.</div></div>
+      </div>
+      <div style="margin-top:16px;padding-top:16px;border-top:1px solid var(--border)">
         <div class="fl" style="margin-bottom:4px">Latency Colour Thresholds</div>
         <div class="fh" style="margin-bottom:10px">Fallback colour breakpoints — used only for sensors with no warn/crit configured (sensor-level or per-type). Rarely hit once types above are set.</div>
         <div class="fgrid">
@@ -2559,6 +2573,8 @@ async function saveSensorTypeDefaults(){
   const anomAuto = document.getElementById('st-anom-auto')?.checked;
   const anomCold = parseInt(document.getElementById('st-anom-cold')?.value);
   const anomCkpt = parseInt(document.getElementById('st-anom-ckpt')?.value);
+  const rcaSupp  = document.getElementById('st-rca-suppress')?.checked;
+  const rcaWin   = parseInt(document.getElementById('st-rca-window')?.value);
   const globalDefaults = {};
   if(snrIv  >= 1) globalDefaults.snr_interval      = snrIv;
   if(snrTmo >= 1) globalDefaults.snr_timeout       = snrTmo;
@@ -2572,6 +2588,9 @@ async function saveSensorTypeDefaults(){
                                     globalDefaults.anomaly_cold_start_hours    = anomCold;
   if(!isNaN(anomCkpt) && anomCkpt >= 60 && anomCkpt <= 86400)
                                     globalDefaults.anomaly_checkpoint_interval_s = anomCkpt;
+  if(typeof rcaSupp === 'boolean') globalDefaults.rca_suppress_downstream = rcaSupp ? 1 : 0;
+  if(!isNaN(rcaWin) && rcaWin >= 30 && rcaWin <= 3600)
+                                    globalDefaults.rca_correlation_window_s = rcaWin;
   // Collect scan_ports from checkboxes + custom input
   const scanChecked = [...document.querySelectorAll('.st-scan-port:checked')].map(cb => cb.value);
   const scanCustomRaw = (document.getElementById('st-scan-custom')?.value || '').trim();

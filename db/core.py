@@ -408,6 +408,10 @@ def db_init():
             # events are deferred (still-failing sensors emit at the end).
             # Soaks up restart blips (cold vCenter sessions etc.). 0 = off.
             ("startup_grace_s",                "60"),
+            # Root-Cause Analysis (dependency correlation). When a device's
+            # parents are all down, its own alerts are downstream symptoms.
+            ("rca_suppress_downstream",        "1"),   # 1=suppress symptom alerts while root down
+            ("rca_correlation_window_s",       "120"), # timing window for evidence + history clustering
         ]:
             if not con.execute("SELECT 1 FROM app_settings WHERE key=?", (_k,)).fetchone():
                 con.execute("INSERT INTO app_settings VALUES (?,?)", (_k, _v))

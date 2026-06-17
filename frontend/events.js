@@ -435,6 +435,38 @@ let _evtCollapseEnabled = (()=>{
 })();
 const _EVT_COLLAPSE_WINDOW_MS = 30000;   // 30s proximity window
 const _EVT_COLLAPSE_MIN       = 3;       // min events per group
+const _EVT_RCA_WINDOW_MS       = 120000; // cross-device root-cause cluster window
+
+// ── Root-cause map (from /api/incidents) — {did: rootDid}, {rootDid: name} ──
+// Lets _collapseEvents() bundle simultaneous downs on DIFFERENT devices that
+// share an upstream root. Empty until the first fetch, so behaviour is
+// unchanged when RCA has no correlated outages.
+let _rcaRootByDid = {};
+let _rcaRootName  = {};
+let _rcaFetchTs   = 0;
+let _rcaLoading   = false;
+function _isDownDir(dir) { return dir === 'down' || dir === 'threshold'; }
+function _evtMaybeLoadRca() {
+  const now = Date.now();
+  if (_rcaLoading || (now - _rcaFetchTs) < 15000) return;   // throttle
+  _rcaLoading = true;
+  fetch('/api/incidents').then(r => r.ok ? r.json() : null).then(data => {
+    _rcaLoading = false; _rcaFetchTs = Date.now();
+    const byDid = {}, names = {};
+    if (data && Array.isArray(data.incidents)) {
+      for (const inc of data.incidents) {
+        if (!inc.impacted_count) continue;          // only correlated clusters
+        const rd = inc.root.did;
+        names[rd] = inc.root.name || rd;
+        byDid[rd] = rd;
+        for (const c of (inc.impacted || [])) byDid[c.did] = rd;
+      }
+    }
+    const changed = JSON.stringify(byDid) !== JSON.stringify(_rcaRootByDid);
+    _rcaRootByDid = byDid; _rcaRootName = names;
+    if (changed) _renderEvtView();                  // throttle guards re-entry
+  }).catch(() => { _rcaLoading = false; _rcaFetchTs = Date.now(); });
+}
 
 function _onEvtCollapseToggle() {
   const cb = document.getElementById('evtFCollapse');
@@ -457,6 +489,40 @@ function _collapseEvents(events) {
     if (!e.did || !e.sid || dir === 'trap') { result.push(e); continue; }
     const eTs = new Date(e.ts).getTime();
     if (!isFinite(eTs)) { result.push(e); continue; }
+
+    // (rca) Cross-device root-cause cluster — down events on DISTINCT devices
+    // that share an upstream root (from /api/incidents), within the RCA window.
+    // Highest precedence so an outage storm collapses under its root rather
+    // than into per-device groups. Needs ≥2 distinct devices to qualify.
+    const rcaRoot = _rcaRootByDid[e.did];
+    if (rcaRoot && _isDownDir(dir)) {
+      const rcaIdx = [i];
+      const seenDids = new Set([e.did]);
+      for (let j = i + 1; j < events.length; j++) {
+        if (used.has(j)) continue;
+        const x = events[j];
+        const xDir = x._direction || x.direction || '';
+        if (xDir === 'trap' || !x.did || !_isDownDir(xDir)) continue;
+        if (_rcaRootByDid[x.did] !== rcaRoot) continue;
+        const xTs = new Date(x.ts).getTime();
+        if (!isFinite(xTs) || Math.abs(eTs - xTs) > _EVT_RCA_WINDOW_MS) continue;
+        rcaIdx.push(j);
+        seenDids.add(x.did);
+      }
+      if (seenDids.size >= 2) {
+        const members = rcaIdx.map(idx => events[idx]);
+        result.push({
+          _group: true, _groupType: 'rootcause',
+          events: members,
+          _root: { did: rcaRoot, name: _rcaRootName[rcaRoot] || '' },
+          dname: _rcaRootName[rcaRoot] || e.dname,
+          _direction: 'down',
+          ts: members[0].ts,
+        });
+        rcaIdx.forEach(idx => used.add(idx));
+        continue;
+      }
+    }
 
     // (a) Same-sensor flapping — same (did, sid) regardless of direction
     const sensorIdx = [i];
@@ -534,6 +600,12 @@ function _groupLabel(g) {
     ? Math.max(...tsStart) - Math.min(...tsStart)
     : 0;
   const spanStr = span > 0 ? _fmtDuration(span / 1000) : '';
+  if (g._groupType === 'rootcause') {
+    const n = new Set(g.events.map(m => m.did).filter(d => d !== g._root?.did)).size;
+    return `🧭 ${esc(g._root?.name || g.dname || '')} — root cause · ` +
+           `${n} downstream device${n === 1 ? '' : 's'} down` +
+           (spanStr ? ` within ${spanStr}` : '');
+  }
   if (g._groupType === 'flap') {
     return `${esc(g.dname || '')}/${esc(g.sname || '')} flapped ${g.events.length}×` +
            (spanStr ? ` in ${spanStr}` : '');
@@ -728,6 +800,11 @@ function _groupLabelShort(g) {
     ? (Math.max(...memberTs) - Math.min(...memberTs)) / 1000
     : 0;
   const burstStr = burstSec > 0 ? _fmtDuration(burstSec) : '';
+  if (g._groupType === 'rootcause') {
+    const n = new Set(g.events.map(m => m.did).filter(d => d !== g._root?.did)).size;
+    return `🧭 root cause — ${n} downstream device${n === 1 ? '' : 's'} down` +
+           (burstStr ? ` within ${burstStr}` : '');
+  }
   if (g._groupType === 'flap') {
     return `${esc(g.sname || '')} flapped ${g.events.length}×` +
            (burstStr ? ` in ${burstStr}` : '');
@@ -1015,6 +1092,9 @@ function _renderEvtView() {
   if (!list) return;
   // Kick off alert cache load on first render (fire-and-forget; re-renders when done)
   if (_alertMap === null) { _loadAlertCache(); }
+  // Refresh the root-cause map (throttled) so cross-device outage clusters can
+  // collapse under their root. Re-renders itself when the mapping changes.
+  if (_evtCollapseEnabled) _evtMaybeLoadRca();
 
   _populateEvtGroupDropdown();
   _populateEvtDeviceDropdown();

@@ -196,6 +196,9 @@ def handle(h, method, path, body):
             "anomaly_cold_start_hours":      int(_settings.get("anomaly_cold_start_hours", 24)),
             "anomaly_checkpoint_interval_s": int(_settings.get("anomaly_checkpoint_interval_s", 3600)),
             "anomaly_default_new_sensors":   int(_settings.get("anomaly_default_new_sensors", 0)),
+            # Group F3 — root-cause analysis (dependency correlation)
+            "rca_suppress_downstream":   int(_settings.get("rca_suppress_downstream", 1)),
+            "rca_correlation_window_s":  int(_settings.get("rca_correlation_window_s", 120)),
             # Group D — branding
             "org_name":          _settings.get("org_name", ""),
             # Group E — latency colour thresholds
@@ -514,6 +517,7 @@ def handle(h, method, path, body):
             "login_fail_max", "login_fail_window", "totp_remember_hours",
             "anomaly_global_enabled", "anomaly_cold_start_hours",
             "anomaly_checkpoint_interval_s", "anomaly_default_new_sensors",
+            "rca_suppress_downstream",
             "org_name", "latency_good_ms", "latency_warn_ms",
             "syslog_host", "syslog_port", "syslog_proto", "syslog_min_severity",
         ):
@@ -560,6 +564,8 @@ def handle(h, method, path, body):
             # Alert batching — window 5s-1h, max size 2-500
             ("alert_batch_window_s",           5,    3600),
             ("alert_batch_max_size",           2,    500),
+            # Root-cause correlation window (evidence + history clustering)
+            ("rca_correlation_window_s",       30,   3600),
         ]:
             if _k in body:
                 try:

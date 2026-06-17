@@ -609,6 +609,39 @@ def _fire(stage, dev, sensor, trig, did, sid, session, profile,
         # normally; the session dedup still prevents storms.
         return
 
+    # ── Root-cause dependency suppression ────────────────────────────
+    # A device whose parents are ALL down is a downstream symptom of the
+    # upstream outage, not an independent fault. Suppress its symptom
+    # dispatches (still recorded as 'suppressed', just no email/webhook/syslog)
+    # while the root is down. Recovery stages always dispatch — they signal the
+    # incident is over. Mirrors the maintenance gate above, including the
+    # deliberate do-NOT-record-stage-fire so the first probe after the root
+    # recovers dispatches normally. Engine-managed toggle lives inside
+    # suppressed_root_for() (returns None when disabled).
+    if not recovery:
+        try:
+            from monitoring.root_cause import suppressed_root_for
+            _rca_root = suppressed_root_for(ctx.get("did", ""))
+        except Exception as e:
+            _rca_root = None
+            log.debug(f"alert_profile_engine: RCA suppression check error: {e}")
+        if _rca_root:
+            _rname = _rca_root.get("name") or _rca_root.get("did") or "upstream"
+            reason = f"Downstream of {_rname} (root cause)"
+            _supp_key = ("rca", stage["id"], did, sid, session)
+            if _supp_key not in _suppressed_logged:
+                if len(_suppressed_logged) > 4096:
+                    _suppressed_logged.clear()
+                _suppressed_logged.add(_supp_key)
+                try:
+                    db_log_event(profile["id"], stage["id"], profile["name"],
+                                 ctx, state="suppressed", suppress_reason=reason)
+                except Exception as e:
+                    log.warning(f"alert_profile_engine: db_log_event (RCA suppressed) error: {e}")
+                log.info(f"alert_profile_engine: stage {stage['id']} suppressed "
+                         f"(downstream of {_rname})")
+            return
+
     # If the user has already ACK'd an event for this sensor, keep silent:
     # no dispatches (no emails / webhooks / syslog / browser pings). The event
     # row is still updated below so repeat_count reflects reality. Recovery

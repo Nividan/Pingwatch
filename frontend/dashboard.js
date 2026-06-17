@@ -121,6 +121,18 @@ const _DW_REG = {
     render:  (wid, _cfg) => _dwRefreshDownDevices(wid),
     refresh: (wid, _cfg) => _dwRefreshDownDevices(wid),
   },
+  active_incidents: {
+    label: 'Active Incidents (Root Cause)',
+    icon:  icon('alerts', 14),
+    cat: 'events',
+    desc: 'Correlated outages — the upstream root device behind each cluster of downs.',
+    meta: ['live', 'RCA'],
+    popular: true,
+    defaultCols: 1,
+    fields: [],
+    render:  (wid, _cfg) => _dwRefreshIncidents(wid),
+    refresh: (wid, _cfg) => _dwRefreshIncidents(wid),
+  },
   top_latency: {
     label: 'Slowest Ping Devices',
     icon:  icon('activity', 14),
@@ -2085,6 +2097,64 @@ function _dwRefreshDownDevices(wid) {
     </div>`;
   }).join('');
   _dwSwap(body, `<div class="dw-dd-list">${rows}</div>`);
+}
+
+// ── Widget: Active Incidents (Root Cause) ─────────────────────────
+// Compact epoch-seconds → "4m" / "2h" duration.
+function _dwIncDur(ts) {
+  if (!ts) return '';
+  const s = Math.max(0, Math.floor(Date.now() / 1000) - ts);
+  if (s < 90)     return s + 's';
+  if (s < 5400)   return Math.round(s / 60) + 'm';
+  if (s < 172800) return Math.round(s / 3600) + 'h';
+  return Math.round(s / 86400) + 'd';
+}
+async function _dwRefreshIncidents(wid) {
+  const body = document.getElementById(`dw-body-${wid}`);
+  if (!body) return;
+  let data = null;
+  try {
+    const r = await fetch('/api/incidents');
+    if (r.ok) data = await r.json();
+  } catch {}
+  if (!data) {
+    body.innerHTML = '<div style="color:var(--text3);font-size:11px;padding:8px;text-align:center">Unavailable</div>';
+    return;
+  }
+  // Only correlated incidents (a root with ≥1 downstream victim) are "root
+  // causes" worth surfacing here; lone downs live in the Down Devices widget.
+  const incidents = (data.incidents || []).filter(i => i.impacted_count > 0);
+  if (!incidents.length) {
+    body.innerHTML = '<div class="dw-dd-ok">✓ No correlated outages</div>';
+    return;
+  }
+  const confLabel = { high: 'high', medium: 'likely', low: 'possible' };
+  const rows = incidents.map(i => {
+    const r = i.root;
+    const tier = (r.tier || '').replace(/_/g, ' ');
+    const reasons = (i.reasons || []).map(x => esc(x)).join(' · ');
+    const shown = i.impacted.slice(0, 12).map(c => esc(c.name)).join(', ');
+    const more = i.impacted_count > 12 ? ` +${i.impacted_count - 12} more` : '';
+    const sub = [tier, r.site, r.down_since ? 'down ' + _dwIncDur(r.down_since) : '']
+                  .filter(Boolean).map(esc).join(' · ');
+    return `<div class="dw-inc">
+      <div class="dw-inc-head" onclick="this.parentElement.classList.toggle('open')">
+        <span class="dw-ds-dot down"></span>
+        <div class="dw-inc-info">
+          <span class="dw-inc-name">${esc(r.name)}</span>
+          <span class="dw-inc-sub">${sub}</span>
+        </div>
+        <span class="dw-inc-conf dw-inc-conf-${esc(i.confidence)}" title="Root-cause confidence">${confLabel[i.confidence] || i.confidence}</span>
+        <span class="dw-inc-count">${i.impacted_count}</span>
+        <span class="dw-inc-chev">▸</span>
+      </div>
+      <div class="dw-inc-detail">
+        ${reasons ? `<div class="dw-inc-reasons">${reasons}</div>` : ''}
+        <div class="dw-inc-impacted"><b>Impacted:</b> ${shown}${more}</div>
+      </div>
+    </div>`;
+  }).join('');
+  _dwSwap(body, `<div class="dw-inc-list">${rows}</div>`);
 }
 
 // ── Widget: Slowest Ping Devices ──────────────────────────────────

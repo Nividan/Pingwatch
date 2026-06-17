@@ -1272,6 +1272,10 @@ def pg_seed_defaults(cur):
         # events are deferred (still-failing sensors emit at the end).
         # Soaks up restart blips (cold vCenter sessions etc.). 0 = off.
         ("startup_grace_s",                "60"),
+        # Root-Cause Analysis (dependency correlation). When a device's parents
+        # are all down, its own alerts are downstream symptoms.
+        ("rca_suppress_downstream",        "1"),   # 1=suppress symptom alerts while root down
+        ("rca_correlation_window_s",       "120"), # timing window for evidence + history clustering
     ]
     for k, v in _defaults:
         cur.execute(
