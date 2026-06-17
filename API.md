@@ -171,6 +171,25 @@ iframe debounces and re-fetches on a 2-second flush.
 | `GET` | `/api/livemap/noc/summary` | viewer | NOC widgets payload — `{sites:{up,warn,down,total}, devices:{...}, alerts:{active,down,warn,ack}, uptime_24h, flaps_24h, incidents_24h, by_kind:{...}, top_problems:[...], recent_alerts:[...], off_site:[...]}` |
 | `GET` | `/api/livemap/sites/{name}/tree` | viewer | Tier tree for one site — `{site:{...}, isp:[...], wan_switches:[...], firewalls:[...], core_switches:[...], switches:[...], chassis:[clusters], hypervisors:[clusters], vm_clusters:[clusters], ipmi:[clusters], other:[devices]}` |
 
+### Root-cause incidents (RCA)
+
+Read-only correlation of the live down-set against the parent dependency graph
+(`devices.parent_device_ids` + `pw_group_parents` fallback). An *incident* is one
+upstream **root** device plus the impacted downstream devices its outage explains
+(redundancy-aware — a device with any live uplink is its own root, never blamed
+upstream). Powers the Active Incidents widget, the Live Map root-cause overlay,
+and the Events-view cross-device collapse.
+
+| Method | Path | Min role | Description |
+|--------|------|----------|-------------|
+| `GET` | `/api/incidents` | viewer | Live incidents — `{incidents:[{root:{did,name,host,tier,status,site,group,down_since}, impacted:[{did,name,tier,status,site,down_since}], impacted_count, confidence:"high"\|"medium"\|"low", reasons:[…], site}], correlated_count, suppress_enabled, generated_at}`. Memoised ~5 s; sorted most-impactful first |
+| `GET` | `/api/incidents/history` | viewer | Past incidents reconstructed from `flap_log` — `?window=1h\|6h\|24h\|7d\|30d` (or raw seconds; default `24h`) → `{incidents:[{root:{did,name,host}, impacted:[{did,name}], impacted_count, started_at, ended_at, duration_s}], window_s, topology_caveat:true}`. `topology_caveat` flags that attribution uses today's graph (no historical topology snapshots are stored) |
+
+Downstream **alert suppression** (PRTG-style dependency) is controlled by the
+`rca_suppress_downstream` setting (default on) via `PATCH /api/settings`; while a
+root is down, symptom alerts are recorded `state="suppressed"` but not dispatched.
+`rca_correlation_window_s` (default `120`) tunes the evidence + history window.
+
 ---
 
 ## Alerts

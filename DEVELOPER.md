@@ -53,7 +53,8 @@ Browser / Desktop GUI
         │   ├── license_checker.py     ← Periodic license expiration checker (6-hour autosave hook)
         │   ├── network_map.py         ← Topology Design (manual editor) data layer
         │   ├── site_rollup.py         ← Live Map per-site + NOC rollup (sites, devices, alerts, off-site)
-        │   └── site_tree.py           ← Live Map tier inference (firewall / switch / hypervisor / VM / IPMI)
+        │   ├── site_tree.py           ← Live Map tier inference (firewall / switch / hypervisor / VM / IPMI)
+        │   └── root_cause.py          ← RCA: correlate down-set vs parent graph → incidents + alert suppression
         │
         ├── backup/               ← Config backup engine
         │   ├── engine.py         ← SSH / Telnet backup engine
@@ -138,7 +139,8 @@ pingwatch/
 │   ├── license_checker.py       ← License expiration checker: compares expiry dates, fires warn/crit/ok events into flap_log, SSE broadcast
 │   ├── network_map.py           ← Topology Design (manual editor) pages, nodes, links, groups (DB-backed)
 │   ├── site_rollup.py           ← Live Map roll-ups: site_summary_list() (per-site up/warn/down/alerts + metadata) and noc_summary() (hero stats, by-kind, top problems, recent alerts, off-site)
-│   └── site_tree.py             ← Tier inference + cluster grouping for the Live Map drill-in (firewall / switch / hypervisor / VM / IPMI); regex-based, falls back to TIER_HYPERVISOR so unclassified servers still render
+│   ├── site_tree.py             ← Tier inference + cluster grouping for the Live Map drill-in (firewall / switch / hypervisor / VM / IPMI); regex-based, falls back to TIER_HYPERVISOR so unclassified servers still render
+│   └── root_cause.py            ← RCA engine: active_incidents()/suppressed_root_for()/historical_incidents(); correlates the live down-set against the parent dependency graph (reuses site_tree/_resolve_parents + infer_tier), memoised per tick
 │
 ├── backup/
 │   ├── engine.py           ← SSH (paramiko) + Telnet connections, TOFU key verify,
@@ -213,7 +215,7 @@ pingwatch/
 │   ├── reports.py          ← Report template/schedule/history CRUD; preview; Run Now; test-send; PDF/CSV download
 │   ├── diagnostics.py      ← Operator/support console: snapshot, db-stats, recent-errors, probe-from-server, NTP/DNS test, maintenance actions, sanitized support-bundle ZIP
 │   ├── sites.py            ← Sites metadata CRUD — /api/sites/meta (list, create, update/rename, delete with optional cascade); operator role; audit-logged
-│   └── livemap.py          ← Live Map read endpoints — /api/livemap/sites, /api/livemap/noc/summary, /api/livemap/sites/<name>/tree; viewer role
+│   └── livemap.py          ← Live Map read endpoints — /api/livemap/sites, /api/livemap/noc/summary, /api/livemap/sites/<name>/tree, plus RCA /api/incidents and /api/incidents/history; viewer role
 │
 ├── certs/                  ← Optional: drop cert.pem + key.pem here
 │
@@ -430,6 +432,13 @@ Scheduled SQLite database backup. Uses `sqlite3.backup()` (WAL-safe — safe to 
 Pure-functional profile evaluator driven by the probe loop. Called from `Sensor._run_once()` after each probe cycle. `resolve_profile_for_sensor()` walks the cascade (sensor → device → group → global), returns the first matching profile, and caches the result on the sensor object (`_resolved_profile_id` / `_resolved_profile_ver`); invalidated by bumping `STATE._profile_cache_ver` whenever any profile changes. The bump itself is **debounced in `routes/alert_profiles.py::_invalidate()`** via a 5 s `threading.Timer` — a burst of profile edits coalesces into one re-resolve storm on the next probe cycle (at 5k sensors, this matters). `evaluate_and_fire()` checks each stage's trigger state, delay, and repeat interval against the sensor's `_down_since_ts` / `_threshold_triggered_ts` fields. Recovery stages fire once when the sensor returns to OK (provided a state-stage previously fired in the same session) and compute total downtime duration from the `active_session` stored in `alert_profile_state`. Post-recovery, all stage rows for that sensor are cleared and the active alert event is auto-resolved.
 
 **Recovery path note:** `_fire()` uses `if recovery: ... else: db_log_event(...)` — the `else` guard is critical. Without it, `db_log_event(state="active")` would run immediately after `db_auto_resolve_event()`, re-creating the event and leaving a stale active alert visible in the Events tab.
+
+**Root-cause suppression gate.** Right after the `check_maintenance(ctx)` gate, `_fire()` runs a second non-recovery gate: `suppressed_root_for(ctx["did"])` (from `monitoring/root_cause.py`). If the device is a downstream symptom of a currently-down root, the event is logged `state="suppressed", suppress_reason="Downstream of …"` (once per `("rca", stage, did, sid, session)` via the shared `_suppressed_logged` set) and dispatch is skipped — but the stage is deliberately **not** marked fired, so the first probe after the root recovers dispatches normally. Recovery stages are never suppressed. Mirrors the maintenance-window pattern exactly.
+
+### `monitoring/root_cause.py`
+Read-only RCA engine, styled after `site_rollup.py`/`site_tree.py`. `_compute_full()` builds the device→parent map via `site_tree._resolve_parents` (device `parent_device_ids` → `pw_group_parents` fallback; group refs and unmonitored parents dropped since we can only blame devices we see the status of), takes the live down-set (`_device_status == "down"`), and for each down device walks up the chain while it is *explained by upstream* — **all** of a device's parents must be down for it to count as a symptom, so a dual-homed device with any live uplink stays its own root. The topmost down ancestor is the **root**; downs cluster by root into incidents `{root, impacted[], impacted_count, confidence, reasons, site}`. Confidence/evidence is cheap and in-memory: infrastructure tier (`infer_tier`), "root went down first" (`Sensor._down_since_ts`), and a single batched `snmp_traps` query for link-down traps near root hosts. The walk is cycle-guarded (`visited` set + `_MAX_WALK` hop cap) and deterministic (follows the lexicographically smallest down parent at a diamond).
+
+**Public API:** `active_incidents()` (endpoint/widget/map/events), `suppressed_root_for(did)` (alert-engine gate; returns `None` when `rca_suppress_downstream` is off), `historical_incidents(window_s)` (reconstructs past clusters from `flap_log` using today's graph — no historical topology snapshots are stored), `invalidate()`. Results are **memoised under a lock with a 5 s TTL** so an outage storm — where the engine is hit once per firing sensor from several probe threads — rebuilds the graph at most once per tick. Two settings drive it: `rca_suppress_downstream` (master toggle, default 1) and `rca_correlation_window_s` (evidence + history clustering window, default 120 s), both seeded dual-backend and editable in **Settings → Sensors → Root-Cause Analysis**.
 
 ### `monitoring/anomaly.py`
 Opt-in per-sensor learned-baseline detector. Pure function — no I/O — so the probe hot path stays O(1). `evaluate_anomaly(sensor, current_ms)` updates the sensor's EWMA mean + variance (Welford-style, adaptive α: 0.10 → 0.02 → 0.01 as `_anom_count` grows) and returns `"ok"` or `"warn"` (never `"crit"`). Upper-tail z-test with variance floor `max(σ, 10 ms, 0.2·μ)` and 3-sample debounce; sensitivity knob maps to k ∈ {3, 4, 6}.
