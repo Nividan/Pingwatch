@@ -1402,6 +1402,16 @@ function _fmtGaugeYLabel(v, snmpUnit) {
   return v.toFixed(Math.abs(v) < 10 ? 1 : 0);
 }
 
+// Round a value up to the nearest "nice" axis ceiling (1/2/5 × 10ⁿ) so Y-axis
+// gridline labels stay clean (e.g. 1.7ms → 2, 42% → 50). Keeps the chart's
+// vertical scale snapped to readable round numbers instead of arbitrary peaks.
+function _niceCeil(v){
+  if (!(v > 0)) return 1;
+  const mag = Math.pow(10, Math.floor(Math.log10(v)));
+  const n = v / mag;
+  return (n <= 1 ? 1 : n <= 2 ? 2 : n <= 5 ? 5 : 10) * mag;
+}
+
 // Mirror of _RATE_SANITY_MAX in db/samples.py (1 TB/s = 8 Tbps). Defense in
 // depth: any rate above this is residue from the pre-fix Counter64 reset bug
 // or upstream clock anomaly — skip it so the chart doesn't render the spike.
@@ -2168,7 +2178,21 @@ function _drawHistCanvas(canvas, statsEl, did, sid, summary, samples, minutes, w
     const sortedMs = [...msVals].sort((a, b) => a - b);
     const p95 = sortedMs.length ? (sortedMs[Math.floor(sortedMs.length * 0.95)] ?? sortedMs[sortedMs.length - 1]) : 0;
     rawMax = sortedMs.length ? sortedMs[sortedMs.length - 1] : 0;
-    maxY = Math.max(Math.max(summaryAvgMax, p95) * 1.4, (_sen?.warn_ms || 0) * 1.2, 10);
+    if (_isVmware) {
+      // VMware metrics carry mixed units (%, MB, W, ms) — keep the original
+      // p95-based scaling so existing dashboards aren't reflowed.
+      maxY = Math.max(Math.max(summaryAvgMax, p95) * 1.4, (_sen?.warn_ms || 0) * 1.2, 10);
+    } else {
+      // Latency sensors: scale to the real peak (+15% headroom) rounded to a
+      // nice ceiling, so low-latency LAN sensors use the full vertical range
+      // instead of being pinned under a fixed 10ms floor (1ms absolute floor
+      // keeps the line off the very edge). The warn threshold only raises the
+      // ceiling when it sits near the data — a far-above warn must NOT re-squash
+      // a low-latency sensor, which is the whole problem we're fixing here.
+      const _peak = rawMax * 1.15;
+      const _warn = (_sen?.warn_ms || 0) * 1.2;
+      maxY = _niceCeil(Math.max(_peak, _warn <= _peak * 2 ? _warn : 0, 1));
+    }
     yOf = ms => Math.max(TOP, (H - BOT) - (Math.min(ms, maxY) / maxY) * plotH);
   }
   // Store maxY in cache for tooltip dot positioning
@@ -2186,7 +2210,11 @@ function _drawHistCanvas(canvas, statsEl, did, sid, summary, samples, minutes, w
     const _yLbl = _isCounter
       ? _fmtRateYLabel(maxY * f, snmpUnit)
       : _isVmware ? _fmtVmYLabel(maxY * f, _vmU2)
-      : (Math.round(maxY * f) >= 1000 ? (Math.round(maxY * f) / 1000).toFixed(1) + 's' : Math.round(maxY * f) + 'ms');
+      : (maxY * f >= 1000
+          ? (maxY * f / 1000).toFixed(1) + 's'
+          // sub-10ms ceilings produce fractional gridlines (e.g. 2ms → 0.4/0.8/
+          // 1.2/1.6/2) — show a decimal so labels don't collapse to 0/1/1/2/2.
+          : (Number.isInteger(maxY * f) ? maxY * f : (maxY * f).toFixed(1)) + 'ms');
     ctx.fillText(_yLbl, LEFT - 4, y + 4);
     if (togLoss && !_isCounter) {
       ctx.fillStyle = `rgba(${_wn},.9)`; ctx.textAlign = 'left';
