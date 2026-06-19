@@ -1653,6 +1653,7 @@ function openDetail(did,sid,initialTab){
         <label><input type="checkbox" id="tog-jitter-${did}-${sid}" onchange="dmHistRedraw('${did}','${sid}')"> Jitter</label>
         ${s?.anomaly_enabled && ['ping','tcp','http','dns','http_keyword','banner'].includes(s.stype)
           ? `<label title="Show learned baseline band (μ ± k·σ)"><input type="checkbox" id="tog-baseline-${did}-${sid}" checked onchange="dmHistRedraw('${did}','${sid}')"> 🧠 Baseline</label>` : ''}
+        <button class="dm-ar-btn" id="exp-${did}-${sid}" onclick="dmHistExport('${did}','${sid}')" title="Export the summary table for the selected time range as CSV">⤓ Export CSV</button>
         <button class="dm-ar-btn" id="ar-${did}-${sid}" onclick="dmToggleAutoRefresh('${did}','${sid}')">Auto-Refresh</button>
         <button class="dm-ar-btn" id="fs-${did}-${sid}" data-did="${did}" data-sid="${sid}" onclick="dmToggleFullscreen('${did}','${sid}')" title="Full screen">⤢</button>
       </div>
@@ -3127,6 +3128,34 @@ function _buildSummaryTable(sumEl, summary, minutes, rateSamples, snmpUnit, did,
     <thead><tr><th>Time</th><th>Up</th><th>Down</th><th>Avail</th><th>Avg</th><th>Min</th><th>Max</th>${_isPing?'<th>Loss</th>':''}<th>Jitter</th></tr></thead>
     <tbody>${rows}</tbody>
   </table>`;
+}
+
+// ── History export ────────────────────────────────────────────────
+// Export the summary table for the active time range as CSV. We serialize
+// the table the user is actually looking at (#dm-hist-summary) rather than
+// re-aggregating from cache, so the columns stay correct for every sensor
+// type (latency / counter-rate / gauge / enum / text change-log / VMware)
+// without duplicating the per-type logic in _buildSummaryTable.
+function dmHistExport(did, sid) {
+  const tbl = document.querySelector(`#dm-hist-summary-${did}-${sid} table`);
+  const bodyRows = tbl ? tbl.querySelectorAll('tbody tr') : [];
+  if (!tbl || !bodyRows.length) { toast('No history to export for this range', 'info'); return; }
+
+  // ↑/↓ are decorative direction glyphs on the Up/Down counts — strip them so
+  // those cells export as plain numbers; unit suffixes (ms/%) are kept to match
+  // the on-screen table. Quote + double-quote escaping mirrors the events CSV.
+  const cell = el => '"' + el.textContent.replace(/[↑↓]/g, '').trim().replace(/"/g, '""') + '"';
+  const header = [...tbl.querySelectorAll('thead th')].map(cell).join(',');
+  const rows = [...bodyRows].map(tr => [...tr.querySelectorAll('td')].map(cell).join(','));
+  // Lead with a UTF-8 BOM so Excel on Windows decodes rate/enum labels correctly.
+  const csv = '\uFEFF' + header + '\n' + rows.join('\n');
+
+  const sen = S.sensors[`${did}/${sid}`] || {};
+  const rangeLbl = document.querySelector(`#dm-tab-history-${did}-${sid} .dm-hist-pill.active`)?.textContent.trim() || '';
+  const safe = v => (String(v || '').replace(/[^a-z0-9]+/gi, '_').replace(/^_+|_+$/g, '') || 'x');
+  const fname = `pingwatch_${safe(S.devices[did]?.name || did)}_${safe(sen.name || sid)}_${safe(rangeLbl)}_${new Date().toISOString().slice(0,10)}.csv`;
+
+  _evtDownload(fname, csv, 'text/csv;charset=utf-8');
 }
 
 function dmToggleAutoRefresh(did, sid) {
