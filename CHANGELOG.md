@@ -4,6 +4,12 @@ Detailed implementation notes for every shipped feature. For the high-level road
 
 ---
 
+## v1.5 — Unreleased
+
+_In development._
+
+---
+
 ## v1.4 — Root Cause & Acknowledgement
 
 Two monitoring-wide improvements built on top of the v1.3 probe work. The wire protocol is unchanged (still `1`), so v1.3 agents keep working — though the Probes page flags them "update available," and re-downloading picks up the agent-side reliability fixes below.

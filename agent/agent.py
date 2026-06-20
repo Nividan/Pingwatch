@@ -77,7 +77,7 @@ import probes  # noqa: E402  (verbatim copy of the server's monitoring/probes.py
 
 # Keep AGENT_VERSION in lock-step with the server's APP_VERSION at release
 # time — the Probes page flags agents whose version differs.
-AGENT_VERSION = "1.4"
+AGENT_VERSION = "1.5"
 PROTOCOL_VERSION = 1
 
 
