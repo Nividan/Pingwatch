@@ -426,16 +426,23 @@ def handle(h, method, path, body) -> bool:
             tok, tok_hash = _new_enroll_token()
             db_set_enroll_token(pid, tok_hash, time.time() + PROBE_ENROLL_TTL_S,
                                 status=probe.get("status") or "pending")
+            # Optional ?os=windows|linux → ship only that platform's installers.
+            from urllib.parse import urlparse, parse_qs
+            _os = (parse_qs(urlparse(h.path).query).get("os", [""])[0] or "").lower()
+            platform = _os if _os in ("windows", "linux") else ""
             try:
                 from core.agent_package import build_agent_package
                 data = build_agent_package(probe, tok, h.headers.get("Host", ""),
-                                           request_headers=h.headers)
+                                           request_headers=h.headers,
+                                           platform=platform)
             except Exception as e:
                 h._error(500, "package build failed", e, context="probe_package")
                 return True
             db_log_audit(user, h.client_address[0], "probe_package_download",
-                         probe["name"], f"probe_id={pid}")
-            fname = re.sub(r"[^A-Za-z0-9._-]", "_", f"pingwatch-agent-{probe['name']}.zip")
+                         probe["name"],
+                         f"probe_id={pid}" + (f" os={platform}" if platform else ""))
+            _sfx = f"-{platform}" if platform else ""
+            fname = re.sub(r"[^A-Za-z0-9._-]", "_", f"pingwatch-agent-{probe['name']}{_sfx}.zip")
             h.send_response(200)
             h.send_header("Content-Type", "application/zip")
             h.send_header("Content-Length", str(len(data)))

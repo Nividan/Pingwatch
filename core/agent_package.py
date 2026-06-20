@@ -53,6 +53,13 @@ _BASE_ONLY = {
     "supervisor.py", "install.sh", "install.bat",
     "pingwatch-agent.service", "README.md", "requirements-optional.txt",
 }
+# OS-specific BASE installers. A per-platform download ships only its own set;
+# build_id is unaffected because these are BASE (never part of the payload hash),
+# so Windows and Linux packages share one build_id and one managed-update path.
+_OS_INSTALLERS = {
+    "linux":   {"install.sh", "pingwatch-agent.service"},
+    "windows": {"install.bat"},
+}
 # Fixed zip timestamp so an unchanged payload always hashes/zips identically.
 _ZIP_EPOCH = (1980, 1, 1, 0, 0, 0)
 
@@ -215,8 +222,18 @@ def _agent_ca_bundle() -> tuple:
 
 def build_agent_package(probe: dict, enrollment_token: str,
                         host_header: str = "",
-                        request_headers=None) -> bytes:
-    """Assemble the zip in memory and return its bytes."""
+                        request_headers=None,
+                        platform: str = "") -> bytes:
+    """Assemble the zip in memory and return its bytes.
+
+    platform "" → both installers (back-compat); "windows" / "linux" → only
+    that OS's installers (the other platform's are omitted)."""
+    platform = (platform or "").lower()
+    if platform in _OS_INSTALLERS:
+        _excl_installers = set().union(
+            *(files for plat, files in _OS_INSTALLERS.items() if plat != platform))
+    else:
+        _excl_installers = set()
     ca_bundle, has_custom_ca = _agent_ca_bundle()
     proxied = _behind_reverse_proxy(request_headers)
     # Pin only in the plain direct self-signed case (it also covers IP-based
@@ -258,6 +275,8 @@ def build_agent_package(probe: dict, enrollment_token: str,
                 rel = os.path.relpath(full, _AGENT_DIR).replace(os.sep, "/")
                 top = rel.split("/", 1)[0]
                 if rel in _BASE_ONLY or top in _BASE_ONLY:
+                    if rel in _excl_installers:
+                        continue   # other platform's installer — skip
                     zf.write(full, prefix + rel)
                 else:
                     zf.write(full, rel_prefix + rel)

@@ -174,7 +174,8 @@ function _pbRow(p){
       verBadge+updBadge+skewBadge+enrollNote+
       `<span class="pb-spacer"></span>`+
       `<button class="btn-s" onclick='_pbOpenUpdates(${pidq})' title="Update history for this probe">⟳ Updates</button>`+
-      `<button class="btn-s rbac-admin" onclick='_pbDownload(${pidq})' title="Download the pre-configured agent zip (issues a fresh one-time token)">⬇ Package</button>`+
+      `<button class="btn-s rbac-admin" onclick='_pbDownload(${pidq},"windows")' title="Download the pre-configured Windows agent zip — Scheduled Task installer (issues a fresh one-time token)">⬇ Windows</button>`+
+      `<button class="btn-s rbac-admin" onclick='_pbDownload(${pidq},"linux")' title="Download the pre-configured Linux agent zip — systemd installer (issues a fresh one-time token)">⬇ Linux</button>`+
       `<button class="btn-s rbac-admin" onclick='_pbReenroll(${pidq})' title="Revoke the agent credential and arm a new one-time enrollment token">↻ Re-enroll</button>`+
       `<button class="btn-s rbac-admin" onclick='_pbRevoke(${pidq})' title="Revoke the agent credential (record kept)">⛔ Revoke</button>`+
       `<button class="btn-s bulk-danger rbac-admin" onclick='_pbDelete(${pidq})'>✕ Delete</button>`+
@@ -421,14 +422,15 @@ function _pbShowToken(pid, name, token){
     `<div class="mbox" style="max-width:560px">`+
       `<div class="mhd"><span>Probe created: ${esc(name)}</span><button class="mx" onclick="closeM('pb-token')">✕</button></div>`+
       `<div class="mbdy">`+
-        `<p>The easiest path: <b>download the package</b> — it ships with this token already in <code>config.json</code>.</p>`+
+        `<p>The easiest path: <b>download the package for your platform</b> — it ships with this token already in <code>config.json</code>.</p>`+
         `<div class="pb-token-box" id="pb-token-val">${esc(token)}</div>`+
         `<p class="pb-hint">Shown once. One-time use, expires in 7 days, bound to this probe. `+
         `Downloading the package later issues a fresh token automatically.</p>`+
       `</div>`+
       `<div class="mft">`+
         `<button class="btn" onclick="_pbCopyToken()">Copy token</button>`+
-        `<button class="btn primary" onclick='_pbDownload(${esc(JSON.stringify(pid))});closeM("pb-token")'>⬇ Download package</button>`+
+        `<button class="btn primary" onclick='_pbDownload(${esc(JSON.stringify(pid))},"windows");closeM("pb-token")'>⬇ Windows</button>`+
+        `<button class="btn primary" onclick='_pbDownload(${esc(JSON.stringify(pid))},"linux");closeM("pb-token")'>⬇ Linux</button>`+
       `</div>`+
     `</div>`;
   document.body.appendChild(o);
@@ -441,10 +443,12 @@ function _pbCopyToken(){
 }
 
 // ── Row actions ──────────────────────────────────────────────────
-function _pbDownload(pid){
+function _pbDownload(pid, os){
   // Plain navigation → browser save dialog; the endpoint re-arms a fresh
-  // one-time token inside the zip on every download.
-  window.location.href=`/api/probes/${encodeURIComponent(pid)}/package`;
+  // one-time token inside the zip on every download. `os` (windows|linux)
+  // selects which installer set the zip ships with.
+  const q=(os==='windows'||os==='linux')?`?os=${os}`:'';
+  window.location.href=`/api/probes/${encodeURIComponent(pid)}/package${q}`;
   setTimeout(_probesLoad, 1500);
 }
 
