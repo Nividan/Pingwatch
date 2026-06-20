@@ -174,8 +174,7 @@ function _pbRow(p){
       verBadge+updBadge+skewBadge+enrollNote+
       `<span class="pb-spacer"></span>`+
       `<button class="btn-s" onclick='_pbOpenUpdates(${pidq})' title="Update history for this probe">⟳ Updates</button>`+
-      `<button class="btn-s rbac-admin" onclick='_pbDownload(${pidq},"windows")' title="Download the pre-configured Windows agent zip — Scheduled Task installer (issues a fresh one-time token)">⬇ Windows</button>`+
-      `<button class="btn-s rbac-admin" onclick='_pbDownload(${pidq},"linux")' title="Download the pre-configured Linux agent zip — systemd installer (issues a fresh one-time token)">⬇ Linux</button>`+
+      `<button class="btn-s rbac-admin" onclick='_pbPickOS(${pidq})' title="Download the pre-configured agent package (pick Windows or Linux; issues a fresh one-time token)">⬇ Package</button>`+
       `<button class="btn-s rbac-admin" onclick='_pbReenroll(${pidq})' title="Revoke the agent credential and arm a new one-time enrollment token">↻ Re-enroll</button>`+
       `<button class="btn-s rbac-admin" onclick='_pbRevoke(${pidq})' title="Revoke the agent credential (record kept)">⛔ Revoke</button>`+
       `<button class="btn-s bulk-danger rbac-admin" onclick='_pbDelete(${pidq})'>✕ Delete</button>`+
@@ -429,8 +428,7 @@ function _pbShowToken(pid, name, token){
       `</div>`+
       `<div class="mft">`+
         `<button class="btn" onclick="_pbCopyToken()">Copy token</button>`+
-        `<button class="btn primary" onclick='_pbDownload(${esc(JSON.stringify(pid))},"windows");closeM("pb-token")'>⬇ Windows</button>`+
-        `<button class="btn primary" onclick='_pbDownload(${esc(JSON.stringify(pid))},"linux");closeM("pb-token")'>⬇ Linux</button>`+
+        `<button class="btn primary" onclick='closeM("pb-token");_pbPickOS(${esc(JSON.stringify(pid))})'>⬇ Download package</button>`+
       `</div>`+
     `</div>`;
   document.body.appendChild(o);
@@ -443,6 +441,27 @@ function _pbCopyToken(){
 }
 
 // ── Row actions ──────────────────────────────────────────────────
+function _pbPickOS(pid){
+  // Single "⬇ Package" entry point → choose the host platform, then download.
+  // Keeps the card uncluttered and the OS choice in one place (not duplicated
+  // across the card buttons and the post-create token modal).
+  closeM('pb-os');
+  const pidq=esc(JSON.stringify(pid));
+  const o=document.createElement('div'); o.className='mo'; o.id='pb-os';
+  _overlayClose(o,()=>closeM('pb-os'));
+  o.innerHTML=`<div class="mbox" style="max-width:440px">`+
+    `<div class="mhd"><span>Download agent package</span><button class="mx" onclick="closeM('pb-os')">✕</button></div>`+
+    `<div class="mbdy">`+
+      `<p class="pb-hint">Pick the platform for this probe's host — the package ships the matching installer and a fresh one-time token.</p>`+
+      `<div style="display:flex;gap:10px;margin-top:4px">`+
+        `<button class="btn primary" style="flex:1" onclick='closeM("pb-os");_pbDownload(${pidq},"windows")' title="Scheduled Task installer">⬇ Windows</button>`+
+        `<button class="btn primary" style="flex:1" onclick='closeM("pb-os");_pbDownload(${pidq},"linux")' title="systemd installer">⬇ Linux</button>`+
+      `</div>`+
+    `</div>`+
+  `</div>`;
+  document.body.appendChild(o);
+}
+
 async function _pbDownload(pid, os){
   // Fetch the zip (not a tab navigation) so a server error surfaces as a toast
   // instead of dumping raw JSON onto a blank page. The endpoint re-arms a fresh
