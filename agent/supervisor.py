@@ -287,9 +287,15 @@ def _commit(st):
     prob = st.get("probation") or {}
     st["previous_release"] = prob.get("previous")
     target = prob.get("target")
+    # Write the report while st["probation"] is still populated — _write_report
+    # pulls campaign_id / attempt_id / from_build out of it. Clearing probation
+    # first (the old order) stranded campaigns at "in progress": the success
+    # report reached the server with campaign_id=None, so the server skipped
+    # db_set_campaign_probe_state and the member never left "dispatched".
+    # (The rollback path already writes before clearing — this matches it.)
+    _write_report("success", st, reason="committed", target=target)
     st["probation"] = None
     _save_json_atomic(STATE_PATH, st)
-    _write_report("success", st, reason="committed", target=target)
     _prune_releases({st.get("active_release"), st.get("previous_release")})
     _log("commit: build %s healthy (%d consecutive checkins) — committed"
          % (target, GOOD_CHECKINS))
