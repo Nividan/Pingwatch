@@ -13,19 +13,14 @@ function openAddDevice(){
         <div class="fr"><label class="fl">Host / IP Address</label>
           <input type="text" id="ad-h" placeholder="192.168.1.1" autocomplete="off"/></div>
         <div class="fr"><label class="fl">Site <span style="color:var(--text3);font-weight:400;font-size:11px">(optional)</span></label>
-          <input type="text" id="ad-site" list="ad-site-dl" placeholder="HQ, DR-Site-2…" autocomplete="off"/>
-          <datalist id="ad-site-dl"></datalist></div>
+          ${siteComboHtml('ad-site', '', 'HQ, DR-Site-2…')}</div>
       </div>
       <div class="fr"><label class="fl">Group</label>
         <input type="text" id="ad-g" placeholder="Default Group" autocomplete="off"/></div>
+      <div class="fr"><label class="fl">Measured from <span style="color:var(--text3);font-weight:400;font-size:11px">(remote probe — sensors inherit unless overridden)</span></label>
+        ${typeof _probeSelectHtml==='function' ? _probeSelectHtml('ad-probe','', 'Inherit from site / Central') : '<select id="ad-probe"><option value="">Central</option></select>'}</div>
       <div class="fr"><label class="fl">Topology Role <span style="color:var(--text3);font-weight:400;font-size:11px">(optional — anchors auto-links on the NTM Live map)</span></label>
-        <select id="ad-role">
-          <option value="" selected>— None —</option>
-          <option value="switch">Switch (access — subnet members fan to it)</option>
-          <option value="backbone">Backbone (aggregation — between switches and core)</option>
-          <option value="core">Core (central L3 — between backbones and gateway)</option>
-          <option value="gateway">Gateway (edge / firewall — site exit)</option>
-        </select></div>
+        <select id="ad-role">${_lmTierOptionsHtml('', '— None —')}</select></div>
       <details class="dev-creds" style="margin-top:10px">
         <summary style="cursor:pointer;color:var(--text2);font-size:13px;font-weight:500;user-select:none">Default Credentials <span style="color:var(--text3);font-weight:400">(optional — pre-fills new sensors)</span></summary>
         <div style="margin-top:8px;display:flex;flex-direction:column;gap:8px">
@@ -74,7 +69,6 @@ function openAddDevice(){
   document.body.appendChild(o);
   setTimeout(()=>document.getElementById('ad-n')?.focus(),50);
   ['ad-n','ad-h'].forEach(id=>document.getElementById(id)?.addEventListener('keydown',e=>{if(e.key==='Enter')submitAddDevice()}));
-  _populateSiteDatalist('ad-site-dl');
 }
 
 // Populate a <datalist> with sites from /api/sites. Used by the add/edit
@@ -114,6 +108,8 @@ async function submitAddDevice(){
   if(btn){btn.disabled=true;btn.textContent='Adding...';}
   const payload={name,host,group};
   if(site) payload.site = site;
+  const _adProbe=document.getElementById('ad-probe')?.value||'';
+  if(_adProbe) payload.probe_id=_adProbe;
   if(snmp_community_default) payload.snmp_community_default=snmp_community_default;
   if(snmp_version_default) payload.snmp_version_default=snmp_version_default;
   if(vmware_user_default) payload.vmware_user_default=vmware_user_default;
@@ -245,9 +241,7 @@ function openEditDevice(did){
           </div>
           <div class="fr">
             <label class="fl">Site <span style="color:var(--text3);font-weight:400;font-size:11px">(optional)</span></label>
-            <input type="text" id="ed-site" value="${esc(dev.site||'')}" list="ed-site-dl"
-                   placeholder="HQ, DR-Site-2…" autocomplete="off"/>
-            <datalist id="ed-site-dl"></datalist>
+            ${siteComboHtml('ed-site', dev.site||'', 'HQ, DR-Site-2…')}
           </div>
         </div>
         <div class="fgrid">
@@ -263,14 +257,12 @@ function openEditDevice(did){
           </div>
           <div class="fr">
             <label class="fl">Topology Role <span style="color:var(--text3);font-weight:400;font-size:11px">(optional)</span></label>
-            <select id="ed-role" data-orig="">
-              <option value="">— None —</option>
-              <option value="switch">Switch (access)</option>
-              <option value="backbone">Backbone (aggregation)</option>
-              <option value="core">Core (central L3)</option>
-              <option value="gateway">Gateway (edge / firewall)</option>
-            </select>
+            <select id="ed-role" data-orig="">${_lmTierOptionsHtml('', '— None —')}</select>
           </div>
+        </div>
+        <div class="fr">
+          <label class="fl">Measured from <span style="color:var(--text3);font-weight:400;font-size:11px">(remote probe — sensors inherit unless overridden)</span></label>
+          ${typeof _probeSelectHtml==='function' ? _probeSelectHtml('ed-probe', dev.probe_id||'', 'Inherit from site / Central') : '<select id="ed-probe"><option value="">Central</option></select>'}
         </div>
         <div class="fr" style="margin-top:8px">
           <label style="display:flex;align-items:center;gap:8px;cursor:pointer;user-select:none">
@@ -392,7 +384,6 @@ function openEditDevice(did){
     })
   );
   document.getElementById('ed-g')?.addEventListener('blur', () => setTimeout(_edgHide, 150));
-  _populateSiteDatalist('ed-site-dl');
   _edSipRender();
   _edParentInit(did);
   _edLicLoad(did);
@@ -814,6 +805,8 @@ async function submitEditDevice(did){
     secondary_ips: _edSecIps,
     parent_device_ids: _serializedIds,
     parent_device_ports: _serializedPorts};
+  { const _edp=document.getElementById('ed-probe');
+    if(_edp && _edp.value !== (S.devices[did]?.probe_id||'')) payload.probe_id=_edp.value; }
   if(vmware_password_default) payload.vmware_password_default = vmware_password_default;
   // SNMPv3 device defaults — emit only when the section is visible (version=3).
   if(snmp_version_default === '3'){

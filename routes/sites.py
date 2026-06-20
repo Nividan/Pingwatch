@@ -21,6 +21,25 @@ from db import (
     db_rename_site_meta, db_delete_site_meta, db_distinct_site_names,
     db_site_usage, KNOWN_KINDS,
 )
+from db.sites import db_set_site_probe
+
+
+def _apply_site_probe_change(site_name: str):
+    """A site→probe binding changed: refresh the resolver cache, re-apply
+    scheduling for every sensor on devices in that site, and make every
+    agent re-pull its config."""
+    from core.app_state import STATE
+    from core.probe_assign import invalidate_site_probe_cache
+    invalidate_site_probe_cache()
+    with STATE._lock:
+        pairs = [(dev.device_id, sid)
+                 for dev in STATE.devices.values()
+                 if (getattr(dev, "site", "") or "") == site_name
+                 for sid in dev.sensors.keys()]
+    if pairs:
+        STATE.apply_probe_assignment(pairs)
+    from routes.probes import _bump_all_probe_configs
+    _bump_all_probe_configs()
 
 
 def _to_int(v, default: int = 0) -> int:
@@ -181,6 +200,19 @@ def handle(h, method, path, body):
         )
         if not ok:
             h._json(500, {"error": "failed to update site"}); return True
+        # Distributed probes: optional site→probe binding (third cascade tier)
+        if "probe_id" in body:
+            _pid = str(body.get("probe_id") or "").strip()
+            if _pid and _pid != "central":
+                from db.probes import db_get_probe
+                if not db_get_probe(_pid):
+                    h._json(400, {"error": "unknown probe"}); return True
+            _old_pid = (existing or {}).get("probe_id", "") or ""
+            if _pid != _old_pid:
+                db_set_site_probe(target_name, _pid)
+                _apply_site_probe_change(target_name)
+                db_log_audit(user, h.client_address[0], "site_probe_bind",
+                             f"{target_name} probe={_pid or 'central'}")
         db_log_audit(user, h.client_address[0], "site_update",
                      f"{target_name} kind={kind}")
         h._json(200, {"ok": True, "site": db_get_site_meta(target_name)})

@@ -16,6 +16,7 @@ from __future__ import annotations
 import io
 import os
 import posixpath
+import socket
 
 from core.logger import log_backup as log
 from core.settings import get as _cfg
@@ -171,11 +172,21 @@ def _sftp_connect(s: dict):
     """Open + authenticate a paramiko.Transport. Returns (transport, err_or_None)."""
     import paramiko
     from .engine import _verify_host_key
+    # Explicit socket connect with timeout — paramiko.Transport((host, port))
+    # otherwise blocks on the OS-default TCP timeout (minutes) for an
+    # unreachable backup target, ignoring _CONNECT_TIMEOUT.
     try:
-        t = paramiko.Transport((s['host'], s['port']))
+        _sock = socket.create_connection((s['host'], s['port']),
+                                         timeout=_CONNECT_TIMEOUT)
+    except Exception as e:
+        return None, f"connection failed: {e}"
+    try:
+        t = paramiko.Transport(_sock)
         t.banner_timeout = _CONNECT_TIMEOUT
         t.start_client(timeout=_CONNECT_TIMEOUT)
     except Exception as e:
+        try: _sock.close()
+        except Exception: pass
         return None, f"connection failed: {e}"
 
     err = _verify_host_key(t, s['host'], s['port'])

@@ -14,7 +14,6 @@ Completed work lives in [CHANGELOG.md](CHANGELOG.md). This file tracks planned w
 ## ⚙️ Medium Priority
 
 **Backend**
-- **Parent-Child Dependency Suppression** — optional `parent_device_id`; suppress child alert dispatch when parent is down; NTM-integrated parent picker
 - **Further sample rollup** — hourly/daily buckets beyond the existing 5-min rollup for multi-year retention at minimal storage cost
 
 **Integrations**

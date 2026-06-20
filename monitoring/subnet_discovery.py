@@ -506,3 +506,160 @@ def _purge_old_scans():
             f = _SCANS[sid].get("finished_at")
             if f and (now - f) > _SCAN_TTL_S:
                 del _SCANS[sid]
+
+
+# ── Remote scans (distributed probes, v1.3) ────────────────────────
+# A remote scan is a registry entry whose sweep executes on a branch agent.
+# Rows stream in through routes/agent.py (append_remote_scan_rows) and the
+# entry is finalized by complete_remote_scan() with the SAME server-side
+# post-processing a local scan gets — every consumer (poll endpoints,
+# _scan_apply_worker, bulk-add) sees an indistinguishable scan record.
+
+_REMOTE_MAX_ROWS = 70_000   # caps registry memory for dense /16 full scans
+
+
+def register_remote_scan(cidr: str, mode: str, probe_id: str):
+    """Create the registry entry for a probe-executed scan.
+    Returns (scan_id, error) like start_scan()."""
+    if mode not in ("full", "ping"):
+        return None, "Invalid scan mode"
+    net, err = _validate_cidr(cidr)
+    if err:
+        return None, err
+    _purge_old_scans()
+    scan_id = uuid.uuid4().hex[:16]
+    with _SCANS_LOCK:
+        _SCANS[scan_id] = {
+            "scan_id":     scan_id,
+            "cidr":        cidr,
+            "mode":        mode,
+            "state":       "running",
+            "phase":       "remote:queued",
+            "started_at":  time.time(),
+            "finished_at": None,
+            "remote":      True,
+            "probe_id":    probe_id,
+            "progress": {
+                "total":             0,
+                "checked":           0,
+                "alive":             0,
+                "enrich_total":      0,
+                "enriched":          0,
+                "monitored_skipped": 0,
+            },
+            "results": [],
+            "error":   "",
+            "cancel":  False,
+        }
+    return scan_id, ""
+
+
+def bind_remote_scan_task(scan_id: str, task_id: int):
+    """Link the agent_tasks row to the registry entry so a UI cancel can
+    flip the task state (relayed to the agent via checkin)."""
+    with _SCANS_LOCK:
+        st = _SCANS.get(scan_id)
+        if st is not None:
+            st["task_id"] = int(task_id)
+
+
+def update_remote_scan(scan_id: str, prog: dict):
+    """Apply agent-reported progress (phase + counters) to the entry."""
+    if not isinstance(prog, dict):
+        return
+    with _SCANS_LOCK:
+        st = _SCANS.get(scan_id)
+        if not st or not st.get("remote") or st["state"] != "running":
+            return
+        ph = prog.get("phase")
+        if isinstance(ph, str) and ph:
+            st["phase"] = "remote:" + ph[:24]
+        for k in ("total", "checked", "alive", "enrich_total", "enriched"):
+            v = prog.get(k)
+            if v is not None:
+                try:
+                    st["progress"][k] = max(0, int(v))
+                except (TypeError, ValueError):
+                    pass
+
+
+def append_remote_scan_rows(scan_id: str, rows: list):
+    """Stash sanitized raw rows from the agent. Enrichment (vendor / type
+    guess / sensor suggestions / duplicate flags) runs at completion."""
+    clean = []
+    for r in rows or []:
+        if not isinstance(r, dict):
+            continue
+        ip = str(r.get("ip") or "")[:45]
+        if not ip:
+            continue
+        ports = []
+        for p in (r.get("ports") or [])[:50]:
+            if not isinstance(p, dict):
+                continue
+            try:
+                pnum = int(p.get("port") or 0)
+            except (TypeError, ValueError):
+                pnum = 0
+            ports.append({"stype":  str(p.get("stype") or "")[:16],
+                          "name":   str(p.get("name") or "")[:64],
+                          "port":   pnum or None,
+                          "detail": str(p.get("detail") or "")[:120]})
+        row = {"ip":       ip,
+               "hostname": str(r.get("hostname") or "")[:253],
+               "mac":      str(r.get("mac") or "")[:17].lower(),
+               "ports":    sorted(ports, key=lambda x: x.get("port") or 0)}
+        ms = r.get("ms")
+        if ms is not None:
+            try:
+                row["ms"] = float(ms)
+            except (TypeError, ValueError):
+                pass
+        clean.append(row)
+    if not clean:
+        return
+    with _SCANS_LOCK:
+        st = _SCANS.get(scan_id)
+        if not st or not st.get("remote") or st["state"] != "running":
+            return
+        room = _REMOTE_MAX_ROWS - len(st["results"])
+        if room > 0:
+            st["results"].extend(clean[:room])
+        st["progress"]["alive"] = max(st["progress"]["alive"], len(st["results"]))
+
+
+def complete_remote_scan(scan_id: str, rows=None, error: str = ""):
+    """Finalize a remote scan with the local scan's post-processing pass."""
+    if rows:
+        append_remote_scan_rows(scan_id, rows)
+    with _SCANS_LOCK:
+        st = _SCANS.get(scan_id)
+        if not st or not st.get("remote") or st["state"] != "running":
+            return
+        results = st["results"]
+        mode = st.get("mode") or "full"
+        st["phase"] = "analyzing"
+    if not error:
+        try:
+            for row in results:
+                if "vendor" not in row:
+                    row["vendor"] = _vendor_for_mac(row.get("mac") or "")
+                if "guess" not in row:
+                    row["guess"] = (_guess_device_type(row.get("ports") or [])
+                                    if mode == "full" else "")
+                if "suggested" not in row:
+                    row["suggested"] = _suggest_sensors(
+                        row["ip"], row.get("hostname") or "", row.get("ports") or [])
+            _flag_duplicates(results, _monitored_hostname_map())
+        except Exception as e:
+            log.warning(f"remote scan post-processing failed: {e}")
+    with _SCANS_LOCK:
+        st = _SCANS.get(scan_id)
+        if not st:
+            return
+        if error:
+            st["state"] = "error"
+            st["error"] = error[:200]
+        else:
+            st["state"] = "cancelled" if st.get("cancel") else "done"
+        st["finished_at"] = time.time()

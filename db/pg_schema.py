@@ -110,25 +110,51 @@ def pg_create_main_schema(cur):
         except Exception:
             pass
 
-    # Bearer-token auth for scripts / CI / Terraform. token_hash is SHA-256
-    # of the plaintext token (plaintext never stored). scope gates HTTP
-    # method: 'read' = GET/HEAD/OPTIONS only, 'full' = any.
+    # Bearer-token auth for scripts / CI / Terraform / remote probes.
+    # token_hash is SHA-256 of the plaintext token (plaintext never stored).
+    # scope gates access: 'read' = GET/HEAD/OPTIONS only, 'full' = any,
+    # 'probe' = /api/agent/* only (distributed probes, v1.3).
     cur.execute("""
         CREATE TABLE IF NOT EXISTS api_tokens (
             id           SERIAL PRIMARY KEY,
             token_hash   TEXT NOT NULL UNIQUE,
             name         TEXT NOT NULL,
             username     TEXT NOT NULL,
-            scope        TEXT NOT NULL CHECK (scope IN ('read','full')),
+            scope        TEXT NOT NULL CHECK (scope IN ('read','full','probe')),
             created_at   DOUBLE PRECISION NOT NULL,
             expires_at   DOUBLE PRECISION,
             last_used_at DOUBLE PRECISION,
-            revoked_at   DOUBLE PRECISION
+            revoked_at   DOUBLE PRECISION,
+            probe_id     TEXT DEFAULT NULL
         )""")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_api_tokens_user "
                 "ON api_tokens(username)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_api_tokens_hash "
                 "ON api_tokens(token_hash)")
+    # Widen the scope CHECK on pre-v1.3 installs. The constraint was
+    # auto-named at table creation — discover it by definition, drop, and
+    # re-add with 'probe' included. Savepoint-guarded like other migrations.
+    try:
+        cur.execute("SAVEPOINT _api_scope")
+        cur.execute("""
+            SELECT con.conname, pg_get_constraintdef(con.oid) AS defn
+            FROM pg_constraint con
+            JOIN pg_class c      ON c.oid = con.conrelid
+            JOIN pg_namespace n  ON n.oid = c.relnamespace
+            WHERE n.nspname = 'main' AND c.relname = 'api_tokens'
+              AND con.contype = 'c'
+        """)
+        for _ck in (cur.fetchall() or []):
+            _nm  = _ck["conname"] if isinstance(_ck, dict) else _ck[0]
+            _def = (_ck["defn"] if isinstance(_ck, dict) else _ck[1]) or ""
+            if "scope" in _def and "'probe'" not in _def:
+                cur.execute(f'ALTER TABLE api_tokens DROP CONSTRAINT "{_nm}"')
+                cur.execute(
+                    "ALTER TABLE api_tokens ADD CONSTRAINT api_tokens_scope_check "
+                    "CHECK (scope IN ('read','full','probe'))")
+        cur.execute("RELEASE SAVEPOINT _api_scope")
+    except Exception:
+        cur.execute("ROLLBACK TO SAVEPOINT _api_scope")
 
     cur.execute("""
         CREATE TABLE IF NOT EXISTS devices (
@@ -189,6 +215,118 @@ def pg_create_main_schema(cur):
         )
     """)
 
+    # ── Distributed probes (v1.3) — remote agent registry + task queue ──
+    # Remote agents run sensor probes in branch networks and ship results
+    # back over HTTPS. probes = registry + enrollment + liveness;
+    # agent_tasks = on-demand work queue (IPAM scans, discovery sweeps).
+    # Scan results never land here — they flow into the in-memory _SCANS
+    # registry exactly like local scans.
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS probes (
+            probe_id          TEXT PRIMARY KEY,
+            name              TEXT NOT NULL,
+            description       TEXT DEFAULT '',
+            status            TEXT DEFAULT 'pending',
+            enroll_token_hash TEXT DEFAULT NULL,
+            enroll_expires    DOUBLE PRECISION DEFAULT NULL,
+            token_id          INTEGER DEFAULT NULL,
+            config_version    INTEGER DEFAULT 1,
+            last_seen         DOUBLE PRECISION DEFAULT 0,
+            last_checkin_ip   TEXT DEFAULT '',
+            agent_version     TEXT DEFAULT '',
+            protocol_version  INTEGER DEFAULT 0,
+            os_info           TEXT DEFAULT '',
+            capabilities      TEXT DEFAULT '{}',
+            spool_depth       INTEGER DEFAULT 0,
+            offline_alerted   INTEGER DEFAULT 0,
+            clock_skew_s      DOUBLE PRECISION DEFAULT 0,
+            created_at        DOUBLE PRECISION NOT NULL,
+            created_by        TEXT DEFAULT ''
+        )""")
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS agent_tasks (
+            id            SERIAL PRIMARY KEY,
+            probe_id      TEXT NOT NULL,
+            task_type     TEXT NOT NULL,
+            payload       TEXT DEFAULT '{}',
+            state         TEXT DEFAULT 'pending',
+            progress      TEXT DEFAULT '{}',
+            error         TEXT DEFAULT '',
+            created_by    TEXT DEFAULT '',
+            created_at    DOUBLE PRECISION DEFAULT 0,
+            dispatched_at DOUBLE PRECISION DEFAULT 0,
+            finished_at   DOUBLE PRECISION DEFAULT 0
+        )""")
+    cur.execute(
+        "CREATE INDEX IF NOT EXISTS idx_agent_tasks_probe_state "
+        "ON agent_tasks(probe_id, state)"
+    )
+    # ── Managed agent updates (v1.4) ──────────────────────────────────
+    for _col, _ddl in [
+        ("build_id",           "TEXT DEFAULT ''"),
+        ("supervisor",         "INTEGER DEFAULT 0"),
+        ("update_state",       "TEXT DEFAULT ''"),
+        ("update_target",      "TEXT DEFAULT ''"),
+        ("update_campaign_id", "INTEGER DEFAULT NULL"),
+        ("update_attempt_id",  "TEXT DEFAULT ''"),
+        ("update_changed_at",  "DOUBLE PRECISION DEFAULT 0"),
+        ("update_error",       "TEXT DEFAULT ''"),
+    ]:
+        cur.execute(f"ALTER TABLE probes ADD COLUMN IF NOT EXISTS {_col} {_ddl}")
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS agent_update_reports (
+            id           SERIAL PRIMARY KEY,
+            probe_id     TEXT NOT NULL,
+            campaign_id  INTEGER DEFAULT NULL,
+            attempt_id   TEXT DEFAULT '',
+            outcome      TEXT DEFAULT '',
+            from_build   TEXT DEFAULT '',
+            to_build     TEXT DEFAULT '',
+            target_build TEXT DEFAULT '',
+            reason       TEXT DEFAULT '',
+            log          TEXT DEFAULT '',
+            ts           DOUBLE PRECISION DEFAULT 0
+        )""")
+    cur.execute(
+        "CREATE INDEX IF NOT EXISTS idx_update_reports_probe "
+        "ON agent_update_reports(probe_id, ts)"
+    )
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS update_campaigns (
+            id            SERIAL PRIMARY KEY,
+            name          TEXT DEFAULT '',
+            target_build  TEXT NOT NULL,
+            package_sha256 TEXT DEFAULT '',
+            canary        INTEGER DEFAULT 1,
+            batch_size    INTEGER DEFAULT 5,
+            halt_on_fail  INTEGER DEFAULT 1,
+            window_secs   INTEGER DEFAULT 86400,
+            probation_secs INTEGER DEFAULT 120,
+            state         TEXT DEFAULT 'running',
+            note          TEXT DEFAULT '',
+            created_by    TEXT DEFAULT '',
+            created_at    DOUBLE PRECISION DEFAULT 0,
+            started_at    DOUBLE PRECISION DEFAULT 0,
+            finished_at   DOUBLE PRECISION DEFAULT 0
+        )""")
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS campaign_probes (
+            id           SERIAL PRIMARY KEY,
+            campaign_id  INTEGER NOT NULL,
+            probe_id     TEXT NOT NULL,
+            state        TEXT DEFAULT 'queued',
+            attempt_id   TEXT DEFAULT '',
+            wave         INTEGER DEFAULT 0,
+            queued_at    DOUBLE PRECISION DEFAULT 0,
+            started_at   DOUBLE PRECISION DEFAULT 0,
+            finished_at  DOUBLE PRECISION DEFAULT 0,
+            error        TEXT DEFAULT ''
+        )""")
+    cur.execute(
+        "CREATE INDEX IF NOT EXISTS idx_campaign_probes_cs "
+        "ON campaign_probes(campaign_id, state)"
+    )
+
     cur.execute("""
         CREATE TABLE IF NOT EXISTS sensors (
             did                  TEXT,
@@ -209,6 +347,8 @@ def pg_create_main_schema(cur):
             dns_record_type      TEXT DEFAULT 'A',
             dns_server           TEXT DEFAULT '',
             http_expected_status INTEGER DEFAULT 0,
+            cert_warn_days       INTEGER DEFAULT 0,
+            cert_crit_days       INTEGER DEFAULT 0,
             fail_after           INTEGER DEFAULT 2,
             recover_after        INTEGER DEFAULT 1,
             warn_ms              INTEGER,
@@ -321,6 +461,22 @@ def pg_create_main_schema(cur):
         # monitored devices. Independent of auto_discover: enable on networks
         # where you want visibility but no monitoring side-effects.
         ("ipam_subnets", "auto_host_scan",          "INTEGER DEFAULT 0"),
+        # Distributed probes (v1.3) — assignment cascade sensor→device→site.
+        # '' = inherit, 'central' = explicit pin back to central probing.
+        ("main.devices", "probe_id",                "TEXT DEFAULT ''"),
+        ("sensors",      "probe_id",                "TEXT DEFAULT ''"),
+        ("main.sites",   "probe_id",                "TEXT DEFAULT ''"),
+        ("main.api_tokens", "probe_id",             "TEXT DEFAULT NULL"),
+        # v1.4 — HTTPS cert-expiry thresholds on http sensors (days; 0 = off)
+        ("sensors", "cert_warn_days", "INTEGER DEFAULT 0"),
+        ("sensors", "cert_crit_days", "INTEGER DEFAULT 0"),
+        # Pause persistence — 0 = paused (left stopped on restart), 1 = running.
+        # Without this a paused device/sensor came back running after a restart.
+        ("sensors", "running", "INTEGER DEFAULT 1"),
+        # Backup output validation (v1.4) — assert a real config came back.
+        ("backup_devices", "expected_content",  "TEXT DEFAULT ''"),
+        ("backup_devices", "expected_is_regex", "INTEGER DEFAULT 0"),
+        ("backup_devices", "min_bytes",         "INTEGER DEFAULT 0"),
     ]
     for _tbl, _col, _typedef in _migrations:
         try:
@@ -358,6 +514,7 @@ def pg_create_main_schema(cur):
             target TEXT DEFAULT '',
             detail TEXT DEFAULT ''
         )""")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_audit_ts ON audit_log(ts)")
 
     cur.execute("""
         CREATE TABLE IF NOT EXISTS dashboards (
@@ -384,7 +541,10 @@ def pg_create_main_schema(cur):
             commands     TEXT    DEFAULT '["show running-config"]',
             paging_cmd   TEXT    DEFAULT '',
             timeout      INTEGER DEFAULT 30,
-            in_schedule  INTEGER DEFAULT 0
+            in_schedule  INTEGER DEFAULT 0,
+            expected_content  TEXT    DEFAULT '',
+            expected_is_regex INTEGER DEFAULT 0,
+            min_bytes         INTEGER DEFAULT 0
         )""")
 
     cur.execute("""
@@ -968,6 +1128,7 @@ def pg_create_logs_schema(cur):
             stype TEXT,
             msg   TEXT
         )""")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_err_log_did_sid ON sensor_err_log(did, sid)")
 
     cur.execute("""
         CREATE TABLE IF NOT EXISTS snmp_traps (
@@ -1025,10 +1186,20 @@ def pg_seed_defaults(cur):
     _defaults = [
         ("session_ttl",        "86400"),
         ("retention_days",     "365"),
-        ("snr_interval",       "5"),
-        ("snr_timeout",        "4"),
-        ("snr_fail_after",     "2"),
-        ("snr_recover_after",  "1"),
+        ("snr_interval",       "60"),
+        ("snr_timeout",        "10"),
+        ("snr_fail_after",     "3"),
+        ("snr_recover_after",  "2"),
+        # Scale-safe per-type interval/timeout overrides for new sensors.
+        # Types omitted here inherit the global Interval/Timeout above.
+        ("snr_type_defaults",
+         '{"ping":{"interval":30,"timeout":3},'
+         '"dns":{"interval":60,"timeout":5},'
+         '"snmp":{"interval":120,"timeout":15},'
+         '"ssh":{"interval":120,"timeout":15},'
+         '"sftp":{"interval":120,"timeout":15},'
+         '"smtp":{"interval":120,"timeout":15},'
+         '"vmware":{"interval":60,"timeout":10}}'),
         ("max_flaps_display",  "50"),
         ("max_flap_entries",   "2000"),
         ("max_trap_entries",   "2000"),
@@ -1085,6 +1256,8 @@ def pg_seed_defaults(cur):
         ("log_audit_days",         "365"),
         ("log_backup_max_mb",      "5"),
         ("log_backup_backups",     "5"),
+        ("log_probes_max_mb",      "5"),
+        ("log_probes_backups",     "5"),
         # Tunables surfaced in per-feature tabs
         ("smtp_timeout_s",                 "10"),
         ("pg_statement_timeout_s",         "30"),
@@ -1092,6 +1265,17 @@ def pg_seed_defaults(cur):
         ("auto_discover_scan_deadline_s", "300"),
         ("sftp_checksum_max_mb",           "10"),
         ("import_max_payload_mb",          "8"),
+        # Distributed probes (v1.3) — optional probe-offline email
+        ("probe_offline_email",            "0"),
+        ("probe_offline_email_to",         ""),
+        # Startup grace: seconds after boot during which down/threshold
+        # events are deferred (still-failing sensors emit at the end).
+        # Soaks up restart blips (cold vCenter sessions etc.). 0 = off.
+        ("startup_grace_s",                "60"),
+        # Root-Cause Analysis (dependency correlation). When a device's parents
+        # are all down, its own alerts are downstream symptoms.
+        ("rca_suppress_downstream",        "1"),   # 1=suppress symptom alerts while root down
+        ("rca_correlation_window_s",       "120"), # timing window for evidence + history clustering
     ]
     for k, v in _defaults:
         cur.execute(

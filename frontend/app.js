@@ -10,7 +10,7 @@ const TIMINGS = Object.freeze({
 });
 
 // ── App state ────────────────────────────────────────────────────
-const S={devices:{},sensors:{},logs:{},charts:{},devTraps:{},role:'viewer',_devSensors:{}};
+const S={devices:{},sensors:{},logs:{},charts:{},devTraps:{},role:'viewer',_devSensors:{},probes:{},_siteProbes:{}};
 let _loggedOut=false;  // set during intentional logout to suppress "session expired"
 let sse;
 let _sseFirstConnect = true;  // false after first successful open → reconnects trigger resync
@@ -84,6 +84,7 @@ function _parseSSE(e){
 
 // ── SSE ──────────────────────────────────────────────────────────
 function connectSSE(){
+  if(_loggedOut) return;   // logged out / session expired — don't (re)connect
   if(sse)sse.close();
   sse=new EventSource('/events');
   sse.onopen=()=>{
@@ -157,6 +158,29 @@ function connectSSE(){
     const d=_parseSSE(e); if(!d) return;
     if(typeof _bkOnBackupComplete==='function') _bkOnBackupComplete(d);
   });
+  // ── Distributed probes ──
+  sse.addEventListener('probe_status',e=>{
+    const d=_parseSSE(e); if(!d||!d.probe_id) return;
+    if(d.deleted){ delete S.probes[d.probe_id]; }
+    else{
+      const p=S.probes[d.probe_id]||(S.probes[d.probe_id]={probe_id:d.probe_id});
+      if('connected' in d)      p.connected=!!d.connected;
+      if('status' in d)         p.status=d.status;
+      if('last_seen' in d)      p.last_seen=d.last_seen;
+      if('config_version' in d) p.config_version=d.config_version;
+      if('update_state' in d)   p.update_state=d.update_state;
+    }
+    if(typeof _probesOnStatus==='function') _probesOnStatus(d);
+    if(typeof _refreshStaleBadges==='function') _refreshStaleBadges();
+  });
+  sse.addEventListener('probe_offline',e=>{
+    const d=_parseSSE(e); if(!d) return; d._direction='probe_offline'; pushFlap(d);
+    _scheduleBadgePoll();
+  });
+  sse.addEventListener('probe_online',e=>{
+    const d=_parseSSE(e); if(!d) return; d._direction='probe_online'; pushFlap(d);
+    _scheduleBadgePoll();
+  });
   sse.addEventListener('license_status',e=>{
     const d=_parseSSE(e); if(!d) return;
     if(typeof _ipamOnLicenseUpdate==='function') _ipamOnLicenseUpdate();
@@ -177,6 +201,7 @@ function connectSSE(){
     _updateLogBadge();
   });
   sse.onerror=()=>{
+    if(_loggedOut) return;   // session ended — don't flash "reconnecting" or retry
     document.getElementById('cbn').style.display='block';
     // Guard: onerror can fire multiple times (browser retries) before the timer fires.
     // Only schedule one reconnect attempt at a time to avoid a reconnect storm.
@@ -197,8 +222,8 @@ async function _sseResync(retryCount = 0, gen = ++_resyncGen) {
   try {
     const r = await fetch('/api/devices');
     if (r.status === 401) {
-      // Server restarted and cleared sessions — show login
-      if (!_loggedOut) showLogin('Server restarted. Please sign in again.');
+      // Server restarted and cleared sessions — show login once, stop the loops
+      _onSessionExpired('Server restarted. Please sign in again.');
       return;
     }
     if (!r.ok) {
@@ -574,6 +599,25 @@ async function doLogout(){
   document.getElementById('usrDd').style.display='none';
   document.getElementById('devActBar').style.display='none';
   showLogin();
+}
+
+// The session died under us — the server clears all sessions on restart, so a
+// 401 from any background source (SSE resync, badge poll, an idle widget fetch)
+// means "sign in again". Handle it exactly ONCE and tear down the live SSE +
+// polling timers so they stop firing fresh 401s. Without this, every background
+// 401 re-invoked showLogin — which reset the form and re-focused the username
+// field — so the login screen appeared to "refresh every few seconds" and the
+// password field "jumped" while the user typed. Re-login restarts everything
+// via onAuthenticated() (which sets _loggedOut=false first).
+function _onSessionExpired(msg){
+  if(_loggedOut) return;   // already handled — don't re-render or nag
+  _loggedOut=true;
+  _stopIdleCheck();
+  if(sse){sse.close();sse=null;}
+  if(_reconnectTimer){clearTimeout(_reconnectTimer);_reconnectTimer=null;}
+  if(_hbSparkInterval){clearInterval(_hbSparkInterval);_hbSparkInterval=null;}
+  if(window._badgePollInterval){clearInterval(window._badgePollInterval);window._badgePollInterval=null;}
+  showLogin(msg||'Session expired. Please sign in again.');
 }
 function _usrDdToggle(e){
   e.stopPropagation();
@@ -1084,6 +1128,9 @@ async function onAuthenticated(username){
   await _waitForServerReady();
   loadAll();
   connectSSE();
+  // Distributed probes: cache probe list + site→probe bindings for the
+  // "via probe" badges and the Probes page (fire-and-forget).
+  if(typeof _probesRefreshCache==='function') _probesRefreshCache();
   // Refresh health bar sparkline every 5 min (clear old interval to prevent duplicates on re-login)
   if (_hbSparkInterval) clearInterval(_hbSparkInterval);
   _hbSparkInterval = setInterval(()=>{ _hbSparkLoaded=false; _hbDrawSpark(); }, TIMINGS.SPARK_REFRESH);
@@ -1346,7 +1393,7 @@ async function api(method,path,body=null){
   const o={method,headers:{'Content-Type':'application/json'}};
   if(body)o.body=JSON.stringify(body);
   const r=await fetch(path,o);
-  if(r.status===401){if(!_loggedOut)showLogin('Session expired. Please sign in again.');return {};}
+  if(r.status===401){_onSessionExpired('Session expired. Please sign in again.');return {};}
   if(!r.ok){
     const err=await r.json().catch(()=>({error:r.statusText}));
     throw new Error(err.error||r.statusText);
@@ -1376,16 +1423,19 @@ let _hbSparkData     = [];    // [{ts, pct}] — latest fetch
 let _hbSparkEvents   = [];    // [{ts, type, label}]
 let _hbSparkRange    = '24h';
 function _hbUpdate() {
-  const devs = Object.values(S.devices);
-  if (!devs.length) return;
+  const allDevs = Object.values(S.devices);
+  if (!allDevs.length) return;
   const bar = document.getElementById('healthBar');
   if (!bar) return;
   bar.style.display = '';
+  // Paused devices are intentionally not monitored — exclude them so pausing a
+  // device for maintenance doesn't drag the health percentage down.
+  const devs = allDevs.filter(d => d.status !== 'pause');
   const up  = devs.filter(d => d.status === 'up').length;
   const dn  = devs.filter(d => d.status === 'down').length;
   const wn  = devs.filter(d => d.status === 'warn').length;
   const tot = devs.length;
-  const pct = Math.round(up / tot * 100);
+  const pct = tot ? Math.round(up / tot * 100) : 100;
   const cls = pct >= 90 ? 'healthy' : pct >= 70 ? 'degraded' : 'critical';
   const lbl = pct >= 90 ? 'Healthy' : pct >= 70 ? 'Degraded' : 'Critical';
   const fill = document.getElementById('hb-bar-fill');
@@ -1683,11 +1733,31 @@ let activeMainTab=(()=>{try{const t=localStorage.getItem('pw_tab')||'devices';re
 // Apply correct tab button immediately — synchronous, no network request needed
 document.getElementById('tab'+activeMainTab[0].toUpperCase()+activeMainTab.slice(1))?.classList.add('active');
 
+// Pop the oldest flap AND forget its dedup key. Without the delete, _FLAP_SEEN
+// grew unbounded for the life of the tab (one interned key per event ever
+// seen) even though FLAPS itself is capped — a multi-day NOC session leak.
+function _flapPop(){
+  const popped=FLAPS.pop();
+  if(popped) _FLAP_SEEN.delete(_flapKey(popped));
+}
+
+// Coalesce Events re-renders. During a correlated outage hundreds of distinct
+// flap/threshold events arrive in a burst; rendering synchronously per event
+// triggered N full #evtList innerHTML rebuilds + O(n²) collapse scans, freezing
+// the UI exactly when operators need it. We instead debounce, and skip the
+// rebuild entirely unless the Events tab is active (it re-renders on tab entry).
+let _renderFlapsTimer=null;
+function _scheduleRenderFlaps(){
+  if(activeMainTab!=='events') return;
+  if(_renderFlapsTimer) return;
+  _renderFlapsTimer=setTimeout(()=>{ _renderFlapsTimer=null; renderFlaps(); }, 200);
+}
+
 function pushFlap(d){
   const k=_flapKey(d); if(_FLAP_SEEN.has(k)) return; _FLAP_SEEN.add(k);
   FLAPS.unshift(d);
-  if(FLAPS.length>MAX_FLAPS) FLAPS.pop();
-  renderFlaps();
+  if(FLAPS.length>MAX_FLAPS) _flapPop();
+  _scheduleRenderFlaps();
   flashDownPill();
 }
 
@@ -1705,15 +1775,15 @@ function resolveFlap(d, matchDir){
       break;
     }
   }
-  renderFlaps();
+  _scheduleRenderFlaps();
 }
 
 function pushThresholdEvent(d, level){
   const entry=Object.assign({},d,{_direction:'threshold',_thr_level:level});
   const k=_flapKey(entry); if(_FLAP_SEEN.has(k)) return; _FLAP_SEEN.add(k);
   FLAPS.unshift(entry);
-  if(FLAPS.length>MAX_FLAPS)FLAPS.pop();
-  renderFlaps();
+  if(FLAPS.length>MAX_FLAPS) _flapPop();
+  _scheduleRenderFlaps();
 }
 
 function renderFlaps(){
@@ -1829,6 +1899,7 @@ function switchMainTab(tab){
   document.getElementById('tabBackups').classList.toggle('active',tab==='backups');
   document.getElementById('tabIpam').classList.toggle('active',tab==='ipam');
   { const _rb=document.getElementById('tabReports'); if(_rb) _rb.classList.toggle('active',tab==='reports'); }
+  { const _pb=document.getElementById('tabProbes');  if(_pb) _pb.classList.toggle('active',tab==='probes');  }
   { const _lb=document.getElementById('tabLogs');    if(_lb) _lb.classList.toggle('active',tab==='logs');    }
   const dashboardView=document.getElementById('dashboardView');
   const eventsView   =document.getElementById('eventsView');
@@ -1839,6 +1910,7 @@ function switchMainTab(tab){
   const reportsView  =document.getElementById('reportsView');
   const alertingView =document.getElementById('alertingView');
   const logsView     =document.getElementById('logsView');
+  const probesView   =document.getElementById('probesView');
   const emptyMain    =document.getElementById('emptyMain');
   const dpanels      =document.getElementById('dpanels');
   dashboardView.style.display='none';
@@ -1850,6 +1922,7 @@ function switchMainTab(tab){
   if(reportsView)  reportsView.style.display ='none';
   if(alertingView) alertingView.style.display='none';
   if(logsView)     logsView.style.display    ='none';
+  if(probesView)   probesView.style.display  ='none';
   // Deactivate logs polling when switching away from the Logs tab
   if(tab!=='logs' && typeof _logsDeactivate==='function') _logsDeactivate();
   document.getElementById('devActBar').style.display='none';
@@ -1925,6 +1998,12 @@ function switchMainTab(tab){
     dpanels.style.display='none';
     _mf?.contentWindow?.postMessage({type:'ntm_pause'},window.location.origin);
     if(typeof _alertingPageInit==='function') _alertingPageInit();
+  } else if(tab==='probes'){
+    if(probesView) probesView.style.display='flex';
+    emptyMain.style.display='none';
+    dpanels.style.display='none';
+    _mf?.contentWindow?.postMessage({type:'ntm_pause'},window.location.origin);
+    if(typeof _probesInit==='function') _probesInit();
   } else if(tab==='logs'){
     if(logsView) logsView.style.display='flex';
     emptyMain.style.display='none';

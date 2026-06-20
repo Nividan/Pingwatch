@@ -90,11 +90,31 @@ def check_maintenance(ctx: dict) -> tuple:
 
 # ── SSRF guard for webhooks ──────────────────────────────────────
 
+def _ip_is_internal(ip) -> bool:
+    """True if an ipaddress object is loopback/private/link-local/reserved,
+    including IPv4-mapped / 6to4 / Teredo IPv6 forms that embed an internal v4
+    address (e.g. ::ffff:169.254.169.254) which the plain flags miss."""
+    import ipaddress
+    if ip.is_loopback or ip.is_private or ip.is_link_local or ip.is_reserved \
+            or ip.is_multicast or ip.is_unspecified:
+        return True
+    mapped = getattr(ip, "ipv4_mapped", None)
+    if mapped is not None and _ip_is_internal(mapped):
+        return True
+    sixtofour = getattr(ip, "sixtofour", None)
+    if sixtofour is not None and _ip_is_internal(sixtofour):
+        return True
+    return False
+
+
 def is_safe_url(url: str) -> bool:
     """Return True if url is safe to request (not localhost/link-local/private).
 
-    Resolves hostnames to IPs first — prevents DNS-based SSRF where an
-    external hostname points to an internal address.
+    Resolves the hostname and rejects if ANY resolved address is internal —
+    not just the first A record, which a multi-record rebinding host could use
+    to slip an internal IP past a single-address check. (A redirect or a
+    DNS-rebind between this check and the actual request can still differ; for
+    full protection the request would have to pin this validated IP.)
     """
     import ipaddress
     from urllib.parse import urlparse
@@ -105,14 +125,25 @@ def is_safe_url(url: str) -> bool:
         host = (p.hostname or "").lower()
         if not host:
             return False
+        # A bare IP literal — validate directly.
         try:
-            addr = socket.gethostbyname(host)
-            ip = ipaddress.ip_address(addr)
-            if ip.is_loopback or ip.is_private or ip.is_link_local or ip.is_reserved:
-                return False
-            return True
-        except (socket.gaierror, ValueError):
+            return not _ip_is_internal(ipaddress.ip_address(host))
+        except ValueError:
+            pass
+        try:
+            infos = socket.getaddrinfo(host, None)
+        except (socket.gaierror, OSError):
             return False  # DNS failed — fail closed
+        if not infos:
+            return False
+        for info in infos:
+            addr = info[4][0]
+            try:
+                if _ip_is_internal(ipaddress.ip_address(addr.split("%")[0])):
+                    return False
+            except ValueError:
+                return False
+        return True
     except Exception:
         return False
 
@@ -203,13 +234,13 @@ def dispatch_email_batch(cfg: dict, batch_ctx: dict) -> None:
 # ── Webhook dispatcher ───────────────────────────────────────────
 
 def dispatch_webhook(cfg: dict, ctx: dict) -> None:
-    """HTTP POST webhook with optional body template. Synchronous."""
+    """HTTP POST webhook. Hands the send to the delivery layer: it runs on
+    the dedicated dispatch pool (NOT the caller's probe-worker thread, where
+    a 10 s timeout per alert used to delay probing fleet-wide), and gets
+    retry-with-backoff + a per-URL circuit breaker."""
     url = str(cfg.get("url") or "").strip()
     if not url:
         log.warning("alert_dispatchers: webhook action has no URL — skipped")
-        return
-    if not is_safe_url(url):
-        log.error(f"alert_dispatchers: webhook URL blocked (SSRF guard): {url!r}")
         return
 
     body_tpl = str(cfg.get("body") or "").strip()
@@ -235,15 +266,23 @@ def dispatch_webhook(cfg: dict, ctx: dict) -> None:
     if isinstance(extra, dict):
         headers.update(extra)
 
-    req = urllib.request.Request(url, data=payload_bytes, headers=headers, method=method)
-    try:
+    def _send():
+        # SSRF check inside the send: a permanent block (private IP) burns
+        # its retries and surfaces as PERMANENTLY FAILED; a transient DNS
+        # failure (is_safe_url fails closed) recovers on a later retry
+        # instead of silently dropping the alert.
+        if not is_safe_url(url):
+            raise ValueError("URL blocked by SSRF guard (private/unresolvable)")
+        req = urllib.request.Request(url, data=payload_bytes,
+                                     headers=headers, method=method)
         with urllib.request.urlopen(req, timeout=10) as resp:
             status = resp.status
         log.info(f"alert_dispatchers: webhook {method} {url} → {status}")
-    except urllib.error.HTTPError as e:
-        log.error(f"alert_dispatchers: webhook {url} HTTP {e.code}: {e.reason}")
-    except Exception as e:
-        log.error(f"alert_dispatchers: webhook {url} error: {e}")
+
+    from monitoring.delivery_retry import submit_delivery
+    submit_delivery("webhook", f"webhook:{url}", _send,
+                    f"webhook {method} {url} "
+                    f"({ctx.get('dname','?')}/{ctx.get('sname','?')})")
 
 
 def dispatch_webhook_batch(cfg: dict, batch_ctx: dict) -> None:
@@ -301,6 +340,9 @@ def dispatch_webhook_batch(cfg: dict, batch_ctx: dict) -> None:
 
 # ── Syslog dispatcher ────────────────────────────────────────────
 
+_syslog_drop_logged = 0.0   # rate-limit for queue-full warnings
+
+
 def dispatch_syslog(cfg: dict, ctx: dict) -> None:
     try:
         from monitoring.syslog_client import (
@@ -351,7 +393,13 @@ def dispatch_syslog(cfg: dict, ctx: dict) -> None:
         _ensure_started()
         _SQ.put_nowait((payload, host, port, proto))
     except queue.Full:
-        pass
+        # Alert-grade message lost — say so (rate-limited), don't drop silently.
+        global _syslog_drop_logged
+        now = datetime.datetime.now().timestamp()
+        if now - _syslog_drop_logged > 60:
+            _syslog_drop_logged = now
+            log.warning("alert_dispatchers: syslog queue full — alert "
+                        "message(s) dropped (collector down or too slow)")
     except Exception as e:
         log.error(f"alert_dispatchers: syslog enqueue error: {e}")
 

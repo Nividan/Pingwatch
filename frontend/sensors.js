@@ -52,8 +52,24 @@ function _tileDetail(s, tgt) {
   return s.last_detail || tgt;
 }
 
+// ── Acknowledged-incident state ("known down") ────────────────────
+// A sensor renders muted when its ACTIVE incident (down / threshold breach)
+// was ACKed in Events. The server sets ack_by on the live sensor at ACK time
+// and clears it on recovery, so the badge can never outlive the incident.
+function _sensorAcked(s){
+  return !!(s&&s.ack_by&&(s.alive===false||(s.threshold_state&&s.threshold_state!=='ok')));
+}
+function _ackTitle(s){
+  if(!s||!s.ack_by) return '';
+  const t=s.ack_at?new Date(s.ack_at*1000).toLocaleString():'';
+  return `Acknowledged by ${s.ack_by}${t?' · '+t:''} — known issue, clears on recovery`;
+}
+
 function tileHTML(s){
-  const st=s.alive===true?'up':s.alive===false?'down':'';
+  // Paused (sensor stopped) beats every live state: a manually-stopped sensor
+  // greys out and reads "PAUSED" instead of showing its stale last result.
+  const paused=!s.running;
+  const st=paused?'pause':(s.alive===true?'up':s.alive===false?'down':'');
   const isSnmp=s.stype==='snmp';
   const isDns  =s.stype==='dns';
   const isTls  =s.stype==='tls';
@@ -98,11 +114,12 @@ function tileHTML(s){
     <div class="stl-tbdg ${s.stype}">${sIco(s.stype)} ${s.stype.toUpperCase().replace('_',' ')}</div>
     <div class="stl-nm">${esc(s.name)}</div>
     <span class="stl-muted" id="sm-muted-${s.device_id}_${s.sensor_id}" title="Alerts muted" style="${isMuted?'':'display:none'}">🔕</span>
+    <span class="stl-ackb" id="sm-ack-${s.device_id}_${s.sensor_id}" title="${esc(_ackTitle(s))}" style="${_sensorAcked(s)?'':'display:none'}">✓ ACK</span>
     <button class="stl-hist" onclick="event.stopPropagation();openDetail('${s.device_id}','${s.sensor_id}','history')" title="History">⌚</button>
     <div class="stl-sdot ${st}"></div>
   </div>
   <div class="stl-body">
-    <div class="stl-val ${vc}" id="stv-${s.device_id}_${s.sensor_id}">${vt}</div>
+    <div class="stl-val ${paused?'m':vc}" id="stv-${s.device_id}_${s.sensor_id}">${paused?'PAUSED':esc(vt)}</div>
     <div class="stl-det" title="${esc(s.last_detail||'')}">
       <span id="std-${s.device_id}_${s.sensor_id}">${esc(_tileDetail(s, tgt))}</span>
     </div>
@@ -261,7 +278,7 @@ function renderTile(did,s){
     const key=`${did}/${s.sensor_id}`;
     const old=document.getElementById(`t-${key.replace('/','_')}`);
     const t=document.createElement('div');
-    t.className=`vm-row ${s.alive===true?'up':s.alive===false?'down':''}`;
+    t.className=`vm-row ${!s.running?'pause':(s.alive===true?'up':s.alive===false?'down':'')}${_sensorAcked(s)?' ack':''}`;
     t.id=`t-${key.replace('/','_')}`;
     t.dataset.sid=s.sensor_id;
     t.onclick=()=>openDetail(did,s.sensor_id);
@@ -290,8 +307,9 @@ function renderTile(did,s){
   const key=`${did}/${s.sensor_id}`;
   const old=document.getElementById(`t-${key.replace('/','_')}`);
   const t=document.createElement('div');
-  const _thr=s.threshold_state&&s.threshold_state!=='ok'&&s.alive!==false?' thr-'+s.threshold_state:'';
-  t.className=`stl ${s.alive===true?'up':s.alive===false?'down':''}${_thr} stl-enter`;
+  const _base=!s.running?'pause':(s.alive===true?'up':s.alive===false?'down':'');
+  const _thr=(s.running&&s.threshold_state&&s.threshold_state!=='ok'&&s.alive!==false)?' thr-'+s.threshold_state:'';
+  t.className=`stl ${_base}${_thr}${_sensorAcked(s)?' ack':''} stl-enter`;
   t.id=`t-${key.replace('/','_')}`;
   t.dataset.sid=s.sensor_id;
   t.onclick=()=>openDetail(did,s.sensor_id);
@@ -328,15 +346,16 @@ function updateTile(s){
   const tile=document.getElementById(`t-${key.replace('/','_')}`);
   if(!tile)return;
   if(s.stype==='vmware'&&s.vmware_vm_id){
-    tile.className=`vm-row ${s.alive===true?'up':s.alive===false?'down':''}`;
+    const _base=!s.running?'pause':(s.alive===true?'up':s.alive===false?'down':'');
+    tile.className=`vm-row ${_base}${_sensorAcked(s)?' ack':''}`;
     const dot=tile.querySelector('.stl-sdot');
-    if(dot) dot.className=`stl-sdot ${s.alive===true?'up':s.alive===false?'down':''}`;
+    if(dot) dot.className=`stl-sdot ${_base}`;
     const vc=s.alive===false?'b':(s.threshold_state&&s.threshold_state!=='ok'?(s.threshold_state==='crit'?'r':'w'):(s.alive===true?'g':'m'));
     const _rv=s.last_value||s.last_detail||'—';
     const _rv2=parseFloat(s.last_value);
     const vt=s.alive===false?'FAIL':(!isNaN(_rv2)?_fmtVmVal(_rv2,_VM_UNITS[s.vmware_metric]||''):(_rv.length>12?_rv.slice(0,12)+'…':_rv));
     const vel=document.getElementById(`stv-${sk}`);
-    if(vel){vel.textContent=vt;vel.className=`vm-row-val ${vc}`;}
+    if(vel){vel.textContent=s.running?vt:'PAUSED';vel.className=`vm-row-val ${s.running?vc:'m'}`;}
     const mutedBadge=document.getElementById(`sm-muted-${sk}`);
     if(mutedBadge){const isMuted=s.alerts_muted||S.devices[s.device_id]?.alerts_muted;mutedBadge.style.display=isMuted?'':'none';}
     drawSpk(key,s.history||[]);
@@ -344,10 +363,11 @@ function updateTile(s){
     updateDetailWin(s.device_id,s.sensor_id,s);
     return;
   }
-  const _newThr=s.threshold_state&&s.threshold_state!=='ok'&&s.alive!==false?' thr-'+s.threshold_state:'';
-  tile.className=`stl ${s.alive===true?'up':s.alive===false?'down':''}${_newThr}`;
+  const _base=!s.running?'pause':(s.alive===true?'up':s.alive===false?'down':'');
+  const _newThr=(s.running&&s.threshold_state&&s.threshold_state!=='ok'&&s.alive!==false)?' thr-'+s.threshold_state:'';
+  tile.className=`stl ${_base}${_newThr}${_sensorAcked(s)?' ack':''}`;
   const dot=tile.querySelector('.stl-sdot');
-  if(dot)dot.className=`stl-sdot ${s.alive===true?'up':s.alive===false?'down':''}`;
+  if(dot)dot.className=`stl-sdot ${_base}`;
   const isSnmp=s.stype==='snmp';
   const isDns2  =s.stype==='dns';
   const isTls2  =s.stype==='tls';
@@ -372,9 +392,11 @@ function updateTile(s){
   const _counterThrColor2 = _isCounter2 ? (s.threshold_state==='crit'?'r':s.threshold_state==='warn'?'w':'g') : null;
   const vc=s.alive===false?'b':(_isCounter2?_counterThrColor2:_snmpThrColor2||((isSnmp||isDns2||isTls2)?(_snmpStrVal2?'w':(s.alive===true?'g':'m')):(s.last_ms!==null?msC(s.last_ms,s):'m')));
   const vel=document.getElementById(`stv-${sk}`);
-  if(vel){vel.textContent=vt;vel.className=`stl-val ${vc}`;}
+  if(vel){vel.textContent=s.running?vt:'PAUSED';vel.className=`stl-val ${s.running?vc:'m'}`;}
   const mutedBadge=document.getElementById(`sm-muted-${sk}`);
   if(mutedBadge){const isMuted2=s.alerts_muted||S.devices[s.device_id]?.alerts_muted;mutedBadge.style.display=isMuted2?'':'none';}
+  const ackBadge=document.getElementById(`sm-ack-${sk}`);
+  if(ackBadge){const _ak=_sensorAcked(s);ackBadge.style.display=_ak?'':'none';if(_ak)ackBadge.title=_ackTitle(s);}
   const del=document.getElementById(`std-${sk}`);
   if(del){
     const _tgtLive=s.stype==='http'?(s.url||s.host):s.stype==='tcp'?`${s.host}:${s.port}`:s.stype==='snmp'?`${s.host} OID:${(s.snmp_oid||'').split('.').slice(-3).join('.')}`:s.stype==='dns'?`${s.dns_query||s.host} (${s.dns_record_type||'A'})`:s.host;
@@ -779,11 +801,12 @@ async function _vmEditSave(did, vmid, isHost){
 
 function vmRowHTML(s){
   const sk=`${s.device_id}_${s.sensor_id}`;
-  const st=s.alive===true?'up':s.alive===false?'down':'';
+  const paused=!s.running;
+  const st=paused?'pause':(s.alive===true?'up':s.alive===false?'down':'');
   const _vmRaw=s.last_value||s.last_detail||'—';
   const _vmV=parseFloat(s.last_value);
-  const vt=s.alive===false?'FAIL':(!isNaN(_vmV)?_fmtVmVal(_vmV,_VM_UNITS[s.vmware_metric]||''):(_vmRaw.length>12?_vmRaw.slice(0,12)+'…':_vmRaw));
-  const vc=s.alive===false?'b':(s.threshold_state&&s.threshold_state!=='ok'?(s.threshold_state==='crit'?'r':'w'):(s.alive===true?'g':'m'));
+  const vt=paused?'PAUSED':(s.alive===false?'FAIL':(!isNaN(_vmV)?_fmtVmVal(_vmV,_VM_UNITS[s.vmware_metric]||''):(_vmRaw.length>12?_vmRaw.slice(0,12)+'…':_vmRaw)));
+  const vc=paused?'m':(s.alive===false?'b':(s.threshold_state&&s.threshold_state!=='ok'?(s.threshold_state==='crit'?'r':'w'):(s.alive===true?'g':'m')));
   const metricLabel=(typeof _allVmwareMetrics==='function'?_allVmwareMetrics():(_vmwareMetrics||[])).find(m=>m.v===s.vmware_metric)?.l||s.vmware_metric||s.name;
   const isMuted=s.alerts_muted||S.devices[s.device_id]?.alerts_muted;
   const hist=(s.history||[]).slice(-24);
@@ -830,19 +853,40 @@ function drawSpk(key,history){
 }
 
 // ── Device status recalc ─────────────────────────────────────────
+// True when the device's failing sensors are ALL acknowledged — one fresh
+// (un-ACKed) failure keeps the card loud red.
+function _devAllAck(did){
+  const keys=S._devSensors?.[did]||new Set();
+  const devMuted=S.devices[did]?.alerts_muted;
+  const bad=[...keys].map(k=>S.sensors[k])
+    .filter(s=>s&&!s.alerts_muted&&!devMuted)
+    .filter(s=>s.alive===false||(s.threshold_state&&s.threshold_state!=='ok'));
+  return bad.length>0&&bad.every(s=>!!s.ack_by);
+}
+
 function recalcDevStatus(did){
   const keys=S._devSensors?.[did]||new Set();
   const devMuted=S.devices[did]?.alerts_muted;
-  const active=[...keys].map(k=>S.sensors[k]).filter(s=>s&&!s.alerts_muted&&!devMuted);
+  // Mirror the backend Device.status: only running sensors contribute, and a
+  // device whose sensors are all stopped is "pause" (not down/unknown). Without
+  // the running filter a stopped device keeps its stale alive=false → 'down',
+  // overwriting the 'pause' the server just broadcast.
+  const all=[...keys].map(k=>S.sensors[k]).filter(Boolean);
+  const running=all.filter(s=>s.running);
+  const active=running.filter(s=>!s.alerts_muted&&!devMuted);
   const alives=active.map(s=>s.alive);
   const thresholds=active.map(s=>s.threshold_state);
   let st='unknown';
-  if(alives.some(a=>a===false))st='down';
+  if(all.length&&!running.length)st='pause';
+  else if(alives.some(a=>a===false))st='down';
   else if(thresholds.some(t=>t==='crit'))st='down';
   else if(thresholds.some(t=>t==='warn'))st='warn';
   else if(alives.every(a=>a===true))st='up';
   else if(alives.some(a=>a===true))st='warn';
-  if(S.devices[did])S.devices[did].status=st;
+  if(S.devices[did]){
+    S.devices[did].status=st;
+    S.devices[did]._allAck=(st==='down'||st==='warn')&&_devAllAck(did);
+  }
   updateDpHeader(did,st);
 }
 function updateDpHeader(did,st){
@@ -885,6 +929,14 @@ async function openScanModal(did){
   closeM('mdscan');
   const dev=S.devices[did];
   const host=dev?.host||did;
+  // Devices measured from a remote probe are scanned there (server routes
+  // it through the agent task channel) — slower round-trip, say so up front.
+  const viaPid=(typeof _effectiveProbeFor==='function')?_effectiveProbeFor(dev,null):'';
+  const viaName=viaPid?((S.probes&&S.probes[viaPid]&&S.probes[viaPid].name)||viaPid):'';
+  const spin=viaPid
+    ?`&#8635; Scanning via &#128225; ${esc(viaName)}&hellip; <span style="color:var(--text3)">(remote probe — can take ~20s)</span>`
+    :'&#8635; Scanning&hellip;';
+  const tmoMs=viaPid?40000:30000;
   const o=document.createElement('div');o.className='mo';o.id='mdscan';
   o.onclick=e=>{if(e.target===o)closeM('mdscan');};
   o.innerHTML=`
@@ -896,7 +948,7 @@ async function openScanModal(did){
     </div>
     <div id="scan-body" style="max-height:380px;overflow-y:auto;display:flex;flex-direction:column;
          gap:5px;padding:4px 0">
-      <div class="scan-spin">&#8635; Scanning&hellip;</div>
+      <div class="scan-spin">${spin}</div>
     </div>
     <div class="mfoot" style="justify-content:space-between">
       <button class="btn-s" onclick="closeM('mdscan')">Close</button>
@@ -906,29 +958,38 @@ async function openScanModal(did){
   </div>`;
   document.body.appendChild(o);
   const ctrl=new AbortController();
-  const tid=setTimeout(()=>ctrl.abort(),30000);
+  const tid=setTimeout(()=>ctrl.abort(),tmoMs);
   try{
     const r=await fetch(`/api/device/${did}/scan`,{
       method:'POST',headers:{'Content-Type':'application/json'},
       body:'{}',signal:ctrl.signal,
     });
     clearTimeout(tid);
-    _scanServices=(await r.json()).services||[];
-    _renderScanResults(did,host,_scanServices);
+    const j=await r.json().catch(()=>({}));
+    if(!r.ok||j.error){
+      const b=document.getElementById('scan-body');
+      if(b)b.innerHTML=`<div class="scan-spin" style="color:var(--down)">${esc(j.error||r.statusText||'Scan failed')}</div>`;
+      return;
+    }
+    _scanServices=j.services||[];
+    _renderScanResults(did,host,_scanServices,j.via_probe||'');
   }catch(e){
     clearTimeout(tid);
     const b=document.getElementById('scan-body');
-    const msg=e.name==='AbortError'?'Scan timed out (30s)':`Scan failed: ${esc(String(e))}`;
+    const msg=e.name==='AbortError'?`Scan timed out (${Math.round(tmoMs/1000)}s)`:`Scan failed: ${esc(String(e))}`;
     if(b)b.innerHTML=`<div class="scan-spin" style="color:var(--down)">${msg}</div>`;
   }
 }
 
-function _renderScanResults(did,host,services){
+function _renderScanResults(did,host,services,viaProbe){
   const body=document.getElementById('scan-body');
   const btn=document.getElementById('btn-add-scanned');
   if(!body)return;
+  const viaNote=viaProbe
+    ?`<div style="font-size:11px;color:var(--text3);padding:0 2px 4px">Scanned from &#128225; ${esc(viaProbe)}</div>`
+    :'';
   if(!services.length){
-    body.innerHTML=`<div class="scan-spin">No services found on ${esc(host)}</div>`;
+    body.innerHTML=viaNote+`<div class="scan-spin">No services found on ${esc(host)}</div>`;
     if(btn)btn.style.display='none';
     return;
   }
@@ -938,7 +999,7 @@ function _renderScanResults(did,host,services){
       .filter(k=>k.startsWith(did+'/'))
       .map(k=>{ const s=S.sensors[k]; return `${s.stype}:${s.port||''}`; })
   );
-  body.innerHTML=services.map((svc,i)=>{
+  body.innerHTML=viaNote+services.map((svc,i)=>{
     const key=`${svc.stype}:${svc.port||''}`;
     const exists=existingKeys.has(key);
     const ms=svc.ms!=null?`${svc.ms}ms`:'';
@@ -1341,6 +1402,16 @@ function _fmtGaugeYLabel(v, snmpUnit) {
   return v.toFixed(Math.abs(v) < 10 ? 1 : 0);
 }
 
+// Round a value up to the nearest "nice" axis ceiling (1/2/5 × 10ⁿ) so Y-axis
+// gridline labels stay clean (e.g. 1.7ms → 2, 42% → 50). Keeps the chart's
+// vertical scale snapped to readable round numbers instead of arbitrary peaks.
+function _niceCeil(v){
+  if (!(v > 0)) return 1;
+  const mag = Math.pow(10, Math.floor(Math.log10(v)));
+  const n = v / mag;
+  return (n <= 1 ? 1 : n <= 2 ? 2 : n <= 5 ? 5 : 10) * mag;
+}
+
 // Mirror of _RATE_SANITY_MAX in db/samples.py (1 TB/s = 8 Tbps). Defense in
 // depth: any rate above this is residue from the pre-fix Counter64 reset bug
 // or upstream clock anomaly — skip it so the chart doesn't render the spike.
@@ -1526,7 +1597,7 @@ function openDetail(did,sid,initialTab){
       <div class="dm-metrics">
         ${['last','avg','min','max','loss','sent'].map(k=>`
         <div class="dm-m">
-          <span class="dm-mv" id="dmv-${did}-${sid}-${k}">${mVal(s,k)}</span>
+          <span class="dm-mv" id="dmv-${did}-${sid}-${k}">${esc(mVal(s,k))}</span>
           <span class="dm-mk">${k.toUpperCase()}</span>
         </div>`).join('')}
       </div>
@@ -1582,6 +1653,7 @@ function openDetail(did,sid,initialTab){
         <label><input type="checkbox" id="tog-jitter-${did}-${sid}" onchange="dmHistRedraw('${did}','${sid}')"> Jitter</label>
         ${s?.anomaly_enabled && ['ping','tcp','http','dns','http_keyword','banner'].includes(s.stype)
           ? `<label title="Show learned baseline band (μ ± k·σ)"><input type="checkbox" id="tog-baseline-${did}-${sid}" checked onchange="dmHistRedraw('${did}','${sid}')"> 🧠 Baseline</label>` : ''}
+        <button class="dm-ar-btn" id="exp-${did}-${sid}" onclick="dmHistExport('${did}','${sid}')" title="Export the summary table for the selected time range as CSV">⤓ Export CSV</button>
         <button class="dm-ar-btn" id="ar-${did}-${sid}" onclick="dmToggleAutoRefresh('${did}','${sid}')">Auto-Refresh</button>
         <button class="dm-ar-btn" id="fs-${did}-${sid}" data-did="${did}" data-sid="${sid}" onclick="dmToggleFullscreen('${did}','${sid}')" title="Full screen">⤢</button>
       </div>
@@ -2107,7 +2179,21 @@ function _drawHistCanvas(canvas, statsEl, did, sid, summary, samples, minutes, w
     const sortedMs = [...msVals].sort((a, b) => a - b);
     const p95 = sortedMs.length ? (sortedMs[Math.floor(sortedMs.length * 0.95)] ?? sortedMs[sortedMs.length - 1]) : 0;
     rawMax = sortedMs.length ? sortedMs[sortedMs.length - 1] : 0;
-    maxY = Math.max(Math.max(summaryAvgMax, p95) * 1.4, (_sen?.warn_ms || 0) * 1.2, 10);
+    if (_isVmware) {
+      // VMware metrics carry mixed units (%, MB, W, ms) — keep the original
+      // p95-based scaling so existing dashboards aren't reflowed.
+      maxY = Math.max(Math.max(summaryAvgMax, p95) * 1.4, (_sen?.warn_ms || 0) * 1.2, 10);
+    } else {
+      // Latency sensors: scale to the real peak (+15% headroom) rounded to a
+      // nice ceiling, so low-latency LAN sensors use the full vertical range
+      // instead of being pinned under a fixed 10ms floor (1ms absolute floor
+      // keeps the line off the very edge). The warn threshold only raises the
+      // ceiling when it sits near the data — a far-above warn must NOT re-squash
+      // a low-latency sensor, which is the whole problem we're fixing here.
+      const _peak = rawMax * 1.15;
+      const _warn = (_sen?.warn_ms || 0) * 1.2;
+      maxY = _niceCeil(Math.max(_peak, _warn <= _peak * 2 ? _warn : 0, 1));
+    }
     yOf = ms => Math.max(TOP, (H - BOT) - (Math.min(ms, maxY) / maxY) * plotH);
   }
   // Store maxY in cache for tooltip dot positioning
@@ -2125,7 +2211,11 @@ function _drawHistCanvas(canvas, statsEl, did, sid, summary, samples, minutes, w
     const _yLbl = _isCounter
       ? _fmtRateYLabel(maxY * f, snmpUnit)
       : _isVmware ? _fmtVmYLabel(maxY * f, _vmU2)
-      : (Math.round(maxY * f) >= 1000 ? (Math.round(maxY * f) / 1000).toFixed(1) + 's' : Math.round(maxY * f) + 'ms');
+      : (maxY * f >= 1000
+          ? (maxY * f / 1000).toFixed(1) + 's'
+          // sub-10ms ceilings produce fractional gridlines (e.g. 2ms → 0.4/0.8/
+          // 1.2/1.6/2) — show a decimal so labels don't collapse to 0/1/1/2/2.
+          : (Number.isInteger(maxY * f) ? maxY * f : (maxY * f).toFixed(1)) + 'ms');
     ctx.fillText(_yLbl, LEFT - 4, y + 4);
     if (togLoss && !_isCounter) {
       ctx.fillStyle = `rgba(${_wn},.9)`; ctx.textAlign = 'left';
@@ -3038,6 +3128,34 @@ function _buildSummaryTable(sumEl, summary, minutes, rateSamples, snmpUnit, did,
     <thead><tr><th>Time</th><th>Up</th><th>Down</th><th>Avail</th><th>Avg</th><th>Min</th><th>Max</th>${_isPing?'<th>Loss</th>':''}<th>Jitter</th></tr></thead>
     <tbody>${rows}</tbody>
   </table>`;
+}
+
+// ── History export ────────────────────────────────────────────────
+// Export the summary table for the active time range as CSV. We serialize
+// the table the user is actually looking at (#dm-hist-summary) rather than
+// re-aggregating from cache, so the columns stay correct for every sensor
+// type (latency / counter-rate / gauge / enum / text change-log / VMware)
+// without duplicating the per-type logic in _buildSummaryTable.
+function dmHistExport(did, sid) {
+  const tbl = document.querySelector(`#dm-hist-summary-${did}-${sid} table`);
+  const bodyRows = tbl ? tbl.querySelectorAll('tbody tr') : [];
+  if (!tbl || !bodyRows.length) { toast('No history to export for this range', 'info'); return; }
+
+  // ↑/↓ are decorative direction glyphs on the Up/Down counts — strip them so
+  // those cells export as plain numbers; unit suffixes (ms/%) are kept to match
+  // the on-screen table. Quote + double-quote escaping mirrors the events CSV.
+  const cell = el => '"' + el.textContent.replace(/[↑↓]/g, '').trim().replace(/"/g, '""') + '"';
+  const header = [...tbl.querySelectorAll('thead th')].map(cell).join(',');
+  const rows = [...bodyRows].map(tr => [...tr.querySelectorAll('td')].map(cell).join(','));
+  // Lead with a UTF-8 BOM so Excel on Windows decodes rate/enum labels correctly.
+  const csv = '\uFEFF' + header + '\n' + rows.join('\n');
+
+  const sen = S.sensors[`${did}/${sid}`] || {};
+  const rangeLbl = document.querySelector(`#dm-tab-history-${did}-${sid} .dm-hist-pill.active`)?.textContent.trim() || '';
+  const safe = v => (String(v || '').replace(/[^a-z0-9]+/gi, '_').replace(/^_+|_+$/g, '') || 'x');
+  const fname = `pingwatch_${safe(S.devices[did]?.name || did)}_${safe(sen.name || sid)}_${safe(rangeLbl)}_${new Date().toISOString().slice(0,10)}.csv`;
+
+  _evtDownload(fname, csv, 'text/csv;charset=utf-8');
 }
 
 function dmToggleAutoRefresh(did, sid) {

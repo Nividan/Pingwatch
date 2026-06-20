@@ -84,7 +84,67 @@ const LM = {
   ssePending:    [],
   sseTimer:      null,
   liveTickTimer: null,      // periodic time-ago refresh
+  // Root-cause overlay: {did→rootDid} + {rootDid→name} from /api/incidents.
+  rca:           { byDid: {}, rootName: {}, ts: 0, loading: false },
+  rcaEnabled:    (function(){ try { return localStorage.getItem('pw_lm_rca') !== '0'; } catch(_) { return true; } })(),
 };
+
+// ─── Root-cause overlay ──────────────────────────────────────
+// Fetch live incidents and mark the root device + its impacted subtree on the
+// drill-in. Read-only; decorates already-rendered cards by data-did/data-cells.
+function fetchIncidents() {
+  const rca = LM.rca;
+  if (rca.loading) return Promise.resolve();
+  rca.loading = true;
+  return fetch('/api/incidents', { credentials: 'same-origin' })
+    .then(function(r) { return r.ok ? r.json() : null; })
+    .then(function(data) {
+      rca.loading = false; rca.ts = Date.now();
+      const byDid = {}, names = {};
+      ((data && data.incidents) || []).forEach(function(inc) {
+        if (!inc.impacted_count) return;           // only correlated clusters
+        const rd = inc.root.did;
+        names[rd] = inc.root.name || rd;
+        byDid[rd] = rd;
+        (inc.impacted || []).forEach(function(c) { byDid[c.did] = rd; });
+      });
+      rca.byDid = byDid; rca.rootName = names;
+    })
+    .catch(function() { rca.loading = false; });
+}
+
+function _applyRcaOverlay(canvas) {
+  if (!canvas) return;
+  const rca = LM.rca || {};
+  const byDid = rca.byDid || {};
+  const on = LM.rcaEnabled && Object.keys(byDid).length > 0;
+  canvas.classList.toggle('rca-on', !!on);
+  canvas.querySelectorAll('.rca-root,.rca-impacted').forEach(function(el) {
+    el.classList.remove('rca-root', 'rca-impacted');
+    el.removeAttribute('data-rca-root');
+  });
+  if (!on) return;
+  canvas.querySelectorAll('.dev[data-did]').forEach(function(el) {
+    const did = el.getAttribute('data-did');
+    const root = byDid[did];
+    if (!root) return;
+    if (root === did) el.classList.add('rca-root');
+    else { el.classList.add('rca-impacted'); el.setAttribute('data-rca-root', rca.rootName[root] || ''); }
+  });
+  canvas.querySelectorAll('.cluster[data-cells]').forEach(function(el) {
+    let cells = [];
+    try { cells = JSON.parse(el.getAttribute('data-cells') || '[]'); } catch (_) {}
+    let isRoot = false, isImp = false, rootName = '';
+    cells.forEach(function(did) {
+      const root = byDid[did];
+      if (!root) return;
+      if (root === did) isRoot = true;
+      else { isImp = true; rootName = rca.rootName[root] || rootName; }
+    });
+    if (isRoot) el.classList.add('rca-root');
+    else if (isImp) { el.classList.add('rca-impacted'); if (rootName) el.setAttribute('data-rca-root', rootName); }
+  });
+}
 
 // Inline SVG icons (Heroicons-ish), kept tiny + cyan-tinted
 const ICONS = {
@@ -93,6 +153,7 @@ const ICONS = {
   fw:     '<svg class="dev-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 2 4 6v6c0 5 3.5 9 8 10 4.5-1 8-5 8-10V6l-8-4z"/></svg>',
   core:   '<svg class="dev-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="7" width="18" height="10" rx="1"/><circle cx="7"  cy="12" r="0.9" fill="currentColor"/><circle cx="11" cy="12" r="0.9" fill="currentColor"/><circle cx="15" cy="12" r="0.9" fill="currentColor"/><circle cx="19" cy="12" r="0.9" fill="currentColor"/><path d="M3 11h18"/></svg>',
   sw:     '<svg class="dev-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="9" width="18" height="6" rx="1"/><circle cx="7" cy="12" r="0.7" fill="currentColor"/><circle cx="11" cy="12" r="0.7" fill="currentColor"/><circle cx="15" cy="12" r="0.7" fill="currentColor"/><circle cx="19" cy="12" r="0.7" fill="currentColor"/></svg>',
+  ap:     '<svg class="dev-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M5 11a10 10 0 0 1 14 0"/><path d="M8 14a6 6 0 0 1 8 0"/><path d="M10.5 17a3 3 0 0 1 3 0"/><circle cx="12" cy="19.5" r="0.9" fill="currentColor"/></svg>',
   hyp:    '<svg class="cluster-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="4" width="18" height="6" rx="1"/><rect x="3" y="14" width="18" height="6" rx="1"/><circle cx="6.5" cy="7" r="0.6" fill="currentColor"/><circle cx="6.5" cy="17" r="0.6" fill="currentColor"/></svg>',
   chassis:'<svg class="cluster-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="3" width="18" height="18" rx="1"/><path d="M3 9h18M3 15h18M9 3v18M15 3v18"/></svg>',
   vm:     '<svg class="cluster-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="4" y="4" width="16" height="14" rx="1"/><path d="M9 21h6M12 18v3"/></svg>',
@@ -106,15 +167,16 @@ function renderScopeBar() {
   const focus = LM.currentRoute.view === 'site' ? LM.currentRoute.site : 'NOC';
   $('scope-name').textContent = total + ' SITES · ' + (focus || 'NOC');
 
-  // Pills: up/warn/down/devices (totals)
-  let up = 0, warn = 0, down = 0, devs = 0;
+  // Pills: up/warn/down/pause/devices (totals)
+  let up = 0, warn = 0, down = 0, pause = 0, devs = 0;
   for (const s of LM.sites) {
-    up += s.up; warn += s.warn; down += s.down; devs += s.devices;
+    up += s.up; warn += s.warn; down += s.down; pause += (s.pause || 0); devs += s.devices;
   }
   $('scope-counts').innerHTML =
     '<span class="pill up"><span class="pill-dot" style="background:var(--up)"></span>' + up + ' UP</span>' +
     '<span class="pill warn"><span class="pill-dot" style="background:var(--warn)"></span>' + warn + ' WARN</span>' +
     '<span class="pill down"><span class="pill-dot" style="background:var(--down)"></span>' + down + ' DOWN</span>' +
+    '<span class="pill pause"><span class="pill-dot" style="background:var(--pause)"></span>' + pause + ' PAUSE</span>' +
     '<span class="pill dev"><span class="pill-dot" style="background:var(--accent)"></span>' + devs + ' DEVICES</span>';
 }
 
@@ -574,6 +636,7 @@ function _clusterCard(c, opts) {
              '<span class="cf-up">●' + c.up + '</span>' +
              '<span class="cf-warn">●' + c.warn + '</span>' +
              '<span class="cf-down">●' + c.down + '</span>' +
+             (c.pause ? '<span class="cf-pause">●' + c.pause + '</span>' : '') +
              '<span class="cluster-expand">▸ EXPAND</span>' +
            '</div>' +
          '</div>';
@@ -612,6 +675,7 @@ function _renderSiteTree(name, tree) {
   const fws   = tree.firewalls     || [];
   const cores = tree.core_switches || [];
   const sws   = tree.switches      || [];
+  const aps   = tree.access_points || [];
   const chs   = tree.chassis       || [];
   const hyps  = tree.hypervisors   || [];
   const vms   = tree.vm_clusters   || [];
@@ -622,7 +686,7 @@ function _renderSiteTree(name, tree) {
     const tagCls   = opts.tagCls || cls;
     const rowAlign = opts.center ? ' center' : ' spread';
     const trailing = opts.trailing || '';
-    return '<div class="sd-tier">' +
+    return '<div class="sd-tier sd-tier-' + cls + '">' +
              '<span class="tier-tag ' + tagCls + '">' + esc(label) + '</span>' +
              '<div class="sd-tier-row' + rowAlign + '">' +
                items.map(opts.render).join('') +
@@ -645,6 +709,9 @@ function _renderSiteTree(name, tree) {
   }
   function _swRow(d) {
     return _devCard(d, { icon: ICONS.sw, tier: 'switch' });
+  }
+  function _apRow(d) {
+    return _devCard(d, { icon: ICONS.ap, tier: 'ap' });
   }
   function _chsRow(c) {
     return _clusterCard(c, { icon: ICONS.chassis, tier: 'chassis' });
@@ -678,6 +745,8 @@ function _renderSiteTree(name, tree) {
           '<span class="site-tab-k">SITE</span>' +
           '<span class="site-tab-n">' + esc(name) + '</span>' +
           '<span class="site-tab-s">› SELECTED · MAIN INFRASTRUCTURE</span>' +
+          '<button class="sd-rca-toggle' + (LM.rcaEnabled ? ' on' : '') + '" data-rca-toggle ' +
+            'title="Highlight the root-cause device and its affected downstream subtree">⟁ Root cause</button>' +
         '</div>' +
         '<div class="sd-canvas">' +
           tierRow('isp',  'ISP',              isps,  { render: _ispRow,  center: true }) +
@@ -685,6 +754,7 @@ function _renderSiteTree(name, tree) {
           tierRow('fw',   'FIREWALL',         fws,   { render: _fwRow,   center: true }) +
           tierRow('core', 'CORE SWITCH',      cores, { render: _coreRow, center: false }) +
           tierRow('sw',   'ACCESS SWITCHES',  sws,   { render: _swRow,   center: false }) +
+          tierRow('ap',   'ACCESS POINTS',    aps,   { render: _apRow,   center: false }) +
           tierRow('chs',  'CHASSIS',          chs,   { render: _chsRow }) +
           tierRow('hyp',  'HYPERVISORS',      hyps,  { render: _hypRow, trailing: ipmiTrailing }) +
           tierRow('vm',   'VM CLUSTERS',      vms,   { render: _vmRow }) +
@@ -716,12 +786,17 @@ function _renderSiteTree(name, tree) {
   // we read getBoundingClientRect after the browser has laid the cards out.
   const canvas = main.querySelector('.sd-canvas');
   if (canvas) {
-    requestAnimationFrame(function() { _drawConnections(canvas); });
+    requestAnimationFrame(function() { _drawConnections(canvas); _applyRcaOverlay(canvas); });
     // Redraw on resize — connection coords drift when the panel reflows.
     _bindCanvasResize(canvas);
     // Canvas-level hover tracking: aggregates overlapping hits via
     // elementsFromPoint so a shared trunk shows every line passing through.
     _bindCanvasTooltip(canvas);
+    // Refresh incidents in the background (throttled) and re-apply the overlay
+    // once they arrive, so the root-cause highlight tracks live status.
+    if ((Date.now() - (LM.rca.ts || 0)) > 10000) {
+      fetchIncidents().then(function() { _applyRcaOverlay(main.querySelector('.sd-canvas')); });
+    }
   }
 }
 
@@ -735,6 +810,7 @@ const _CONN_STYLES = {
   'firewall':    { color: 'var(--gold)',    dashed: false }, // → WAN/ISP (yellow)
   'core_switch': { color: 'var(--accent2)', dashed: false }, // → FW (cyan)
   'switch':      { color: 'var(--accent2)', dashed: false }, // → CORE/FW (cyan)
+  'ap':          { color: 'var(--accent2)', dashed: false }, // → SW (cyan)
   'chassis':     { color: 'var(--accent2)', dashed: false }, // → SW (cyan)
   'hypervisor':  { color: 'var(--up)',      dashed: false }, // → SW/CHS (lime)
   'vm':          { color: 'var(--accent2)', dashed: false }, // → HYP (cyan)
@@ -747,8 +823,8 @@ const _CONN_STYLES = {
 // routing so they don't run straight through the intervening row's cards.
 // IPMI shares the hypervisor row's index since it renders trailing in it.
 const _TIER_INDEX = {
-  isp: 0, wan_switch: 1, firewall: 2, core_switch: 3, switch: 4,
-  chassis: 5, hypervisor: 6, ipmi: 6, vm: 7, other: 8,
+  isp: 0, wan_switch: 1, firewall: 2, core_switch: 3, switch: 4, ap: 5,
+  chassis: 6, hypervisor: 7, ipmi: 7, vm: 8, other: 9,
 };
 
 function _cardLabel(el) {
@@ -961,6 +1037,36 @@ function _drawConnections(canvasEl) {
     svg.appendChild(dot);
   }
 
+  // Group a child entry's mappings into one line per physical link.
+  //
+  // Primary key: (from, lport, rport) — distinguishes both LACP / dual-NIC
+  // pairs on a single device AND distinct devices inside a cluster card
+  // (e.g. 4 ESXi cells each cabling to the same switch → 4 visible lines).
+  //
+  // Cap: when the primary key would draw more than MAX_PORT_LINES (a 27-cell
+  // VM cluster all blank-uplinking to one parent), collapse to (lport, rport)
+  // so the canvas doesn't dissolve into a stack of parallel hairlines. The
+  // tooltip still shows every individual mapping via elementsFromPoint.
+  const MAX_PORT_LINES = 12;
+  function _portGroups(mappings) {
+    if (!mappings || !mappings.length) return [[]];
+    const fine = new Map();
+    mappings.forEach(function(m) {
+      const key = (m.from || '') + '|' + (m.lport || '') + '|' + (m.rport || '');
+      if (!fine.has(key)) fine.set(key, []);
+      fine.get(key).push(m);
+    });
+    if (fine.size <= MAX_PORT_LINES) return Array.from(fine.values());
+    // Too noisy — fall back to one line per distinct port pair only.
+    const coarse = new Map();
+    mappings.forEach(function(m) {
+      const key = (m.lport || '') + '|' + (m.rport || '');
+      if (!coarse.has(key)) coarse.set(key, []);
+      coarse.get(key).push(m);
+    });
+    return Array.from(coarse.values());
+  }
+
   // Card-rect index (canvas-relative) for skip-tier cross-detection. A skip
   // link only diverts to a side-channel when its straight vertical would
   // actually pass through some OTHER card — clean drops stay straight.
@@ -1027,20 +1133,33 @@ function _drawConnections(canvasEl) {
       const cSideX = _snap4((parentIsLeft ? r.left      : r.right    ) - cRect.left);
       const pMidY  = _snap4((pRect.top + pRect.bottom) / 2 - cRect.top);
       const cMidY  = _snap4((r.top      + r.bottom)      / 2 - cRect.top);
-      // Z-shape with the vertical step in the middle of the gap. Drops to
-      // straight H when the two centers are at the same Y.
-      const midX = _snap4((pSideX + cSideX) / 2);
-      const d = (Math.abs(pMidY - cMidY) < 4)
-        ? 'M ' + pSideX + ' ' + pMidY + ' H ' + cSideX
-        : 'M ' + pSideX + ' ' + pMidY +
-          ' H ' + midX +
-          ' V ' + cMidY +
-          ' H ' + cSideX;
+      const midX   = _snap4((pSideX + cSideX) / 2);
       const longHaul = Math.abs(cSideX - pSideX) > LONG_HAUL_PX;
-      _appendHit(d, parentLabel, c.childEl, c.mappings);
-      _appendLine(d, style, longHaul);
-      _appendNotch(pSideX, pMidY, style.color, longHaul);
-      _appendNotch(cSideX, cMidY, style.color, longHaul);
+
+      // One line per distinct (lport, rport) — parallel along the side edges
+      // so LACP / dual-NIC bundles read as separate wires. Step fits inside
+      // 50 % of the shorter card's height so multiple ports never overflow.
+      const groups = _portGroups(c.mappings);
+      const N = groups.length;
+      const cardH = Math.min(pRect.bottom - pRect.top, r.bottom - r.top);
+      const portStep = N > 1 ? Math.min(8, (cardH * 0.5) / (N - 1)) : 0;
+      const startOff = -((N - 1) * portStep) / 2;
+
+      groups.forEach(function(grp, k) {
+        const dy = startOff + k * portStep;
+        const pY = pMidY + dy;
+        const cY = cMidY + dy;
+        const d = (Math.abs(pY - cY) < 4)
+          ? 'M ' + pSideX + ' ' + pY + ' H ' + cSideX
+          : 'M ' + pSideX + ' ' + pY +
+            ' H ' + midX +
+            ' V ' + cY +
+            ' H ' + cSideX;
+        _appendHit(d, parentLabel, c.childEl, grp);
+        _appendLine(d, style, longHaul);
+        _appendNotch(pSideX, pY, style.color, longHaul);
+        _appendNotch(cSideX, cY, style.color, longHaul);
+      });
     });
 
     // ── Below-row routing (laned trunk + skip-tier side-channels) ──
@@ -1067,17 +1186,61 @@ function _drawConnections(canvasEl) {
       const gap = nearestChildTop - py;
 
       const N = trunkKids.length;
-      const fanWidth = N <= 1 ? 0
-        : Math.min(pRect.width * 0.6, 80, 8 * (N - 1) + 8);
-      const fanStart = pCenterX - fanWidth / 2;
-      const fanStep  = N > 1 ? fanWidth / (N - 1) : 0;
-      trunkKids.forEach(function(c, i) {
-        c._entryX = (N === 1) ? pCenterX : _snap4(fanStart + i * fanStep);
-      });
 
+      // Child centers along X — computed up front so the fan-out can align
+      // entry points to actual child positions when they're widely spread.
       const xs = trunkKids.map(function(c) {
         const r = c.childEl.getBoundingClientRect();
         return _snap4(r.left + r.width / 2 - cRect.left);
+      });
+
+      // Parent bottom-edge bounds (slight inset so verticals don't kiss corners).
+      const pBotLeft  = _snap4(pRect.left  - cRect.left + 6);
+      const pBotRight = _snap4(pRect.right - cRect.left - 6);
+      const pBotWidth = Math.max(0, pBotRight - pBotLeft);
+
+      // When children span much wider than the parent (e.g. BladeCenter feeding
+      // 4 hypervisors that fill the canvas), cramming N entries into a 40-px
+      // fan under the parent forces N long horizontals across the trunk band.
+      // Instead, rank children by X and distribute entry-Xs evenly across the
+      // parent's bottom edge: leftmost child gets leftmost exit, rightmost
+      // gets rightmost. When children sit tight under the parent, keep the
+      // small symmetric fan as before.
+      const childSpan = N > 1 ? (Math.max.apply(null, xs) - Math.min.apply(null, xs)) : 0;
+      const wideFan   = N > 1 && childSpan > pBotWidth * 0.6;
+
+      let fanStart = pCenterX, fanStep = 0;
+      if (N > 1 && !wideFan) {
+        const fanWidth = Math.min(pRect.width * 0.6, 80, 8 * (N - 1) + 8);
+        fanStart = pCenterX - fanWidth / 2;
+        fanStep  = fanWidth / (N - 1);
+      }
+
+      // wideFan rank table: original index → 0..N-1 in X-sort order. Built
+      // once so the forEach below stays O(N). The previous scheme — clamp
+      // each child's X to [pBotLeft, pBotRight] — collapsed entries onto the
+      // same edge whenever multiple siblings sat on the same side of the
+      // parent (BladeCenter has 4 children spread across the canvas but only
+      // an 80-px bottom edge; both children to the left of the parent both
+      // clamped to pBotLeft → duplicate exit points → visible "thick band"
+      // where two trunks rode the same X out of the parent). Evenly-spaced
+      // ranks guarantee distinct exit Xs while preserving topological order,
+      // and the layout reflows correctly when groups are added or removed.
+      let wideRankOf = null;
+      let wideStep = 0;
+      if (N > 1 && wideFan) {
+        wideRankOf = new Array(N);
+        trunkKids
+          .map(function(_c, i) { return i; })
+          .sort(function(a, b) { return xs[a] - xs[b]; })
+          .forEach(function(origIdx, rank) { wideRankOf[origIdx] = rank; });
+        wideStep = pBotWidth / (N - 1);
+      }
+
+      trunkKids.forEach(function(c, i) {
+        if (N === 1) c._entryX = pCenterX;
+        else if (wideFan) c._entryX = _snap4(pBotLeft + wideRankOf[i] * wideStep);
+        else c._entryX = _snap4(fanStart + i * fanStep);
       });
       const entryXs = trunkKids.map(function(c) { return c._entryX; });
       const trunkLeft  = Math.min(Math.min.apply(null, xs), Math.min.apply(null, entryXs));
@@ -1097,8 +1260,28 @@ function _drawConnections(canvasEl) {
       const maxY = _snap4(nearestChildTop - 6);
       if (trunkY > maxY) trunkY = maxY;
 
+      // ── Visual-density gates ─────────────────────────────────────────
+      // When a parent has many children OR they're spread across most of the
+      // canvas, the unifying "trunk bus" becomes noise rather than help, and
+      // N children all sharing one trunkY collapses into one thick bar. Two
+      // complementary moves:
+      //   • busSuppressed  → drop the underlay; it's not unifying anything.
+      //   • childLaneStep  → give each child its own Y row in the trunk band
+      //                       so N horizontals read as N readable lanes.
+      const trunkSpan   = trunkRight - trunkLeft;
+      const wideSpread  = trunkSpan > cRect.width * 0.5;
+      const busSuppressed = N > 2 || wideSpread;
+      let childLaneStep = (N > 2) ? 4 : 0;
+      // Don't push lanes past the available vertical band (py → nearestChildTop).
+      // Shrink the step if the full spread wouldn't fit.
+      const availableBand = (nearestChildTop - 6) - (py + 8);
+      if (childLaneStep > 0 && childLaneStep * (N - 1) > availableBand) {
+        childLaneStep = Math.max(0, availableBand / (N - 1));
+      }
+      const childYStart = -((N - 1) * childLaneStep) / 2;
+
       // Trunk underlay
-      if (N > 1 && trunkRight - trunkLeft > 4) {
+      if (!busSuppressed && N > 1 && trunkSpan > 4) {
         const tierCounts = {};
         trunkKids.forEach(function(c) { tierCounts[c.tier] = (tierCounts[c.tier] || 0) + 1; });
         const dominantTier = Object.keys(tierCounts).sort(function(a, b) {
@@ -1115,21 +1298,58 @@ function _drawConnections(canvasEl) {
         svg.appendChild(bus);
       }
 
-      trunkKids.forEach(function(c) {
+      trunkKids.forEach(function(c, ki) {
         const r = c.childEl.getBoundingClientRect();
         const cx = _snap4(r.left + r.width / 2 - cRect.left);
         const cy = r.top - cRect.top;
         const entryX = c._entryX;
         const style = _CONN_STYLES[c.tier] || _CONN_STYLES.other;
         const longHaul = Math.abs(cx - entryX) > LONG_HAUL_PX;
-        const d = 'M ' + cx + ' ' + cy +
-                  ' V ' + trunkY +
-                  ' H ' + entryX +
-                  ' V ' + py;
-        _appendHit(d, parentLabel, c.childEl, c.mappings);
-        _appendLine(d, style, longHaul);
-        _appendNotch(cx,     cy, style.color, longHaul);
-        _appendNotch(entryX, py, style.color, longHaul);
+
+        // This child's own Y row inside the trunk band — separates the N
+        // horizontals so they don't pile up at a single trunkY.
+        const childBaseTrunkY = trunkY + childYStart + ki * childLaneStep;
+
+        // One line per distinct port pair — verticals spread along the parent
+        // bottom + child top so each "port" is plainly visible; trunk Y also
+        // staggers by a few pixels so the horizontal segments don't merge.
+        //
+        // Exception: in busy hierarchical fan-outs (N>2 children), the per-port
+        // multiplier blows up — 4 children × 6 ports each = 24 lines in one
+        // trunk band. Collapse to a single representative line per child here.
+        // Multi-port viz remains intact for peer connections (N ≤ 2 like
+        // BSLAB_TOR ↔ EX-2200) where the parallel lines are the signal.
+        // When collapsing, the hit-test still carries every port pair so the
+        // hover tooltip shows the full list (the visual line is reduced, not
+        // the underlying data — collapsing should never hide information).
+        const allGroups = _portGroups(c.mappings);
+        const collapsed = N > 2 && allGroups.length > 1;
+        const groups = collapsed ? [allGroups[0]] : allGroups;
+        const hitMappings = collapsed
+          ? allGroups.reduce(function(acc, g) { return acc.concat(g); }, [])
+          : null;
+        const Np = groups.length;
+        const maxSpread = Math.min(pRect.width, r.width) * 0.4;
+        const portStep = Np > 1 ? Math.min(8, maxSpread / (Np - 1)) : 0;
+        const startOff = -((Np - 1) * portStep) / 2;
+        const yStagger = Np > 1 ? 3 : 0;
+        const yStart   = -((Np - 1) * yStagger) / 2;
+
+        groups.forEach(function(grp, k) {
+          const dx = startOff + k * portStep;
+          const dy = yStart   + k * yStagger;
+          const cxK     = cx + dx;
+          const entryXK = entryX + dx;
+          const trunkYK = childBaseTrunkY + dy;
+          const d = 'M ' + cxK + ' ' + cy +
+                    ' V ' + trunkYK +
+                    ' H ' + entryXK +
+                    ' V ' + py;
+          _appendHit(d, parentLabel, c.childEl, hitMappings || grp);
+          _appendLine(d, style, longHaul);
+          _appendNotch(cxK,     cy, style.color, longHaul);
+          _appendNotch(entryXK, py, style.color, longHaul);
+        });
       });
     }
 
@@ -1140,16 +1360,29 @@ function _drawConnections(canvasEl) {
       const cy = r.top - cRect.top;
       const pY = _snap4(py);
       const style = _CONN_STYLES[c.tier] || _CONN_STYLES.other;
+
+      // Distinct port pairs render as parallel skip lines on both routes.
+      const groups = _portGroups(c.mappings);
+      const N = groups.length;
+      const maxSpread = Math.min(pRect.width, r.width) * 0.4;
+      const portStep = N > 1 ? Math.min(8, maxSpread / (N - 1)) : 0;
+      const startOff = -((N - 1) * portStep) / 2;
+
       // Reordering usually parks the child under its parent, so a straight
       // vertical clears every intervening card — keep it straight when so.
       if (!_verticalCrossesCard(cx, pY, cy, c.childEl, parentEl)) {
-        const d = 'M ' + cx + ' ' + cy + ' V ' + pY +
-                  (Math.abs(cx - pCenterX) > 2 ? ' H ' + _snap4(pCenterX) : '');
-        const longHaul = Math.abs(cx - pCenterX) > LONG_HAUL_PX;
-        _appendHit(d, parentLabel, c.childEl, c.mappings);
-        _appendLine(d, style, longHaul);
-        _appendNotch(cx, cy, style.color, longHaul);
-        _appendNotch(_snap4(pCenterX), pY, style.color, longHaul);
+        groups.forEach(function(grp, k) {
+          const dx = startOff + k * portStep;
+          const cxK = cx + dx;
+          const pX  = _snap4(pCenterX + dx);
+          const d = 'M ' + cxK + ' ' + cy + ' V ' + pY +
+                    (Math.abs(cxK - pX) > 2 ? ' H ' + pX : '');
+          const longHaul = Math.abs(cxK - pX) > LONG_HAUL_PX;
+          _appendHit(d, parentLabel, c.childEl, grp);
+          _appendLine(d, style, longHaul);
+          _appendNotch(cxK, cy, style.color, longHaul);
+          _appendNotch(pX,  pY, style.color, longHaul);
+        });
         return;
       }
       // Blocked → run up a side gutter on the nearer canvas edge, with its own
@@ -1166,15 +1399,24 @@ function _drawConnections(canvasEl) {
       // absolutely-positioned tier-tag labels so it never crosses them.
       const gutterX = _snap4(leftSide ? (8 + glane * 9)
                                       : (cRect.width - 12 - glane * 9));
-      const d = 'M ' + cx + ' ' + cy +
-                ' V ' + _snap4(cy - 6) +
-                ' H ' + gutterX +
-                ' V ' + pY +
-                ' H ' + _snap4(pCenterX);
-      _appendHit(d, parentLabel, c.childEl, c.mappings);
-      _appendLine(d, style, true);   // long-haul styling (dimmed, slower dash)
-      _appendNotch(cx, cy, style.color, true);
-      _appendNotch(_snap4(pCenterX), pY, style.color, true);
+      // Port sub-spread inside the gutter lane (tighter — 3px steps).
+      const gPortStep = N > 1 ? 3 : 0;
+      const gStart    = -((N - 1) * gPortStep) / 2;
+      groups.forEach(function(grp, k) {
+        const dx = gStart + k * gPortStep;
+        const cxK = cx + dx;
+        const gx  = gutterX + dx;
+        const pX  = _snap4(pCenterX + dx);
+        const d = 'M ' + cxK + ' ' + cy +
+                  ' V ' + _snap4(cy - 6) +
+                  ' H ' + gx +
+                  ' V ' + pY +
+                  ' H ' + pX;
+        _appendHit(d, parentLabel, c.childEl, grp);
+        _appendLine(d, style, true);   // long-haul styling (dimmed, slower dash)
+        _appendNotch(cxK, cy, style.color, true);
+        _appendNotch(pX,  pY, style.color, true);
+      });
     });
   });
 
@@ -1639,7 +1881,7 @@ function openDevicePanel(did) {
   const idx = _buildTreeIndex(tree);
   const d = idx.devs[did];
   if (!d) return;
-  const st = d.status === 'up' ? 'up' : (d.status === 'warn' ? 'warn' : (d.status === 'down' ? 'down' : 'unknown'));
+  const st = d.status === 'up' ? 'up' : (d.status === 'warn' ? 'warn' : (d.status === 'down' ? 'down' : (d.status === 'pause' ? 'pause' : 'unknown')));
 
   // Resolve parent refs from the device card / cell when available
   const devCard = [].concat(
@@ -1713,7 +1955,7 @@ function openDevicePanel(did) {
   _devPanelDid    = did;
   _devPanelShowAll = false;
 
-  api('GET', '/api/devices/' + encodeURIComponent(did)).then(function(devDict) {
+  api('GET', '/api/device/' + encodeURIComponent(did)).then(function(devDict) {
     if (myToken !== _devPanelToken) return;
     const slot = document.getElementById('lm-sp-sensors');
     if (!slot) return;
@@ -1860,6 +2102,15 @@ window.addEventListener('message', function(e) {
 // Side-panel close + row drill-down binding (delegated)
 document.addEventListener('click', function(e) {
   if (e.target && e.target.id === 'lm-sp-close') { closeSidePanel(); return; }
+  // Root-cause overlay toggle (drill-in header)
+  const rcaBtn = e.target.closest && e.target.closest('[data-rca-toggle]');
+  if (rcaBtn) {
+    LM.rcaEnabled = !LM.rcaEnabled;
+    try { localStorage.setItem('pw_lm_rca', LM.rcaEnabled ? '1' : '0'); } catch (_) {}
+    rcaBtn.classList.toggle('on', LM.rcaEnabled);
+    _applyRcaOverlay(document.querySelector('.sd-canvas'));
+    return;
+  }
   // Sensor section show-all / show-failing toggle — re-render in place using
   // the cached dict so we don't refetch.
   const toggle = e.target.closest && e.target.closest('.lm-sp-toggle');

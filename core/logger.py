@@ -92,6 +92,22 @@ _bkh.setLevel(logging.INFO)
 log_backup.addHandler(_bkh)
 # propagate=False ensures no logger bleeds into pingwatch.log or log_buffer.
 
+# ── Probes logger → logs/pingwatchprobes.log (v1.3) ───────────────────────
+# Dedicated stream for distributed-probe connectivity and lifecycle:
+# enrollments, checkin transport problems, rejected results, offline/online
+# transitions, task dispatch — everything an operator needs when a branch
+# agent misbehaves, without digging through the main application log.
+log_probes = logging.getLogger("pingwatch.probes")
+log_probes.setLevel(logging.DEBUG)
+log_probes.propagate = False    # keep probe messages out of pingwatch.log
+_prh = RotatingFileHandler(
+    os.path.join(_LOG_DIR, "pingwatchprobes.log"),
+    maxBytes=5_000_000, backupCount=5, encoding="utf-8"
+)
+_prh.setFormatter(_fmt)
+_prh.setLevel(logging.INFO)
+log_probes.addHandler(_prh)
+
 # ── In-memory ring buffer (consumed by the status GUI) ────────────────────
 import collections
 
@@ -141,6 +157,7 @@ def set_debug_mode(enabled: bool):
     changed = (_fh.level != lvl)
     _fh.setLevel(lvl)
     _bkh.setLevel(lvl)
+    _prh.setLevel(lvl)
     log_buffer.setLevel(lvl)
     if _ch is not None:
         _ch.setLevel(lvl)
@@ -157,7 +174,7 @@ def reconfigure_from_settings():
     import-time defaults. No-op when the configured values match what's
     already running, so normal startups don't churn file handles.
     """
-    global _fh, _sh, _ah, _bkh
+    global _fh, _sh, _ah, _bkh, _prh
     try:
         import core.settings as _settings_mod
     except Exception:
@@ -208,6 +225,8 @@ def reconfigure_from_settings():
     audit_dy = _int("log_audit_days",    365,  7, 3650)
     bkup_mb  = _int("log_backup_max_mb",   5,  1, 500)
     bkup_bk  = _int("log_backup_backups",  5,  1, 100)
+    prb_mb   = _int("log_probes_max_mb",   5,  1, 500)
+    prb_bk   = _int("log_probes_backups",  5,  1, 100)
 
     if _fh.maxBytes != main_mb * 1_000_000 or _fh.backupCount != main_bk:
         _fh = _swap_size(log, _fh, _LOG_PATH, main_mb, main_bk)
@@ -223,6 +242,10 @@ def reconfigure_from_settings():
         _bkh = _swap_size(log_backup, _bkh,
                           os.path.join(_LOG_DIR, "pingwatchbackup.log"),
                           bkup_mb, bkup_bk)
+    if _prh.maxBytes != prb_mb * 1_000_000 or _prh.backupCount != prb_bk:
+        _prh = _swap_size(log_probes, _prh,
+                          os.path.join(_LOG_DIR, "pingwatchprobes.log"),
+                          prb_mb, prb_bk)
 
 
 # ── Public map consumed by the log-viewer API (/api/logs/{key}) ───────────
@@ -231,4 +254,5 @@ LOG_FILES = {
     'sensors': os.path.join(_LOG_DIR, 'pingwatchsensors.log'),
     'audit':   os.path.join(_LOG_DIR, 'pingwatchaudit.log'),
     'backup':  os.path.join(_LOG_DIR, 'pingwatchbackup.log'),
+    'probes':  os.path.join(_LOG_DIR, 'pingwatchprobes.log'),
 }

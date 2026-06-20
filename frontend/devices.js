@@ -309,17 +309,7 @@ function _updateBulkBar(){
     const groups = [...new Set(Object.values(S.devices).map(d => d.group || 'Default Group'))].sort();
     list.innerHTML = groups.map(g => `<option value="${esc(g)}"></option>`).join('');
   }
-  // Site datalist — fetched from /api/sites (UNION of IPAM + devices).
-  // Falls back to in-memory devices list on fetch failure.
-  const siteList = document.getElementById('bulkSiteList');
-  if (siteList){
-    if (typeof _populateSiteDatalist === 'function') {
-      _populateSiteDatalist('bulkSiteList');
-    } else {
-      const sites = [...new Set(Object.values(S.devices).map(d => d.site).filter(Boolean))].sort();
-      siteList.innerHTML = sites.map(s => `<option value="${esc(s)}"></option>`).join('');
-    }
-  }
+  // Site options come from the shared site combobox (one /api/sites list).
 }
 
 async function _bulkApplyMove(){
@@ -707,7 +697,7 @@ function _updateGrpSummary(group, site){
   const grid=document.getElementById(gridId(key));
   if(!grid){ el.innerHTML=''; return; }
   // Count devices by status in this group (always show, regardless of collapsed state)
-  const counts={up:0,down:0,warn:0};
+  const counts={up:0,down:0,warn:0,pause:0};
   grid.querySelectorAll('.dc:not(.dc-add)').forEach(card=>{
     const did=card.id.replace('dp-','');
     const dev=S.devices[did];
@@ -717,6 +707,7 @@ function _updateGrpSummary(group, site){
   if(counts.up)   parts.push(`<span class="grp-sum-pill up"><span class="grp-sum-dot"></span>${counts.up}</span>`);
   if(counts.warn) parts.push(`<span class="grp-sum-pill warn"><span class="grp-sum-dot"></span>${counts.warn}</span>`);
   if(counts.down) parts.push(`<span class="grp-sum-pill down"><span class="grp-sum-dot"></span>${counts.down}</span>`);
+  if(counts.pause)parts.push(`<span class="grp-sum-pill pause"><span class="grp-sum-dot"></span>${counts.pause}</span>`);
   el.innerHTML=parts.join('');
 }
 
@@ -725,8 +716,9 @@ function _devSnrSummaryHtml(did){
   const _keys=S._devSensors?.[did]||new Set();
   const snrs=[..._keys].map(k=>S.sensors[k]).filter(Boolean);
   if(!snrs.length) return '';
-  let ok=0,warn=0,down=0;
+  let ok=0,warn=0,down=0,pause=0;
   snrs.forEach(s=>{
+    if(!s.running){pause++;return;}   // stopped — not an outage, count separately
     if(s.alerts_muted||dev?.alerts_muted){if(s.alive===true)ok++;return;}
     if(s.alive===false) down++;
     else if(s.threshold_state&&s.threshold_state!=='ok') warn++;
@@ -736,6 +728,7 @@ function _devSnrSummaryHtml(did){
   if(ok)   h+=`<span class="dls-chip up"><span class="dls-dot"></span>${ok}</span>`;
   if(warn) h+=`<span class="dls-chip warn"><span class="dls-dot"></span>${warn}</span>`;
   if(down) h+=`<span class="dls-chip down"><span class="dls-dot"></span>${down}</span>`;
+  if(pause)h+=`<span class="dls-chip pause"><span class="dls-dot"></span>${pause}</span>`;
   return h?`<div class="dlr-summary" id="dlr-sum-${did}">${h}</div>`:'';
 }
 
@@ -959,7 +952,7 @@ function sSnrPreview(did){
       return `<div class="dc-snr">
         <div class="dc-snr-ico vmware">${_isH?'H':'V'}</div>
         <div class="dc-snr-nm">${esc(nm)} <span style="color:var(--text3);font-size:10px">${vms.length}m</span></div>
-        <div class="dc-snr-val ${worst.alive===false?'b':worst.alive===true?'g':'m'}" id="csv-${worst.device_id}_${worst.sensor_id}">${snrVal(worst)}</div>
+        <div class="dc-snr-val ${worst.alive===false?'b':worst.alive===true?'g':'m'}" id="csv-${worst.device_id}_${worst.sensor_id}">${esc(snrVal(worst))}</div>
         <div class="dc-snr-dot ${st}" id="csd-${worst.device_id}_${worst.sensor_id}"></div>
       </div>`;
     }
@@ -967,7 +960,7 @@ function sSnrPreview(did){
     return `<div class="dc-snr snr-t-${s.stype}">
       <div class="dc-snr-ico ${s.stype}">${sIco(s.stype)}</div>
       <div class="dc-snr-nm">${esc(s.name)}</div>
-      <div class="dc-snr-val ${vc(s)}" id="csv-${s.device_id}_${s.sensor_id}">${snrVal(s)}</div>
+      <div class="dc-snr-val ${vc(s)}" id="csv-${s.device_id}_${s.sensor_id}">${esc(snrVal(s))}</div>
       <div class="dc-snr-dot ${s.alive===true?'up':s.alive===false?'down':''}" id="csd-${s.device_id}_${s.sensor_id}"></div>
     </div>`;
   }).join('');
@@ -978,7 +971,7 @@ function sSnrPreview(did){
 
 function cardHTML(dev){
   const st=dev.status||'unknown';
-  const lbl={up:'Up',down:'Down',warn:'Warning',unknown:'Unknown'}[st]||st;
+  const lbl={up:'Up',down:'Down',warn:'Warning',unknown:'Unknown',pause:'Paused'}[st]||st;
   const adChip = _renderAutoDiscoveryChip(dev);
   const selCls = _selectedDids.has(dev.device_id) ? ' selected' : '';
   const cbCls  = _selectedDids.has(dev.device_id) ? 'dc-sel-cb checked' : 'dc-sel-cb';
@@ -987,22 +980,32 @@ function cardHTML(dev){
   // Vendor chip — show the device's group as a tag (proxy for vendor since
   // PingWatch doesn't track a vendor field on devices)
   const grpChip = dev.group ? `<div class="dcard-vendor">${esc(dev.group)}</div>` : '';
+  // Distributed probes: "via ‹probe›" pill; grey the card while the probe is
+  // offline — its values are stale, NOT a target outage.
+  const _epid = typeof _effectiveProbeFor==='function' ? _effectiveProbeFor(dev,null) : '';
+  const probePill = (_epid && typeof _viaProbePill==='function') ? _viaProbePill(_epid) : '';
+  const staleCls = (_epid && typeof _probeIsStale==='function' && _probeIsStale(_epid))
+    ? ' probe-stale-tile' : '';
+  // Acknowledged rollup — muted card when every failing sensor is ACKed.
+  const ackOn = (st==='down'||st==='warn') &&
+    typeof _devAllAck==='function' && _devAllAck(dev.device_id);
+  const ackCls = ackOn ? ' ack' : '';
   return `
-  <div class="dc dcard ${st}${selCls}" id="dp-${dev.device_id}" onclick="_cardClick(event,'${dev.device_id}')">
+  <div class="dc dcard ${st}${selCls}${staleCls}${ackCls}" id="dp-${dev.device_id}" onclick="_cardClick(event,'${dev.device_id}')">
     <div class="${cbCls}" onclick="event.stopPropagation();_toggleCard(event,'${dev.device_id}')"></div>
     <div class="dc-drag-handle" title="Drag to reorder">⠿</div>
     <div class="dcard-head">
       <div class="dc-bar dcard-stripe ${st}" id="dcbar-${dev.device_id}"></div>
       <div class="dcard-name-wrap">
         <div class="dcard-name">${esc(dev.name)}${adChip}</div>
-        <div class="dcard-meta"><span>${esc(dev.host||'')}</span></div>
+        <div class="dcard-meta"><span>${esc(dev.host||'')}</span>${probePill}</div>
       </div>
       ${grpChip}
     </div>
     <div class="dcard-tiles" id="dcsnr-${dev.device_id}">${tilesHtml}</div>
     <div class="dcard-foot">
-      <span class="dc-status ${st}" id="dcst-${dev.device_id}">
-        <div class="dc-sdot ${st==='up'?'up':''}"></div>${lbl}
+      <span class="dc-status ${st}" id="dcst-${dev.device_id}" title="${ackOn?'All failing sensors acknowledged':''}">
+        <div class="dc-sdot ${st==='up'?'up':''}"></div>${lbl}${ackOn?' <span class="dc-ack-flag">✓ ACK</span>':''}
       </span>
       <span class="seen">${sensorCount} sensor${sensorCount===1?'':'s'}</span>
     </div>
@@ -1032,7 +1035,8 @@ function _stileHTML(s){
   const isSnmp = s.stype === 'snmp' || s.stype === 'dns';
   const isVmware = s.stype === 'vmware';
   let st = 'up';
-  if (s.alive === false) st = 'down';
+  if (!s.running) st = 'pause';            // stopped sensor — grey, not stale down
+  else if (s.alive === false) st = 'down';
   else if (isVmware || isSnmp) st = s.alive === true ? 'up' : 'pause';
   else if (s.last_ms != null) {
     const c = typeof msC === 'function' ? msC(s.last_ms, s) : 'g';
@@ -1054,6 +1058,7 @@ function _stileHTML(s){
   } else if (s.alive === false) {
     val = 'DOWN';
   }
+  if (!s.running) val = 'Paused';
   const sparkColor = st === 'down' ? 'var(--down)'
                     : st === 'warn' ? 'var(--warn)'
                     : st === 'pause' ? 'var(--pause)'
@@ -1113,7 +1118,7 @@ function listRowHTML(dev){
     snrHtml+=`<span class="dlr-snr snr-t-${s.stype}">
       <span class="dc-snr-ico ${s.stype}">${sIco(s.stype)}</span>
       <span class="dc-snr-nm">${esc(s.name)}</span>
-      <span class="dc-snr-val ${vc(s)}" id="lsv-${s.device_id}_${s.sensor_id}">${snrVal(s)}</span>
+      <span class="dc-snr-val ${s.running?vc(s):'m'}" id="lsv-${s.device_id}_${s.sensor_id}">${esc(s.running?snrVal(s):'Paused')}</span>
     </span>`;
   });
   if(snrs.length>5) snrHtml+=`<span class="dlr-more">+${snrs.length-5}</span>`;
@@ -1130,20 +1135,25 @@ function listRowHTML(dev){
 }
 
 function updateCardStatus(did,st){
-  const lbl={up:'Up',down:'Down',warn:'Warning',unknown:'Unknown'}[st]||st;
+  const lbl={up:'Up',down:'Down',warn:'Warning',unknown:'Unknown',pause:'Paused'}[st]||st;
+  const ack=!!(S.devices[did]&&S.devices[did]._allAck);
   const card=document.getElementById(`dp-${did}`);
   if(card){
     // Preserve selected + dcard classes when swapping status
     const wasSel = card.classList.contains('selected');
-    card.className=`dc dcard ${st}${wasSel?' selected':''}`;
+    card.className=`dc dcard ${st}${ack?' ack':''}${wasSel?' selected':''}`;
     const bar=document.getElementById(`dcbar-${did}`);
     if(bar)bar.className=`dc-bar dcard-stripe ${st}`;
     const badge=document.getElementById(`dcst-${did}`);
-    if(badge){badge.className=`dc-status ${st}`;badge.innerHTML=`<div class="dc-sdot ${st==='up'?'up':''}"></div>${lbl}`;}
+    if(badge){
+      badge.className=`dc-status ${st}`;
+      badge.title=ack?'All failing sensors acknowledged':'';
+      badge.innerHTML=`<div class="dc-sdot ${st==='up'?'up':''}"></div>${lbl}${ack?' <span class="dc-ack-flag">✓ ACK</span>':''}`;
+    }
   }
   // Also update list row
   const lr=document.getElementById(`dpl-${did}`);
-  if(lr) lr.className=`dc-list-row ${st}`;
+  if(lr) lr.className=`dc-list-row ${st}${ack?' ack':''}`;
   // Refresh summary badge
   const sumEl=document.getElementById(`dlr-sum-${did}`);
   if(sumEl){ const h=_devSnrSummaryHtml(did); if(h) sumEl.outerHTML=h; }
@@ -1170,11 +1180,13 @@ function updateCardSensor(s){
     } else {
       v=full.last_ms!=null?`${full.last_ms} ms`:(full.alive===false?'DOWN':'—');
     }
+    if(!full.running) v='Paused';
     vEl.textContent=v;
     // Detect new .stile-val vs legacy .dc-snr-val and update classes appropriately
     if (vEl.classList.contains('stile-val')) {
       let stStr = 'up';
-      if (full.alive === false) stStr = 'down';
+      if (!full.running) stStr = 'pause';
+      else if (full.alive === false) stStr = 'down';
       else if (isVmware || isSnmp) stStr = full.alive === true ? 'up' : 'pause';
       else if (full.last_ms != null) {
         const cc = typeof msC === 'function' ? msC(full.last_ms, full) : 'g';
@@ -1185,8 +1197,8 @@ function updateCardSensor(s){
       if (dEl) dEl.className = `dot ${stStr}`;
     } else {
       const c = full.alive===false?'b':((isSnmp||isVmware)?(full.alive===true?'g':'m'):(full.last_ms!=null?msC(full.last_ms,full):'m'));
-      vEl.className=`dc-snr-val ${c}`;
-      if (dEl) dEl.className = `dc-snr-dot ${s.alive===true?'up':s.alive===false?'down':''}`;
+      vEl.className=`dc-snr-val ${full.running?c:'m'}`;
+      if (dEl) dEl.className = `dc-snr-dot ${!full.running?'pause':s.alive===true?'up':s.alive===false?'down':''}`;
     }
   }
   // Also update list row sensor value
@@ -1200,7 +1212,7 @@ function updateCardSensor(s){
     else if(isSnmp2){ v2=full.alive===false?'FAIL':(full.last_value||'\u2014').slice(0,10); }
     else { v2=full.last_ms!=null?`${full.last_ms}ms`:(full.alive===false?'DOWN':'\u2014'); }
     const c2=full.alive===false?'b':((isSnmp2||isVm2)?(full.alive===true?'g':'m'):(full.last_ms!=null?msC(full.last_ms,full):'m'));
-    lsv.textContent=v2; lsv.className=`dc-snr-val ${c2}`;
+    lsv.textContent=full.running?v2:'Paused'; lsv.className=`dc-snr-val ${full.running?c2:'m'}`;
   }
   // Refresh summary badge for this device
   const sumEl2=document.getElementById(`dlr-sum-${s.device_id}`);
@@ -1507,8 +1519,7 @@ function openAddGroup(siteName){
       <div class="alrt-section">
         <div class="alrt-section-hdr">Site</div>
         <div class="fr">
-          <input type="text" id="ag-site" list="ag-site-dl" placeholder="HQ, DR-Site-2…" autocomplete="off"/>
-          <datalist id="ag-site-dl"></datalist>
+          ${siteComboHtml('ag-site', '', 'HQ, DR-Site-2…')}
           <div class="fh">
             Where the empty group section will live in the sidebar. Leave blank for Unsited.
             Future devices added to this group will not auto-inherit this — set per-device on Add Device.
@@ -1545,8 +1556,6 @@ function openAddGroup(siteName){
     </div>
   </div>`;
   document.body.appendChild(o);
-  // Populate the Site datalist from /api/sites (UNION of IPAM + devices)
-  if (typeof _populateSiteDatalist === 'function') _populateSiteDatalist('ag-site-dl');
   setTimeout(()=>{
     if(siteName){
       const sf=document.getElementById('ag-site');

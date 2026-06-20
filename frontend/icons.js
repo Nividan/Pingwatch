@@ -17,6 +17,7 @@
     alerts:        '<path d="M6 8 a6 6 0 0 1 12 0 c0 5 2 7 2 7 H4 s2-2 2-7"/><path d="M10 19 a2 2 0 0 0 4 0"/>',
     reports:       '<rect x="4" y="3" width="16" height="18" rx="1.5"/><line x1="8" y1="9" x2="16" y2="9"/><line x1="8" y1="13" x2="16" y2="13"/><line x1="8" y1="17" x2="13" y2="17"/>',
     backups:       '<ellipse cx="12" cy="6" rx="8" ry="3"/><path d="M4 6 V12 a8 3 0 0 0 16 0 V6"/><path d="M4 12 V18 a8 3 0 0 0 16 0 V12"/>',
+    probes:        '<line x1="12" y1="13" x2="12" y2="21"/><line x1="8" y1="21" x2="16" y2="21"/><circle cx="12" cy="11" r="2" fill="currentColor"/><path d="M7.5 6.5 a6.4 6.4 0 0 1 9 0"/><path d="M5 4 a10 10 0 0 1 14 0"/>',
     logs:          '<path d="M14 3 H7 a2 2 0 0 0-2 2 v14 a2 2 0 0 0 2 2 h10 a2 2 0 0 0 2-2 V8 Z"/><polyline points="14 3 14 8 19 8"/><line x1="9" y1="13" x2="15" y2="13"/><line x1="9" y1="17" x2="13" y2="17"/>',
     settings:      '<circle cx="12" cy="12" r="3"/><path d="M19.4 15 a1.7 1.7 0 0 0 .3 1.8 l.1.1 a2 2 0 1 1-2.8 2.8 l-.1-.1 a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5 V21 a2 2 0 1 1-4 0 v-.1 a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3 l-.1.1 a2 2 0 1 1-2.8-2.8 l.1-.1 a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1 H3 a2 2 0 1 1 0-4 h.1 a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8 l-.1-.1 a2 2 0 1 1 2.8-2.8 l.1.1 a1.7 1.7 0 0 0 1.8.3 H9 a1.7 1.7 0 0 0 1-1.5 V3 a2 2 0 1 1 4 0 v.1 a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3 l.1-.1 a2 2 0 1 1 2.8 2.8 l-.1.1 a1.7 1.7 0 0 0-.3 1.8 V9 a1.7 1.7 0 0 0 1.5 1 H21 a2 2 0 1 1 0 4 h-.1 a1.7 1.7 0 0 0-1.5 1 z"/>',
     search:        '<circle cx="11" cy="11" r="7"/><line x1="16" y1="16" x2="21" y2="21"/>',
@@ -114,7 +115,8 @@
       ['tabDashboard','dashboard'], ['tabDevices','devices'], ['tabEvents','events'],
       ['tabAlerting','alerts'],
       ['tabLiveMap','livemap'],      ['tabMap','map'],          ['tabBackups','backups'],
-      ['tabIpam','ipam'],            ['tabReports','reports'],  ['tabLogs','logs'],
+      ['tabIpam','ipam'],            ['tabReports','reports'],  ['tabProbes','probes'],
+      ['tabLogs','logs'],
       ['railSettings','settings'],
     ];
     for (var i = 0; i < rail.length; i++) {

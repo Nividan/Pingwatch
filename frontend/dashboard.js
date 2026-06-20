@@ -121,6 +121,18 @@ const _DW_REG = {
     render:  (wid, _cfg) => _dwRefreshDownDevices(wid),
     refresh: (wid, _cfg) => _dwRefreshDownDevices(wid),
   },
+  active_incidents: {
+    label: 'Active Incidents (Root Cause)',
+    icon:  icon('alerts', 14),
+    cat: 'events',
+    desc: 'Correlated outages — the upstream root device behind each cluster of downs.',
+    meta: ['live', 'RCA'],
+    popular: true,
+    defaultCols: 1,
+    fields: [],
+    render:  (wid, _cfg) => _dwRefreshIncidents(wid),
+    refresh: (wid, _cfg) => _dwRefreshIncidents(wid),
+  },
   top_latency: {
     label: 'Slowest Ping Devices',
     icon:  icon('activity', 14),
@@ -240,12 +252,13 @@ const _DW_REG = {
     icon:  icon('activity', 14),
     cat: 'charts',
     desc: 'Heatmap of ping latencies across many devices.',
-    meta: ['top-60', 'live'],
+    meta: ['top-100', 'live'],
     isNew: true,
     defaultCols: 2,
     fields: [
       { key: 'limit', label: 'Devices', type: 'select',
-        options: [{v:10,l:'10'},{v:20,l:'20'},{v:30,l:'30'}], def: 20 },
+        options: [{v:10,l:'10'},{v:20,l:'20'},{v:30,l:'30'},{v:50,l:'50'},{v:100,l:'100'}], def: 20 },
+      { key: 'group', label: 'Group', type: 'group-select', def: '' },
     ],
     render:  (wid, cfg) => _dwRefreshLatencyHeatmap(wid, cfg),
     refresh: (wid, cfg) => _dwRefreshLatencyHeatmap(wid, cfg),
@@ -1290,6 +1303,17 @@ function _dwSelectType(type) {
         <select id="dw-cfg-${f.key}">${opts}</select>
       </div>`;
     }
+    if (f.type === 'group-select') {
+      const cur = f.def || '';
+      const groups = [...new Set(Object.values(S.devices).map(d => d.group || 'Default Group'))].sort();
+      const opts = ['<option value="">All groups</option>']
+        .concat(groups.map(g => `<option value="${esc(g)}"${g===cur?' selected':''}>${esc(g)}</option>`))
+        .join('');
+      return `<div class="fr">
+        <label class="fl">${f.label}</label>
+        <select id="dw-cfg-${f.key}">${opts}</select>
+      </div>`;
+    }
     return '';
   }).join('');
   const noteHtml = reg.note
@@ -1376,6 +1400,17 @@ function _dwOpenEdit(wid) {
     if (f.type === 'select') {
       const opts = f.options.map(o =>
         `<option value="${o.v}"${String(o.v)===String(w.cfg[f.key]||f.def)?' selected':''}>${o.l}</option>`).join('');
+      return `<div class="fr">
+        <label class="fl">${f.label}</label>
+        <select id="dw-cfg-${f.key}">${opts}</select>
+      </div>`;
+    }
+    if (f.type === 'group-select') {
+      const cur = w.cfg[f.key] || '';
+      const groups = [...new Set(Object.values(S.devices).map(d => d.group || 'Default Group'))].sort();
+      const opts = ['<option value="">All groups</option>']
+        .concat(groups.map(g => `<option value="${esc(g)}"${g===cur?' selected':''}>${esc(g)}</option>`))
+        .join('');
       return `<div class="fr">
         <label class="fl">${f.label}</label>
         <select id="dw-cfg-${f.key}">${opts}</select>
@@ -1588,25 +1623,32 @@ async function _dwRefreshLatencyHeatmap(wid, cfg) {
   const body = document.getElementById(`dw-body-${wid}`);
   if (!body) return;
   const limit   = Number(cfg?.limit) || 20;
+  const group   = cfg?.group || '';        // '' = all groups
   const minutes = _dwTimeRangeMinutes();   // follows global dashboard range
 
   // Serve from cache if fresh
   const cached = _dwHeatCache[wid];
-  if (cached && (Date.now() - cached.ts) < HEAT_CACHE_TTL && cached.cfgKey === `${limit}/${minutes}`) {
+  if (cached && (Date.now() - cached.ts) < HEAT_CACHE_TTL && cached.cfgKey === `${limit}/${minutes}/${group}`) {
     if (body.innerHTML !== cached.html) body.innerHTML = cached.html;
     return;
   }
 
-  // Pick up to `limit` ping sensors, one per device (worst current latency wins ties)
+  // Pick up to `limit` ping sensors, one per device (worst current latency wins ties).
+  // When a group is configured, only devices in that group are considered.
   const pingByDevice = {};
   Object.values(S.sensors).forEach(s => {
     if (s.stype !== 'ping') return;
+    if (group) {
+      const dev = S.devices[s.device_id];
+      if (!dev || (dev.group || 'Default Group') !== group) return;
+    }
     const cur = pingByDevice[s.device_id];
     if (!cur || (Number(s.last_ms) || 0) > (Number(cur.last_ms) || 0)) pingByDevice[s.device_id] = s;
   });
   const sensors = Object.values(pingByDevice).slice(0, limit);
   if (!sensors.length) {
-    body.innerHTML = '<div style="color:var(--text3);font-size:11px;padding:8px;text-align:center">No ping sensors yet</div>';
+    const msg = group ? `No ping sensors in “${esc(group)}”` : 'No ping sensors yet';
+    body.innerHTML = `<div style="color:var(--text3);font-size:11px;padding:8px;text-align:center">${msg}</div>`;
     return;
   }
 
@@ -1680,7 +1722,7 @@ async function _dwRefreshLatencyHeatmap(wid, cfg) {
       ${rowsHtml}
       <div class="heatmap-legend"><span>0ms</span><div class="grad"></div><span>${hi}ms+</span></div>
     </div>`;
-  _dwHeatCache[wid] = { ts: Date.now(), cfgKey: `${limit}/${minutes}`, html };
+  _dwHeatCache[wid] = { ts: Date.now(), cfgKey: `${limit}/${minutes}/${group}`, html };
   if (body.innerHTML !== html) body.innerHTML = html;
 }
 
@@ -2055,6 +2097,64 @@ function _dwRefreshDownDevices(wid) {
     </div>`;
   }).join('');
   _dwSwap(body, `<div class="dw-dd-list">${rows}</div>`);
+}
+
+// ── Widget: Active Incidents (Root Cause) ─────────────────────────
+// Compact epoch-seconds → "4m" / "2h" duration.
+function _dwIncDur(ts) {
+  if (!ts) return '';
+  const s = Math.max(0, Math.floor(Date.now() / 1000) - ts);
+  if (s < 90)     return s + 's';
+  if (s < 5400)   return Math.round(s / 60) + 'm';
+  if (s < 172800) return Math.round(s / 3600) + 'h';
+  return Math.round(s / 86400) + 'd';
+}
+async function _dwRefreshIncidents(wid) {
+  const body = document.getElementById(`dw-body-${wid}`);
+  if (!body) return;
+  let data = null;
+  try {
+    const r = await fetch('/api/incidents');
+    if (r.ok) data = await r.json();
+  } catch {}
+  if (!data) {
+    body.innerHTML = '<div style="color:var(--text3);font-size:11px;padding:8px;text-align:center">Unavailable</div>';
+    return;
+  }
+  // Only correlated incidents (a root with ≥1 downstream victim) are "root
+  // causes" worth surfacing here; lone downs live in the Down Devices widget.
+  const incidents = (data.incidents || []).filter(i => i.impacted_count > 0);
+  if (!incidents.length) {
+    body.innerHTML = '<div class="dw-dd-ok">✓ No correlated outages</div>';
+    return;
+  }
+  const confLabel = { high: 'high', medium: 'likely', low: 'possible' };
+  const rows = incidents.map(i => {
+    const r = i.root;
+    const tier = (r.tier || '').replace(/_/g, ' ');
+    const reasons = (i.reasons || []).map(x => esc(x)).join(' · ');
+    const shown = i.impacted.slice(0, 12).map(c => esc(c.name)).join(', ');
+    const more = i.impacted_count > 12 ? ` +${i.impacted_count - 12} more` : '';
+    const sub = [tier, r.site, r.down_since ? 'down ' + _dwIncDur(r.down_since) : '']
+                  .filter(Boolean).map(esc).join(' · ');
+    return `<div class="dw-inc">
+      <div class="dw-inc-head" onclick="this.parentElement.classList.toggle('open')">
+        <span class="dw-ds-dot down"></span>
+        <div class="dw-inc-info">
+          <span class="dw-inc-name">${esc(r.name)}</span>
+          <span class="dw-inc-sub">${sub}</span>
+        </div>
+        <span class="dw-inc-conf dw-inc-conf-${esc(i.confidence)}" title="Root-cause confidence">${confLabel[i.confidence] || i.confidence}</span>
+        <span class="dw-inc-count">${i.impacted_count}</span>
+        <span class="dw-inc-chev">▸</span>
+      </div>
+      <div class="dw-inc-detail">
+        ${reasons ? `<div class="dw-inc-reasons">${reasons}</div>` : ''}
+        <div class="dw-inc-impacted"><b>Impacted:</b> ${shown}${more}</div>
+      </div>
+    </div>`;
+  }).join('');
+  _dwSwap(body, `<div class="dw-inc-list">${rows}</div>`);
 }
 
 // ── Widget: Slowest Ping Devices ──────────────────────────────────

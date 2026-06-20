@@ -33,7 +33,8 @@ def _normalize_kind(kind: str) -> str:
 def db_list_sites() -> list:
     """Return all metadata rows ordered by sort_order then name."""
     rows = db_query("main", """
-        SELECT name, kind, pinned, display_name, sort_order, created_ts, updated_ts
+        SELECT name, kind, pinned, display_name, sort_order, created_ts, updated_ts,
+               COALESCE(probe_id,'') AS probe_id
         FROM sites
         ORDER BY sort_order, name
     """)
@@ -45,6 +46,7 @@ def db_list_sites() -> list:
         "sort_order":   int(r["sort_order"] or 0),
         "created_ts":   int(r["created_ts"] or 0),
         "updated_ts":   int(r["updated_ts"] or 0),
+        "probe_id":     r["probe_id"] or "",
     } for r in rows]
 
 
@@ -53,7 +55,8 @@ def db_get_site_meta(name: str):
     if not name:
         return None
     row = db_query_one("main",
-        "SELECT name, kind, pinned, display_name, sort_order, created_ts, updated_ts "
+        "SELECT name, kind, pinned, display_name, sort_order, created_ts, updated_ts, "
+        "COALESCE(probe_id,'') AS probe_id "
         "FROM sites WHERE name=?", (name,))
     if not row:
         return None
@@ -65,6 +68,7 @@ def db_get_site_meta(name: str):
         "sort_order":   int(row["sort_order"] or 0),
         "created_ts":   int(row["created_ts"] or 0),
         "updated_ts":   int(row["updated_ts"] or 0),
+        "probe_id":     row["probe_id"] or "",
     }
 
 
@@ -94,20 +98,41 @@ def db_upsert_site_meta(name: str, *, kind: str = "lab",
                     (n, kind, pinned, display_name, sort_order, now, now)
                 )
             else:
-                # SQLite: use INSERT OR REPLACE but preserve created_ts when row exists.
+                # SQLite: INSERT OR REPLACE deletes + re-inserts the row, so
+                # preserve created_ts AND probe_id from the existing row —
+                # otherwise every metadata edit silently unbinds the probe.
                 existing = cur.execute(
-                    "SELECT created_ts FROM sites WHERE name=?", (n,)
+                    "SELECT created_ts, COALESCE(probe_id,'') FROM sites WHERE name=?",
+                    (n,)
                 ).fetchone()
                 created_ts = existing[0] if existing else now
+                probe_id   = existing[1] if existing else ""
                 cur.execute(
                     "INSERT OR REPLACE INTO sites "
-                    "(name, kind, pinned, display_name, sort_order, created_ts, updated_ts) "
-                    "VALUES (?,?,?,?,?,?,?)",
-                    (n, kind, pinned, display_name, sort_order, created_ts, now)
+                    "(name, kind, pinned, display_name, sort_order, created_ts, updated_ts, probe_id) "
+                    "VALUES (?,?,?,?,?,?,?,?)",
+                    (n, kind, pinned, display_name, sort_order, created_ts, now, probe_id)
                 )
         return True
     except Exception as e:
         log.error(f"db_upsert_site_meta error: {type(e).__name__}: {e}")
+        return False
+
+
+def db_set_site_probe(name: str, probe_id: str) -> bool:
+    """Bind/unbind a site to a probe (distributed probes site-tier cascade).
+    Caller ensures the metadata row exists and invalidates the resolver cache."""
+    n = (name or "").strip()
+    if not n:
+        return False
+    try:
+        with db_cursor("main") as cur:
+            ph = "%s" if is_pg() else "?"
+            cur.execute(f"UPDATE sites SET probe_id={ph}, updated_ts={ph} WHERE name={ph}",
+                        (probe_id or "", _now(), n))
+        return True
+    except Exception as e:
+        log.error(f"db_set_site_probe error: {type(e).__name__}: {e}")
         return False
 
 

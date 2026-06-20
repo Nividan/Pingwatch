@@ -84,6 +84,11 @@ def _invalidate_scope_cache(cur_ver: int):
 
 _MISS = object()   # sentinel: cache miss (not found vs. known-None)
 
+# (stage_id, did, sid, session) tuples whose maintenance suppression has been
+# logged — prevents one suppressed-event row per probe cycle while a window
+# is open. Bounded (cleared past 4096 entries; worst case one duplicate log).
+_suppressed_logged: set = set()
+
 
 def _scope_get_profile(scope_type, scope_value, cur_ver, db_get_profile_for_scope):
     """Lookup a scope in the cache; fall back to DB on miss."""
@@ -369,7 +374,7 @@ def evaluate_and_fire(dev, sensor) -> None:
         db_get_stage_state, db_record_stage_fire,
         db_clear_stage_state_for_sensor,
     )
-    from db.alert_events  import db_log_event, db_auto_resolve_event
+    from db.alert_events  import db_log_event
     from monitoring.alert_dispatchers import dispatch, check_maintenance
 
     fired_recovery = False
@@ -434,11 +439,16 @@ def evaluate_and_fire(dev, sensor) -> None:
     if current_state == "ok":
         # Reset the diag-throttle so the next failing session logs its first reason.
         sensor._alert_diag_last_reason = None
-        # Fast path: if no stage has ever fired for this sensor (in this process
-        # run), there is nothing to clean up — skip the per-stage DB reads.
-        # _alert_has_fired is set True inside _fire() and cleared here after cleanup.
+        # Fast path: if no stage fired in this process run there is usually
+        # nothing to clean up. But _alert_has_fired is in-memory only — after
+        # a restart mid-incident (or a profile edit that regenerated stage
+        # ids) an orphaned active event would otherwise keep the sensor
+        # alert-dead forever via the duplicate gate. Check the DB once per
+        # process run per sensor to catch those orphans.
         if not getattr(sensor, "_alert_has_fired", False):
-            return
+            if getattr(sensor, "_alert_cleanup_checked", False):
+                return
+            sensor._alert_cleanup_checked = True
         should_cleanup = fired_recovery
         if not should_cleanup:
             for s in stages:
@@ -448,10 +458,23 @@ def evaluate_and_fire(dev, sensor) -> None:
                 if st and st.get("fire_count", 0) > 0:
                     should_cleanup = True
                     break
+        if not should_cleanup:
+            # Stage state may reference regenerated stage ids (profile saves
+            # delete + reinsert stages) — fall back to the event table itself.
+            try:
+                from db.alert_events import db_has_active_event
+                should_cleanup = db_has_active_event(did, sid)
+            except Exception:
+                should_cleanup = False
         if should_cleanup:
             try:
+                from db.alert_events import db_resolve_events_by_sensor
                 db_clear_stage_state_for_sensor(did, sid)
-                db_auto_resolve_event(profile["id"], did, sid)
+                # Resolve by (did, sid), not profile id: db_log_event dedups
+                # the event row per sensor and overwrites its profile_id with
+                # the last-firing profile, so a profile-scoped resolve could
+                # miss the row and leave it active forever.
+                db_resolve_events_by_sensor(did, sid)
                 sensor._alert_has_fired = False   # no active state left in DB
             except Exception as e:
                 log.warning(f"alert_profile_engine: post-recovery cleanup error: {e}")
@@ -565,16 +588,59 @@ def _fire(stage, dev, sensor, trig, did, sid, session, profile,
     suppressed, mw_name = check_maintenance(ctx)
     if suppressed:
         reason = f"Maintenance: {mw_name}" if mw_name else "Maintenance window"
-        try:
-            db_log_event(profile["id"], stage["id"], profile["name"],
-                         ctx, state="suppressed", suppress_reason=reason)
-        except Exception as e:
-            log.warning(f"alert_profile_engine: db_log_event (suppressed) error: {e}")
-        log.info(f"alert_profile_engine: stage {stage['id']} "
-                 f"suppressed by maintenance window {mw_name!r}")
-        # Still mark as fired so we don't keep retrying every probe
-        db_record_stage_fire(stage["id"], did, sid, session)
+        # Log the suppressed event once per (stage, sensor, session) — the
+        # engine re-enters here every probe cycle while the window is open.
+        _supp_key = (stage["id"], did, sid, session)
+        if _supp_key not in _suppressed_logged:
+            if len(_suppressed_logged) > 4096:
+                _suppressed_logged.clear()   # bounded; worst case re-logs once
+            _suppressed_logged.add(_supp_key)
+            try:
+                db_log_event(profile["id"], stage["id"], profile["name"],
+                             ctx, state="suppressed", suppress_reason=reason)
+            except Exception as e:
+                log.warning(f"alert_profile_engine: db_log_event (suppressed) error: {e}")
+            log.info(f"alert_profile_engine: stage {stage['id']} "
+                     f"suppressed by maintenance window {mw_name!r}")
+        # Deliberately do NOT db_record_stage_fire here: marking the stage as
+        # fired silenced the whole incident — an outage that started inside a
+        # window stayed silent forever after the window ended. Leaving the
+        # stage un-fired makes the first probe after the window dispatch
+        # normally; the session dedup still prevents storms.
         return
+
+    # ── Root-cause dependency suppression ────────────────────────────
+    # A device whose parents are ALL down is a downstream symptom of the
+    # upstream outage, not an independent fault. Suppress its symptom
+    # dispatches (still recorded as 'suppressed', just no email/webhook/syslog)
+    # while the root is down. Recovery stages always dispatch — they signal the
+    # incident is over. Mirrors the maintenance gate above, including the
+    # deliberate do-NOT-record-stage-fire so the first probe after the root
+    # recovers dispatches normally. Engine-managed toggle lives inside
+    # suppressed_root_for() (returns None when disabled).
+    if not recovery:
+        try:
+            from monitoring.root_cause import suppressed_root_for
+            _rca_root = suppressed_root_for(ctx.get("did", ""))
+        except Exception as e:
+            _rca_root = None
+            log.debug(f"alert_profile_engine: RCA suppression check error: {e}")
+        if _rca_root:
+            _rname = _rca_root.get("name") or _rca_root.get("did") or "upstream"
+            reason = f"Downstream of {_rname} (root cause)"
+            _supp_key = ("rca", stage["id"], did, sid, session)
+            if _supp_key not in _suppressed_logged:
+                if len(_suppressed_logged) > 4096:
+                    _suppressed_logged.clear()
+                _suppressed_logged.add(_supp_key)
+                try:
+                    db_log_event(profile["id"], stage["id"], profile["name"],
+                                 ctx, state="suppressed", suppress_reason=reason)
+                except Exception as e:
+                    log.warning(f"alert_profile_engine: db_log_event (RCA suppressed) error: {e}")
+                log.info(f"alert_profile_engine: stage {stage['id']} suppressed "
+                         f"(downstream of {_rname})")
+            return
 
     # If the user has already ACK'd an event for this sensor, keep silent:
     # no dispatches (no emails / webhooks / syslog / browser pings). The event
@@ -588,17 +654,26 @@ def _fire(stage, dev, sensor, trig, did, sid, session, profile,
         except Exception as e:
             log.warning(f"alert_profile_engine: ack-gate check error: {e}")
 
-    # Mid-incident escalation gate: if the session key changed (e.g. warn→crit
-    # resets _threshold_triggered_ts) but an active/acked event already exists,
-    # this is NOT a new failure — suppress dispatch to prevent duplicate emails.
-    # Repeat-interval fires (first_fire_in_session=False) always dispatch.
+    # Mid-incident duplicate gate: when the session key changes WITHOUT an
+    # intervening recovery (e.g. restart re-hydration resets _down_since_ts),
+    # the same stage would re-fire and duplicate its notification. Gate only
+    # when THIS stage already fired for the still-open incident: its stage
+    # state survives (cleared only by the OK-path cleanup) and an active
+    # event exists. Gating on the active event alone was wrong — stage 1's
+    # event silenced every later escalation stage, the additive cascade, and
+    # warn→crit severity escalation (the engine degenerated to "first stage
+    # of the narrowest profile, once").
     if not recovery and not gated_by_ack and first_fire_in_session:
         try:
+            from db.alert_profiles import db_get_stage_state
             from db.alert_events import db_has_active_event
-            if db_has_active_event(did, sid):
+            _prior = db_get_stage_state(stage["id"], did, sid)
+            if (_prior and _prior.get("fire_count", 0) > 0
+                    and db_has_active_event(did, sid)):
                 gated_by_ack = True
                 log.debug(f"alert_profile_engine: stage {stage['id']} suppressed "
-                          f"(mid-incident escalation, active event already exists)")
+                          f"(same stage already fired for this open incident — "
+                          f"session key changed without recovery)")
         except Exception as e:
             log.warning(f"alert_profile_engine: active-event gate check error: {e}")
 
@@ -621,9 +696,12 @@ def _fire(stage, dev, sensor, trig, did, sid, session, profile,
 
     try:
         if recovery:
-            # Recovery stages auto-resolve any active event for this profile
-            from db.alert_events import db_auto_resolve_event
-            db_auto_resolve_event(profile["id"], did, sid)
+            # Recovery resolves ALL active events for the sensor: the event
+            # row is deduped per (did, sid) and its profile_id is overwritten
+            # by the last-firing profile, so a profile-scoped resolve could
+            # miss the row and leave it active forever.
+            from db.alert_events import db_resolve_events_by_sensor
+            db_resolve_events_by_sensor(did, sid)
         else:
             db_log_event(profile["id"], stage["id"], profile["name"], ctx,
                          state="active")

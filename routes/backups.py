@@ -115,7 +115,9 @@ def handle(h, method, path, body):
     # ── GET /api/backups/run/<id> — full run with config ──────────
     m = _RE_BACKUP_RUN_ID.match(path)
     if m and method == 'GET':
-        user, _ = h._require('viewer')
+        # operator+: the run body contains the device running-config, which
+        # routinely embeds secrets (snmp community, enable secret, type-7 keys).
+        user, _ = h._require('operator')
         if not user: return True
         run = db_get_backup_run(int(m.group(1)))
         if not run:
@@ -135,7 +137,8 @@ def handle(h, method, path, body):
     # ── GET /api/backups/search — full-text search inside configs ─────
     # Must be checked BEFORE _RE_BACKUP_DEV which would match /api/backups/search
     if path.startswith('/api/backups/search') and method == 'GET':
-        user, _ = h._require('viewer')
+        # operator+: full-text search returns matching config text (secrets).
+        user, _ = h._require('operator')
         if not user: return True
         from urllib.parse import urlparse, parse_qs
         qs = parse_qs(urlparse(h.path).query)
@@ -164,6 +167,7 @@ def handle(h, method, path, body):
                 'username': '', 'has_password': False, 'has_enable': False,
                 'commands': ['show running-config'], 'paging_cmd': '',
                 'timeout': 30, 'in_schedule': False,
+                'expected_content': '', 'expected_is_regex': False, 'min_bytes': 0,
             }
         h._json(200, {'settings': settings})
         return True
@@ -189,6 +193,24 @@ def handle(h, method, path, body):
                 raise ValueError
         except (TypeError, ValueError):
             h._json(400, {'error': 'Timeout must be an integer between 1 and 300'}); return True
+        # Backup-output validation assertions (all optional).
+        _exp = (body.get('expected_content') or '').strip()
+        if len(_exp) > 200:
+            h._json(400, {'error': 'Expected content too long (max 200 chars)'}); return True
+        if _exp and body.get('expected_is_regex'):
+            import re as _re
+            try:
+                _re.compile(_exp)
+            except _re.error as _rxe:
+                h._json(400, {'error': f'Invalid expected-content regex: {_rxe}'}); return True
+        try:
+            _mb = int(body.get('min_bytes', 0) or 0)
+            if not (0 <= _mb <= 10_000_000):
+                raise ValueError
+        except (TypeError, ValueError):
+            h._json(400, {'error': 'Min size must be an integer between 0 and 10000000 bytes'}); return True
+        body['expected_content'] = _exp
+        body['min_bytes']        = _mb
         db_ensure_backup_device(did)
         db_save_backup_settings(did, body)
         db_log_audit(user, h.client_address[0], 'backup_settings_save', did)

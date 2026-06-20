@@ -263,6 +263,9 @@
     <button class="rail-btn" id="tabBackups" onclick="switchMainTab('backups')" title="Backups">
       <span class="rail-ico" aria-hidden="true"></span><span class="rail-tip">Backups</span><span class="rail-label">Backups</span>
     </button>
+    <button class="rail-btn" id="tabProbes" onclick="switchMainTab('probes')" title="Probes (remote agents)">
+      <span class="rail-ico" aria-hidden="true"></span><span class="rail-tip">Probes</span><span class="rail-label">Probes</span>
+    </button>
     <button class="rail-btn rbac-admin" id="tabLogs" onclick="switchMainTab('logs')" title="Logs">
       <span class="rail-ico" aria-hidden="true"></span><span class="rail-tip">Logs</span><span class="rail-label">Logs</span>
     </button>
@@ -494,8 +497,10 @@
         </div>
         <div class="bulk-move">
           <label for="bulkSiteInput">Move to site:</label>
-          <input list="bulkSiteList" id="bulkSiteInput" autocomplete="off" placeholder="Pick or type new…"/>
-          <datalist id="bulkSiteList"></datalist>
+          <div class="site-combo" data-site-combo>
+            <input type="text" id="bulkSiteInput" class="site-combo-input" autocomplete="off" placeholder="Pick or type new…"/>
+            <button type="button" class="site-combo-arrow" tabindex="-1" aria-label="Show sites"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg></button>
+          </div>
           <button class="btn-p" onclick="_bulkApplySiteMove()">Apply</button>
         </div>
         <div class="bulk-ops">
@@ -539,6 +544,8 @@
     <div id="ipamView" style="display:none;flex-direction:column;flex:1;overflow:hidden;"></div>
     <div id="reportsView" style="display:none;flex-direction:column;flex:1;overflow:hidden;"></div>
     <div id="alertingView" style="display:none;flex-direction:column;flex:1;overflow:hidden;"></div>
+    <!-- Probes (remote agents) view -->
+    <div id="probesView" style="display:none;flex-direction:column;flex:1;overflow-y:auto;"></div>
     <div id="logsView" style="display:none;flex-direction:column;flex:1;overflow:hidden;"></div>
   </div>
 </div>

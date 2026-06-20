@@ -15,6 +15,10 @@ from core.logger import log_backup as log
 
 _LAST_TS_FMT = '%Y-%m-%d_%H-%M-%S'
 
+# Max concurrent device-config backups per scheduled run. Bounds the thread
+# and connection load when a whole site is unreachable at backup time.
+_BACKUP_CONCURRENCY = 8
+
 
 def _should_fire(last_fired, freq: str, time_str: str, days_str: str) -> bool:
     """
@@ -153,18 +157,16 @@ def _scheduler_loop():
                         except Exception as e:
                             log.error(f"Scheduled backup crashed for device {device_id!r}: {e}", exc_info=True)
 
-                    for dev in scheduled:
-                        if _stop.is_set():
-                            break
-                        t = threading.Thread(
-                            target=_run_backup,
-                            args=(dev['did'],),
-                            daemon=True,
-                            name=f"sched-bk-{dev['did']}",
-                        )
-                        t.start()
-                        if _stop.wait(1):   # 1-second stagger, interruptible
-                            break
+                    # Bounded pool instead of one thread per device. A site
+                    # outage at backup time used to spawn hundreds of threads,
+                    # each pinned in connect — now capped at _BACKUP_CONCURRENCY.
+                    from concurrent.futures import ThreadPoolExecutor
+                    with ThreadPoolExecutor(max_workers=_BACKUP_CONCURRENCY,
+                                            thread_name_prefix="sched-bk") as _ex:
+                        for dev in scheduled:
+                            if _stop.is_set():
+                                break
+                            _ex.submit(_run_backup, dev['did'])
 
             # ── Fire database backup ──────────────────────────────────────
             if db_en and _should_fire(last_db_fired, db_freq, db_time, db_days):

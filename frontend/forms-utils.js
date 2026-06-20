@@ -11,6 +11,7 @@ const _LM_TIER_OPTIONS = [
   {value: 'firewall',    label: 'Firewall'},
   {value: 'core_switch', label: 'Core Switch'},
   {value: 'switch',      label: 'Access Switch'},
+  {value: 'ap',          label: 'Access Point'},
   {value: 'chassis',     label: 'Chassis / Enclosure'},
   {value: 'hypervisor',  label: 'Hypervisor / Server'},
   {value: 'vm',          label: 'VM'},
@@ -18,13 +19,17 @@ const _LM_TIER_OPTIONS = [
   {value: 'other',       label: 'Other'},
 ];
 /** Build option HTML for the tier dropdown. `selected` is the currently
- *  chosen value (or '' for auto-detect). */
-function _lmTierOptionsHtml(selected) {
+ *  chosen value (or '' for the empty option). `emptyLabel` overrides the
+ *  first option's label — per-group uses "— Auto-detect from name —" (the
+ *  default), per-device uses "— None —" (override falls through to group/regex).
+ */
+function _lmTierOptionsHtml(selected, emptyLabel) {
   const sel = String(selected == null ? '' : selected);
   return _LM_TIER_OPTIONS.map(function(o) {
+    const lbl = (o.value === '' && emptyLabel) ? emptyLabel : o.label;
     return '<option value="' + o.value + '"' +
            (o.value === sel ? ' selected' : '') +
-           '>' + o.label + '</option>';
+           '>' + lbl + '</option>';
   }).join('');
 }
 
@@ -130,3 +135,160 @@ window.addEventListener('resize',()=>{
     const info=S.charts[k];if(info)drawSpk(k,S.sensors[k]?.history||[]);
   });
 });
+
+/* ── Site combobox ────────────────────────────────────────────────────────
+   A real click-to-pick dropdown of ALL sites that still allows typing a new
+   site name (sites are free-text). Replaces the native <datalist> used by the
+   subnet / device / group editors — datalists filter-as-you-type and don't
+   show every option reliably. Drop in via siteComboHtml(id, current, ph): the
+   inner <input> keeps the given id, so existing `getElementById(id).value`
+   read paths are unchanged. Sites come from /api/sites (the full union the
+   sidebar uses), cached for 60s. Self-wires through document-level delegation
+   — no per-form init call. */
+(function(){
+  let _open = null;          // currently open .site-combo element (or null)
+  let _panel = null;         // single shared dropdown, portaled to <body>
+  let _sites = null;         // cached site list
+  let _sitesAt = 0;
+
+  // The panel lives on <body>, NOT inside the .site-combo — modals create a
+  // containing block (transform/filter) that would make position:fixed render
+  // relative to the modal instead of the viewport, throwing the dropdown off
+  // to the side. A body-level singleton + viewport coords fixes that.
+  function _ensurePanel(){
+    if (_panel) return _panel;
+    _panel = document.createElement('div');
+    _panel.className = 'site-combo-panel';
+    _panel.hidden = true;
+    document.body.appendChild(_panel);
+    return _panel;
+  }
+
+  async function _ensureSites(){
+    if (_sites && (Date.now() - _sitesAt) < 60000) return _sites;
+    try {
+      const r = await fetch('/api/sites', { credentials: 'same-origin' });
+      if (r.ok) { _sites = ((await r.json()).sites || []).filter(Boolean); _sitesAt = Date.now(); }
+    } catch (_) { /* keep stale/empty */ }
+    return _sites || [];
+  }
+  // Let callers drop the cache after creating a new site so it shows up at once.
+  window._siteComboInvalidate = function(){ _sites = null; };
+
+  const _inp = c => c && c.querySelector('.site-combo-input');
+
+  function _render(c){
+    const inp = _inp(c), panel = _ensurePanel();
+    const q = (inp.value || '').trim().toLowerCase();
+    const all = _sites || [];
+    const matches = q ? all.filter(s => s.toLowerCase().includes(q)) : all;
+    let html = '<div class="site-combo-item site-combo-clear" data-val="">— No site —</div>';
+    html += matches.map(s =>
+      `<div class="site-combo-item" data-val="${esc(s)}">${esc(s)}</div>`).join('');
+    // Offer to use a brand-new value when the typed text isn't an exact match.
+    if (q && !all.some(s => s.toLowerCase() === q)) {
+      const v = inp.value.trim();
+      html += `<div class="site-combo-item site-combo-new" data-val="${esc(v)}">➕ Use “${esc(v)}”</div>`;
+    }
+    panel.innerHTML = html;
+  }
+
+  function _position(){
+    if (!_open || !_panel) return;
+    const inp = _inp(_open);
+    if (!inp || !document.contains(inp)) { _close(); return; }
+    const r = inp.getBoundingClientRect();
+    _panel.style.left  = r.left + 'px';
+    _panel.style.width = r.width + 'px';
+    const below = window.innerHeight - r.bottom;
+    const ph = Math.min(_panel.scrollHeight, 240);
+    if (below < ph + 8 && r.top > below) {           // flip up when cramped
+      _panel.style.top = ''; _panel.style.bottom = (window.innerHeight - r.top + 4) + 'px';
+    } else {
+      _panel.style.bottom = ''; _panel.style.top = (r.bottom + 4) + 'px';
+    }
+  }
+
+  async function _openCombo(c){
+    if (!c) return;
+    if (_open && _open !== c) _open.classList.remove('open');
+    _open = c;
+    const panel = _ensurePanel();
+    await _ensureSites();
+    if (_open !== c || !document.contains(c)) return;   // raced/closed
+    _render(c);
+    panel.hidden = false;
+    c.classList.add('open');
+    _position();
+  }
+  function _close(){
+    if (_panel) _panel.hidden = true;
+    if (_open) _open.classList.remove('open');
+    _open = null;
+  }
+
+  function _reposition(){ if (_open) _position(); }
+  window.addEventListener('scroll', _reposition, true);
+  window.addEventListener('resize', _reposition);
+
+  document.addEventListener('focusin', e => {
+    const t = e.target;
+    if (t.classList && t.classList.contains('site-combo-input'))
+      _openCombo(t.closest('.site-combo'));
+  });
+  document.addEventListener('input', e => {
+    const t = e.target;
+    if (t.classList && t.classList.contains('site-combo-input')) {
+      const c = t.closest('.site-combo');
+      if (_open === c) _render(c); else _openCombo(c);
+    }
+  });
+  document.addEventListener('mousedown', e => {
+    const arrow = e.target.closest && e.target.closest('.site-combo-arrow');
+    if (arrow) {                       // toggle without stealing focus first
+      e.preventDefault();
+      const c = arrow.closest('.site-combo');
+      if (_open === c) _close();
+      else { _inp(c).focus(); _openCombo(c); }
+      return;
+    }
+    // Panel items live on <body> (not inside .site-combo) — match them first.
+    const item = e.target.closest && e.target.closest('.site-combo-item');
+    if (item && _open) {
+      e.preventDefault();              // keep focus, don't blur-close mid-pick
+      const inp = _inp(_open);
+      inp.value = item.dataset.val || '';
+      inp.dispatchEvent(new Event('change', { bubbles: true }));
+      _close();
+      return;
+    }
+    const inCombo = e.target.closest && e.target.closest('.site-combo');
+    const inPanel = _panel && _panel.contains(e.target);
+    if (_open && !inCombo && !inPanel) _close();
+  });
+  document.addEventListener('keydown', e => {
+    if (!_open || !_panel) return;
+    if (e.key === 'Escape') { _close(); return; }
+    const items = [..._panel.querySelectorAll('.site-combo-item')];
+    if (!items.length) return;
+    let i = items.findIndex(x => x.classList.contains('active'));
+    if (e.key === 'ArrowDown')      { e.preventDefault(); i = Math.min(items.length - 1, i + 1); }
+    else if (e.key === 'ArrowUp')   { e.preventDefault(); i = Math.max(0, i - 1); }
+    else if (e.key === 'Enter')     { if (i >= 0) { e.preventDefault(); items[i].dispatchEvent(new MouseEvent('mousedown', {bubbles:true})); } return; }
+    else return;
+    items.forEach(x => x.classList.remove('active'));
+    items[i].classList.add('active');
+    items[i].scrollIntoView({ block: 'nearest' });
+  });
+
+  window.siteComboHtml = function(id, current, placeholder){
+    return '<div class="site-combo" data-site-combo>'
+      + '<input type="text" id="' + esc(id) + '" class="site-combo-input" autocomplete="off" '
+      + 'maxlength="60" value="' + esc(current || '') + '" placeholder="'
+      + esc(placeholder || 'e.g. NYC, DC1, HQ') + '"/>'
+      + '<button type="button" class="site-combo-arrow" tabindex="-1" aria-label="Show sites">'
+      + '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" '
+      + 'stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>'
+      + '</button></div>';
+  };
+})();

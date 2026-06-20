@@ -12,9 +12,18 @@ from .state import MonitorState
 STATE = MonitorState()
 
 # ── Version & uptime ─────────────────────────────────────────────
-APP_VERSION      = "1.1"
-APP_VERSION_NAME = "REST API tokens"
+# Release checklist: bump AGENT_VERSION in agent/agent.py alongside this —
+# the Probes page shows "update available" when a deployed agent differs.
+APP_VERSION      = "1.4"
+APP_VERSION_NAME = "reliability & ack state"
 SERVER_START = time.time()
+
+# Distributed-probes wire protocol. Introduced in v1.3; still 1 as of v1.4 —
+# every change since has been additive (new optional fields, the device_scan
+# task type), so v1.3 agents stay compatible. Bump ONLY on a breaking change
+# to the /api/agent/* contract; the server then rejects mismatched agents with
+# a clear 409 so they fail loudly instead of misbehaving.
+PROBE_PROTOCOL_VERSION = 1
 
 # ── Effective network ports (overwritten by main() from settings) ─
 effective_port      = 7070

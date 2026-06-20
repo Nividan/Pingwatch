@@ -35,6 +35,42 @@ def _row(r) -> dict:
 
 # ── Alert events ──────────────────────────────────────────────────
 
+# Flap directions that represent an open "something is wrong" incident —
+# mirrors what the alert engine fires on. 'recovered'/'threshold_ok' rows
+# also sit unresolved-looking in flap_log but are not incidents.
+_INCIDENT_DIRECTIONS = ('down', 'threshold_crit', 'threshold_warn',
+                        'anomaly_warn', 'state_down', 'state_change')
+
+
+def _flap_ack_info(did: str, sid: str):
+    """(ack_by, ack_at) when the sensor's current unresolved flap incident is
+    acknowledged, else (None, None).
+
+    A fired stage can postdate the operator's ACK: the flap is ACKed during
+    the stage's delay window (or the engine re-fires after a restart), and
+    the flap-level ACK propagation in routes/monitoring.py only reached
+    event rows that existed at ACK time. A freshly inserted event must
+    inherit that ACK or the Events row shows '● active' while the flap
+    detail modal correctly says Acknowledged.
+    """
+    try:
+        from db.helpers import db_query_one
+        ph = ",".join("?" * len(_INCIDENT_DIRECTIONS))
+        row = db_query_one("logs",
+            f"SELECT ack_state, ack_by, ack_at FROM flap_log "
+            f"WHERE did = ? AND sid = ? "
+            f"AND (resolved_at IS NULL OR resolved_at = 0) "
+            f"AND ack_state != 'resolved' "
+            f"AND direction IN ({ph}) "
+            f"ORDER BY id DESC LIMIT 1",
+            (did, sid, *_INCIDENT_DIRECTIONS))
+        if row and (row["ack_state"] or "active") == "acknowledged":
+            return row["ack_by"] or "", float(row["ack_at"] or 0)
+    except Exception as e:
+        log.debug(f"_flap_ack_info lookup failed: {e}")
+    return None, None
+
+
 def db_log_event(profile_id: int, stage_id: int, profile_name: str,
                  ctx: dict, state: str = 'active',
                  suppress_reason: str = '') -> int:
@@ -56,6 +92,17 @@ def db_log_event(profile_id: int, stage_id: int, profile_name: str,
     severity   = ctx.get('severity', '')
     event_type = ctx.get('event_type', '')
     detail     = ctx.get('detail', '')
+
+    # ACK inheritance — resolved BEFORE the main-DB transaction opens (the
+    # lookup hits the logs DB; nesting that inside the transaction would
+    # nest PG pool checkouts). Used only on the INSERT path: the dedup
+    # UPDATE path never touches state, so an acknowledged row stays
+    # acknowledged across repeat fires either way.
+    ins_state, ack_by_v, ack_at_v = state, '', 0
+    if state == 'active':
+        _ab, _aa = _flap_ack_info(did, sid)
+        if _ab is not None:
+            ins_state, ack_by_v, ack_at_v = 'acknowledged', _ab, _aa
 
     if is_pg():
         from db.pg_pool import pg_conn
@@ -95,12 +142,14 @@ def db_log_event(profile_id: int, stage_id: int, profile_name: str,
                     cur.execute(
                         """INSERT INTO alert_events
                            (profile_id, stage_id, profile_name, did, sid, dname, sname,
-                            severity, event_type, state, triggered_at, detail, suppress_reason)
-                           VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id""",
+                            severity, event_type, state, triggered_at, detail, suppress_reason,
+                            ack_by, ack_at)
+                           VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id""",
                         (
                             profile_id, stage_id, profile_name,
                             did, sid, dname, sname,
-                            severity, event_type, state, now, detail, suppress_reason,
+                            severity, event_type, ins_state, now, detail, suppress_reason,
+                            ack_by_v, ack_at_v,
                         )
                     )
                     eid = cur.fetchone()['id']
@@ -146,12 +195,14 @@ def db_log_event(profile_id: int, stage_id: int, profile_name: str,
             cur = con.execute(
                 """INSERT INTO alert_events
                    (profile_id, stage_id, profile_name, did, sid, dname, sname,
-                    severity, event_type, state, triggered_at, detail, suppress_reason)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    severity, event_type, state, triggered_at, detail, suppress_reason,
+                    ack_by, ack_at)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (
                     profile_id, stage_id, profile_name,
                     did, sid, dname, sname,
-                    severity, event_type, state, now, detail, suppress_reason,
+                    severity, event_type, ins_state, now, detail, suppress_reason,
+                    ack_by_v, ack_at_v,
                 )
             )
             eid = cur.lastrowid
@@ -509,3 +560,43 @@ def db_has_acked_event(profile_id: int, did: str, sid: str) -> bool:
         return False
     finally:
         con.close()
+
+
+def db_clean_alert_events(retain_days: int = 90) -> int:
+    """Delete RESOLVED alert events older than `retain_days`.
+
+    The table header promised "rotational, capped retention" but nothing ever
+    pruned it — resolved events accumulated forever in the main DB of a 24/7
+    service. Active/acknowledged rows are always kept (they're open incidents).
+    Returns rows deleted. Called from the hourly autosave cleanup.
+    """
+    cutoff = time.time() - max(1, int(retain_days)) * 86400
+    try:
+        if is_pg():
+            from db.pg_pool import pg_cursor
+            with pg_cursor("main") as cur:
+                cur.execute(
+                    "DELETE FROM alert_events "
+                    "WHERE state='resolved' AND resolved_at>0 AND resolved_at < %s",
+                    (cutoff,)
+                )
+                n = cur.rowcount or 0
+        else:
+            con = _con()
+            try:
+                cur = con.execute(
+                    "DELETE FROM alert_events "
+                    "WHERE state='resolved' AND resolved_at>0 AND resolved_at < ?",
+                    (cutoff,)
+                )
+                n = cur.rowcount or 0
+                con.commit()
+            finally:
+                con.close()
+        if n:
+            log.info(f"Alert events retention: pruned {n} resolved event(s) "
+                     f"older than {retain_days}d")
+        return n
+    except Exception as e:
+        log.error(f"db_clean_alert_events error: {e}")
+        return 0

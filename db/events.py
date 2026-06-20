@@ -641,6 +641,165 @@ def db_resolve_all_flaps() -> int:
         if con: con.close()
 
 
+def db_load_unresolved_flap_state(state):
+    """Re-hydrate sensor runtime state (_alerted_down, _threshold_state,
+    _down_since_ts, _threshold_triggered_ts) from any unresolved flap_log rows.
+
+    Without this, every restart re-fires brand-new 'down'/'threshold_warn'/
+    'threshold_crit' flap rows for sensors that were already in those states
+    pre-restart — the previously-ACKed rows stay in the DB but a fresh active
+    row pops up alongside, looking to the user like the ACK was lost.
+
+    Direction precedence per sensor: 'threshold_crit' beats 'threshold_warn' /
+    'anomaly_warn' (matches the warn↔crit escalation logic in state.py). 'down'
+    is independent of threshold state.
+    """
+    from datetime import datetime
+    _DOWN_DIRS = ("down",)
+    _CRIT_DIRS = ("threshold_crit",)
+    _WARN_DIRS = ("threshold_warn", "anomaly_warn")
+    _ALL_DIRS  = _DOWN_DIRS + _CRIT_DIRS + _WARN_DIRS
+
+    def _parse_iso(s):
+        try:
+            if not s: return None
+            t = s.replace("Z", "+00:00") if s.endswith("Z") else s
+            return datetime.fromisoformat(t).timestamp()
+        except Exception:
+            return None
+
+    log.info("db_load_unresolved_flap_state: scanning flap_log for unresolved entries...")
+    rows = []
+    ack_rows = []
+    if is_pg():
+        from db.pg_pool import pg_cursor
+        try:
+            with pg_cursor("logs") as cur:
+                ph = ",".join(["%s"] * len(_ALL_DIRS))
+                cur.execute(
+                    f"SELECT did, sid, direction, MIN(ts) AS first_ts FROM flap_log "
+                    f"WHERE direction IN ({ph}) "
+                    f"AND COALESCE(ack_state,'active') IN ('active','acknowledged') "
+                    f"GROUP BY did, sid, direction",
+                    _ALL_DIRS
+                )
+                rows = [(r["did"], r["sid"], r["direction"], r["first_ts"]) for r in cur.fetchall()]
+                # Acknowledged-but-unresolved incidents → re-seed the
+                # sensor's "acknowledged-down" badge across restarts.
+                cur.execute(
+                    f"SELECT did, sid, ack_by, ack_at FROM flap_log "
+                    f"WHERE direction IN ({ph}) AND ack_state = 'acknowledged'",
+                    _ALL_DIRS
+                )
+                ack_rows = [(r["did"], r["sid"], r["ack_by"], r["ack_at"])
+                            for r in cur.fetchall()]
+        except Exception as e:
+            log.error(f"db_load_unresolved_flap_state error: {e}")
+            return
+    else:
+        con = None
+        try:
+            con = sqlite3.connect(LOGS_DB_PATH, timeout=15)
+            ph = ",".join(["?"] * len(_ALL_DIRS))
+            rows = con.execute(
+                f"SELECT did, sid, direction, MIN(ts) FROM flap_log "
+                f"WHERE direction IN ({ph}) "
+                f"AND COALESCE(ack_state,'active') IN ('active','acknowledged') "
+                f"GROUP BY did, sid, direction",
+                _ALL_DIRS
+            ).fetchall()
+            ack_rows = con.execute(
+                f"SELECT did, sid, ack_by, ack_at FROM flap_log "
+                f"WHERE direction IN ({ph}) AND ack_state = 'acknowledged'",
+                _ALL_DIRS
+            ).fetchall()
+        except Exception as e:
+            log.error(f"db_load_unresolved_flap_state error: {e}")
+            return
+        finally:
+            if con: con.close()
+
+    # Latest ACK per sensor (a sensor can have several acked open rows).
+    ack_map = {}
+    for did, sid, ack_by, ack_at in ack_rows:
+        try:
+            at = float(ack_at or 0)
+        except (TypeError, ValueError):
+            at = 0.0
+        prev = ack_map.get((did, sid))
+        if prev is None or at > prev[1]:
+            ack_map[(did, sid)] = (str(ack_by or ""), at)
+    log.info(f"db_load_unresolved_flap_state: found {len(rows)} unresolved flap_log row(s)")
+
+    # Aggregate per (did, sid): note which categories matched + earliest ts each.
+    # ts may be unparseable; track presence-of-row separately from the epoch.
+    by_sensor = {}
+    for did, sid, direction, first_ts in rows:
+        slot = by_sensor.setdefault((did, sid), {
+            "down": False, "down_ts": None,
+            "warn": False, "warn_ts": None,
+            "crit": False, "crit_ts": None,
+        })
+        ts_epoch = _parse_iso(first_ts)
+        def _earlier(prev, new):
+            if new is None: return prev
+            if prev is None: return new
+            return min(prev, new)
+        if direction in _DOWN_DIRS:
+            slot["down"] = True
+            slot["down_ts"] = _earlier(slot["down_ts"], ts_epoch)
+        elif direction in _CRIT_DIRS:
+            slot["crit"] = True
+            slot["crit_ts"] = _earlier(slot["crit_ts"], ts_epoch)
+        elif direction in _WARN_DIRS:
+            slot["warn"] = True
+            slot["warn_ts"] = _earlier(slot["warn_ts"], ts_epoch)
+
+    restored = 0
+    skipped_no_device = 0
+    skipped_no_sensor = 0
+    for (did, sid), slot in by_sensor.items():
+        dev = state.devices.get(did)
+        if not dev:
+            skipped_no_device += 1
+            log.warning(f"flap_log references missing device did={did} sid={sid} — skipping restore")
+            continue
+        s = dev.sensors.get(sid)
+        if not s:
+            skipped_no_sensor += 1
+            log.warning(f"flap_log references missing sensor did={did} sid={sid} (device exists) — skipping restore")
+            continue
+        flags = []
+        if slot["down"]:
+            s._alerted_down = True
+            if slot["down_ts"]:
+                s._down_since_ts = slot["down_ts"]
+            flags.append("down")
+        # Threshold: crit takes precedence over warn (matches escalation logic).
+        if slot["crit"]:
+            s._threshold_state = "crit"
+            if slot["crit_ts"]:
+                s._threshold_triggered_ts = slot["crit_ts"]
+            flags.append("crit")
+        elif slot["warn"]:
+            s._threshold_state = "warn"
+            if slot["warn_ts"]:
+                s._threshold_triggered_ts = slot["warn_ts"]
+            flags.append("warn")
+        if flags:
+            ack = ack_map.get((did, sid))
+            if ack:
+                s._ack_by = ack[0]
+                s._ack_at = ack[1]
+                flags.append(f"ack:{ack[0]}")
+            restored += 1
+            log.info(f"Restored flap state for {dev.name}/{s.name} (did={did} sid={sid}): {','.join(flags)}")
+    log.info(
+        f"db_load_unresolved_flap_state: restored {restored} sensor(s); "
+        f"skipped {skipped_no_device} missing device(s), {skipped_no_sensor} missing sensor(s)"
+    )
+
+
 # ── SNMP trap log ────────────────────────────────────────────────
 
 def db_log_trap(t):

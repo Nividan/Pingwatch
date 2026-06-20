@@ -25,6 +25,82 @@ def _validate_host_quick(host) -> bool:
     return isinstance(host, str) and bool(host) and bool(_HOST_RE.match(host.strip()))
 
 
+# Errno-style network conditions that mean "the target is unreachable" — an
+# expected DOWN result, not a PingWatch bug. Logging these at WARNING every
+# probe cycle floods the log (and WARN-based alerting) for the entire duration
+# of any outage. They're returned as clean {"ok": False} without a warning.
+_DOWN_ERRNOS = frozenset(filter(None, (
+    getattr(__import__("errno"), n, None) for n in (
+        "ENETUNREACH", "EHOSTUNREACH", "ECONNREFUSED", "ECONNRESET",
+        "ETIMEDOUT", "ENETDOWN", "EHOSTDOWN", "ENOBUFS", "EPIPE",
+    )
+)))
+
+
+def _down_detail(host, exc):
+    """If `exc` is an expected 'host down' network error, return a short
+    detail string for an ok=False result; otherwise return None so the caller
+    logs it as a genuinely unexpected error."""
+    if isinstance(exc, (socket.gaierror,)):
+        return f"DNS resolution failed: {str(exc)[:60]}"
+    if isinstance(exc, (ConnectionError, socket.timeout, TimeoutError)):
+        return str(exc)[:80] or "unreachable"
+    if isinstance(exc, OSError) and getattr(exc, "errno", None) in _DOWN_ERRNOS:
+        return str(exc)[:80] or "unreachable"
+    return None
+
+
+def _bounded_getaddrinfo(host, port, timeout, family=0, stype=socket.SOCK_STREAM):
+    """getaddrinfo with a hard wall-clock cap.
+
+    socket.getaddrinfo has no timeout parameter and blocks until the OS
+    resolver gives up (30-90s with a dead resolv.conf / AD DNS) — so the
+    socket `timeout` on the connect that follows never even starts. Running
+    it on a joinable thread bounds it; on timeout we raise socket.timeout so
+    callers classify it as a normal DOWN.
+    """
+    out = {"res": None, "err": None}
+
+    def _work():
+        try:
+            out["res"] = socket.getaddrinfo(host, int(port), family, stype)
+        except Exception as e:
+            out["err"] = e
+
+    t = threading.Thread(target=_work, daemon=True, name="pw-resolve")
+    t.start()
+    t.join(timeout=timeout)
+    if t.is_alive():
+        raise socket.timeout(f"DNS resolution exceeded {timeout}s")
+    if out["err"] is not None:
+        raise out["err"]
+    return out["res"]
+
+
+def _connect_bounded(host, port, timeout):
+    """create_connection with the DNS-resolution phase bounded by `timeout`.
+
+    Plain socket.create_connection resolves the hostname BEFORE the timeout
+    governs anything, so a dead resolver hangs the probe past `timeout`. We
+    resolve first (bounded), then connect to the resolved address, applying
+    `timeout` to the connect itself.
+    """
+    err = None
+    for af, socktype, proto, _canon, sa in _bounded_getaddrinfo(host, port, timeout):
+        s = None
+        try:
+            s = socket.socket(af, socktype, proto)
+            s.settimeout(timeout)
+            s.connect(sa)
+            return s
+        except Exception as e:
+            err = e
+            if s is not None:
+                try: s.close()
+                except Exception: pass
+    raise err if err else OSError(f"could not connect to {host}:{port}")
+
+
 def probe_ping(host, timeout=4):
     if not _validate_host_quick(host):
         return {"ok": False, "ms": None, "detail": "invalid hostname"}
@@ -57,23 +133,86 @@ def probe_tcp(host, port, timeout=5):
     if not _validate_host_quick(host):
         return {"ok": False, "ms": None, "detail": "invalid hostname"}
     t0 = time.time()
+    s = None
     try:
-        s = socket.create_connection((host, int(port)), timeout=timeout)
+        s = _connect_bounded(host, int(port), timeout)
         ms = round((time.time() - t0) * 1000, 1)
-        s.close()
         return {"ok": True, "ms": ms, "detail": f"Port {port} open ({ms}ms)"}
     except socket.timeout:
         return {"ok": False, "ms": None, "detail": f"Port {port} connection timed out"}
     except ConnectionRefusedError:
         return {"ok": False, "ms": None, "detail": f"Port {port} connection refused"}
     except Exception as e:
-        log_sensors.warning("probe_tcp %s:%s: unexpected error: %s", host, port, e)
-        return {"ok": False, "ms": None, "detail": str(e)}
+        _d = _down_detail(host, e)
+        if _d is None:
+            log_sensors.warning("probe_tcp %s:%s: unexpected error: %s", host, port, e)
+            _d = str(e)[:80]
+        return {"ok": False, "ms": None, "detail": _d}
+    finally:
+        if s is not None:
+            try: s.close()
+            except Exception: pass
 
 
-def probe_http(url, timeout=8, verify_ssl=True, expected_status=0):
+def _peer_cert_expiry_days(host, port, timeout, verify_ssl=True):
+    """Best-effort days until the TLS cert at host:port expires (negative if
+    already expired), or None when it can't be determined — no cert returned,
+    an untrusted chain while verifying, verify disabled (CERT_NONE hides the
+    parsed cert), or any handshake error. Backs the optional cert-expiry
+    thresholds on HTTP/S sensors; never raises, so it can't turn a healthy
+    HTTP check into a failure."""
+    import datetime
+    ctx = ssl.create_default_context()
+    if not verify_ssl:
+        ctx.check_hostname = False
+        ctx.verify_mode    = ssl.CERT_NONE
+    else:
+        try:
+            from core.ssl_trust import apply_trusted_cas
+            apply_trusted_cas(ctx)
+        except Exception:
+            pass
+    raw = conn = None
+    try:
+        raw = _connect_bounded(host, int(port), timeout)
+        conn = ctx.wrap_socket(raw, server_hostname=host)
+        raw = None  # ownership transferred to conn
+        cert = conn.getpeercert()
+        not_after = (cert or {}).get("notAfter", "")
+        if not not_after:
+            return None
+        exp = datetime.datetime.strptime(not_after, "%b %d %H:%M:%S %Y %Z")
+        now = datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None)
+        return (exp - now).days
+    except Exception:
+        return None
+    finally:
+        for _s in (conn, raw):
+            if _s is not None:
+                try: _s.close()
+                except Exception: pass
+
+
+def probe_http(url, timeout=8, verify_ssl=True, expected_status=0, cert_check=False):
     if not url.startswith("http"):
         url = "http://" + url
+
+    def _cert_days():
+        # Only peek for https URLs when the sensor has cert-expiry thresholds.
+        # Done on the up paths only (a separate, bounded TLS handshake — does
+        # not count toward the HTTP latency `ms`).
+        if not (cert_check and url.startswith("https://")):
+            return None
+        try:
+            from urllib.parse import urlparse
+            u = urlparse(url)
+            if u.hostname:
+                return _peer_cert_expiry_days(u.hostname, u.port or 443,
+                                              timeout, verify_ssl)
+        except Exception:
+            return None
+        return None
+
     t0 = time.time()
     try:
         ctx = None
@@ -92,12 +231,20 @@ def probe_http(url, timeout=8, verify_ssl=True, expected_status=0):
             code = resp.getcode()
             ssl_note = " [SSL ignored]" if not verify_ssl else ""
             ok = (code == expected_status) if expected_status else (200 <= code < 400)
-            return {"ok": ok, "ms": ms,
-                    "detail": f"HTTP {code} ({ms}ms){ssl_note}", "code": code}
+            result = {"ok": ok, "ms": ms,
+                      "detail": f"HTTP {code} ({ms}ms){ssl_note}", "code": code}
+            _cd = _cert_days()
+            if _cd is not None:
+                result["cert_days"] = _cd
+            return result
     except urllib.error.HTTPError as e:
         ms = round((time.time() - t0) * 1000, 1)
         ok = (e.code == expected_status) if expected_status else (e.code < 400)
-        return {"ok": ok, "ms": ms, "detail": f"HTTP {e.code}", "code": e.code}
+        result = {"ok": ok, "ms": ms, "detail": f"HTTP {e.code}", "code": e.code}
+        _cd = _cert_days()
+        if _cd is not None:
+            result["cert_days"] = _cd
+        return result
     except urllib.error.URLError as e:
         return {"ok": False, "ms": None, "detail": str(e.reason)[:80]}
     except Exception as e:
@@ -124,7 +271,10 @@ def probe_dns(host, query, record_type="A", dns_server=None, port=53, timeout=5)
         t0 = time.time()
         try:
             family = socket.AF_INET6 if record_type.upper() == "AAAA" else socket.AF_INET
-            results = socket.getaddrinfo(query, None, family)
+            # Bounded: socket.getaddrinfo ignores any timeout and would block on
+            # a dead resolver far past the sensor's configured timeout.
+            results = _bounded_getaddrinfo(query, 0, timeout, family=family,
+                                           stype=socket.SOCK_STREAM)
             ms = round((time.time() - t0) * 1000, 1)
             addrs = list({r[4][0] for r in results})
             return {"ok": True, "ms": ms,
@@ -132,6 +282,8 @@ def probe_dns(host, query, record_type="A", dns_server=None, port=53, timeout=5)
                     "value": addrs[0] if addrs else ""}
         except socket.gaierror as e:
             return {"ok": False, "ms": None, "detail": f"DNS error: {e}"}
+        except socket.timeout as e:
+            return {"ok": False, "ms": None, "detail": str(e)}
         except Exception as e:
             log_sensors.warning("probe_dns %s (system resolver): unexpected error: %s", query, e)
             return {"ok": False, "ms": None, "detail": str(e)[:80]}
@@ -458,13 +610,20 @@ def probe_tls(host, port=443, timeout=10):
     apply_trusted_cas(ctx)
     t0 = time.time()
     conn = None
+    raw = None
     try:
-        raw = socket.create_connection((host, int(port)), timeout=timeout)
+        raw = _connect_bounded(host, int(port), timeout)
         conn = ctx.wrap_socket(raw, server_hostname=host)
+        raw = None  # ownership transferred to conn
         ms = round((time.time() - t0) * 1000, 1)
         cert = conn.getpeercert()
         conn.close(); conn = None
-        not_after = cert.get("notAfter", "")
+        not_after = (cert or {}).get("notAfter", "")
+        if not not_after:
+            # Handshake succeeded but no cert presented (session resumption,
+            # some proxies). Not a PingWatch error — report cleanly, no WARN.
+            return {"ok": False, "ms": None,
+                    "detail": "TLS: no certificate returned by peer"}
         exp = datetime.datetime.strptime(not_after, "%b %d %H:%M:%S %Y %Z")
         days = (exp - datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None)).days
         ok = days > 0
@@ -477,13 +636,20 @@ def probe_tls(host, port=443, timeout=10):
         return {"ok": False, "ms": None, "detail": f"TLS SSL error: {str(e)[:80]}"}
     except socket.timeout:
         return {"ok": False, "ms": None, "detail": f"TLS timeout after {timeout}s"}
+    except ValueError as e:
+        # strptime on an odd notAfter format — clean down, not a crash.
+        return {"ok": False, "ms": None, "detail": f"TLS cert parse error: {str(e)[:60]}"}
     except Exception as e:
-        log_sensors.warning("probe_tls %s:%s: unexpected error: %s", host, port, e)
-        return {"ok": False, "ms": None, "detail": str(e)[:80]}
+        _d = _down_detail(host, e)
+        if _d is None:
+            log_sensors.warning("probe_tls %s:%s: unexpected error: %s", host, port, e)
+            _d = str(e)[:80]
+        return {"ok": False, "ms": None, "detail": _d}
     finally:
-        if conn:
-            try: conn.close()
-            except Exception: pass
+        for _sock in (conn, raw):
+            if _sock is not None:
+                try: _sock.close()
+                except Exception: pass
 
 
 def probe_http_keyword(url, keyword, timeout=8, verify_ssl=True, case_sensitive=False):
@@ -528,7 +694,7 @@ def probe_banner(host, port, banner_regex="", timeout=5):
     t0 = time.time()
     s = None
     try:
-        s = socket.create_connection((host, int(port)), timeout=timeout)
+        s = _connect_bounded(host, int(port), timeout)
         s.settimeout(timeout)
         try:
             banner = s.recv(256).decode(errors="replace").strip()
@@ -562,8 +728,11 @@ def probe_banner(host, port, banner_regex="", timeout=5):
     except ConnectionRefusedError:
         return {"ok": False, "ms": None, "detail": f"Port {port} connection refused"}
     except Exception as e:
-        log_sensors.warning("probe_banner %s:%s: unexpected error: %s", host, port, e)
-        return {"ok": False, "ms": None, "detail": str(e)[:80]}
+        _d = _down_detail(host, e)
+        if _d is None:
+            log_sensors.warning("probe_banner %s:%s: unexpected error: %s", host, port, e)
+            _d = str(e)[:80]
+        return {"ok": False, "ms": None, "detail": _d}
     finally:
         if s:
             try: s.close()
@@ -804,6 +973,14 @@ def probe_sftp(host, port=22, user="", password="", private_key="",
         else:                kw["password"] = password
         client.connect(**kw)
         sftp = client.open_sftp()
+        # Bound the SFTP data channel: connect()'s timeout only covers TCP +
+        # auth. Without this, a server that authenticates then stalls at the
+        # SFTP layer (or mid-read during the checksum loop) hangs until the
+        # _run_once hard cap, leaking the transport for that window each cycle.
+        try:
+            sftp.get_channel().settimeout(timeout)
+        except Exception:
+            pass
 
         # Level 0: open
         if depth == 0:

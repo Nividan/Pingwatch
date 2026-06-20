@@ -881,14 +881,25 @@ def db_set_device_role(did: str, host: str, role: str) -> int:
     Set/clear the topology role for a device. Returns the number of IPAM
     allocation rows updated. Enqueued write.
 
-    `role` must be one of: '', 'switch', 'backbone', 'core', 'gateway'.
-    Other values are rejected (returns 0 without write). Silently no-ops if
-    host isn't a plain IP, or no IPAM subnet matches the IP.
+    `role` is '' (clear) or any key in monitoring.site_tree._ROLE_TO_TIER —
+    the same set the PUT /api/device/{did}/role handler validates against, so
+    the API and this writer can't drift (the old hardcoded 4-value list here
+    rejected the newer tiers like 'vm'/'firewall'/'hypervisor' even though the
+    dropdown offered them). Other values are rejected (returns 0 without
+    write). Silently no-ops if host isn't a plain IP, or no IPAM subnet
+    matches the IP.
     """
     role = (role or '').strip().lower()
-    if role not in ('', 'switch', 'backbone', 'core', 'gateway'):
-        log.warning(f"db_set_device_role: invalid role {role!r} for {did}")
-        return 0
+    if role:
+        try:
+            from monitoring.site_tree import _ROLE_TO_TIER
+            _valid_roles = set(_ROLE_TO_TIER)
+        except Exception:
+            # Defensive fallback to the legacy set if site_tree can't load.
+            _valid_roles = {'switch', 'backbone', 'core', 'gateway'}
+        if role not in _valid_roles:
+            log.warning(f"db_set_device_role: invalid role {role!r} for {did}")
+            return 0
     try:
         ip_obj = ipaddress.ip_address(host)
     except ValueError:

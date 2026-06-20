@@ -9,10 +9,16 @@ them to all SSE clients via STATE._broadcast('snmp_trap', ...).
 import datetime
 import os
 import socket
+import time
 
 from core.config import SNMP_TRAP_PORT
 from db import _db_enqueue, db_log_trap
 from core.logger import log_sensors as log
+
+# Global ingest cap (traps/second). Trap source IPs are trivially spoofable
+# and each accepted trap costs a DB write + SSE broadcast — without a cap a
+# flood grows the unbounded write queue and saturates the fan-out.
+_TRAP_RATE_MAX_PER_S = 50
 
 
 # Cap on varbinds parsed from a single trap. Well above any legitimate trap;
@@ -196,7 +202,13 @@ def trap_receiver_loop(state, port=None):
 
 
 def _recv_loop(sock, state):
-    """Inner receive loop — runs until the process exits."""
+    """Inner receive loop — runs until the process exits.
+
+    The per-packet body is guarded: a malformed packet, an enrichment bug, or
+    a concurrent STATE mutation must drop that one trap — not kill the
+    listener thread (traps would silently stop until the next restart).
+    """
+    win_start, win_count, dropped = time.time(), 0, 0
     while True:
         try:
             data, addr = sock.recvfrom(65535)
@@ -206,66 +218,88 @@ def _recv_loop(sock, state):
             log.warning(f"SNMP trap recv error: {e}")
             continue
 
-        src_ip = addr[0]
-        log.info(f"SNMP trap: received {len(data)} bytes from {src_ip}")
-        parsed = parse_trap(data)
-        if not parsed:
-            log.warning(f"SNMP trap: could not parse packet from {src_ip} ({len(data)} bytes)")
+        # Ingest rate cap — see _TRAP_RATE_MAX_PER_S.
+        now = time.time()
+        if now - win_start >= 1.0:
+            if dropped:
+                log.warning(f"SNMP trap flood: dropped {dropped} trap(s) "
+                            f"over the {_TRAP_RATE_MAX_PER_S}/s cap")
+            win_start, win_count, dropped = now, 0, 0
+        win_count += 1
+        if win_count > _TRAP_RATE_MAX_PER_S:
+            dropped += 1
             continue
 
-        # Validate community string against all SNMP sensors configured in STATE.
-        # Fail-closed: if no SNMP sensors are configured, reject all traps.
+        try:
+            _handle_trap_packet(data, addr[0], state)
+        except Exception as e:
+            log.warning(f"SNMP trap handling error from {addr[0]}: {e}")
+
+
+def _handle_trap_packet(data, src_ip, state):
+    """Parse, validate, enrich, persist, and broadcast one trap packet."""
+    log.info(f"SNMP trap: received {len(data)} bytes from {src_ip}")
+    parsed = parse_trap(data)
+    if not parsed:
+        log.warning(f"SNMP trap: could not parse packet from {src_ip} ({len(data)} bytes)")
+        return
+
+    # Validate community string against all SNMP sensors configured in STATE.
+    # Fail-closed: if no SNMP sensors are configured, reject all traps.
+    # Snapshot under the lock — routes mutate these dicts concurrently, and an
+    # unlocked comprehension raises "dictionary changed size during iteration".
+    with state._lock:
         known_communities = {
             getattr(s, 'snmp_community', None)
             for d in state.devices.values()
             for s in d.sensors.values()
             if getattr(s, 'snmp_community', None)
         }
-        if not known_communities or parsed['community'] not in known_communities:
-            log.warning(
-                "SNMP trap dropped: unknown community %r from %s",
-                parsed['community'], src_ip
-            )
-            continue
-
-        ts = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-
-        # Try to match source IP to a known device
-        dname = ''
-        with state._lock:
-            for dev in state.devices.values():
-                if dev.host == src_ip:
-                    dname = dev.name
-                    break
-
-        evt = {
-            'ts':               ts,
-            'src_ip':           src_ip,
-            'dname':            dname,
-            'community':        parsed['community'],
-            'trap_oid':         parsed['trap_oid'],
-            'detail':           parsed['detail'],
-            'varbinds':         parsed.get('varbinds', []),
-            'enterprise_oid':   parsed.get('enterprise_oid', ''),
-            'generic_trap_type': parsed.get('generic_trap_type', -1),
-            '_direction':       'trap',
-        }
-
-        # Enrich trap with vendor/name/severity/description
-        try:
-            from .enricher import enrich_trap
-            evt = enrich_trap(evt)
-        except Exception as _enrich_err:
-            log.debug(f"Trap enrichment error: {_enrich_err}")
-
-        state._broadcast('snmp_trap', evt)
-
-        _cap = dict(evt)
-        _db_enqueue(lambda: db_log_trap(_cap))
-
-        trap_name = evt.get('trap_name') or parsed['trap_oid'] or '?'
-        vendor    = evt.get('vendor', '')
-        log.info(
-            f"SNMP trap from {src_ip} ({dname or 'unknown'}): "
-            f"{trap_name}" + (f" [{vendor}]" if vendor and vendor != 'Unknown' else "")
+    if not known_communities or parsed['community'] not in known_communities:
+        log.warning(
+            "SNMP trap dropped: unknown community %r from %s",
+            parsed['community'], src_ip
         )
+        return
+
+    ts = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    # Try to match source IP to a known device
+    dname = ''
+    with state._lock:
+        for dev in state.devices.values():
+            if dev.host == src_ip:
+                dname = dev.name
+                break
+
+    evt = {
+        'ts':               ts,
+        'src_ip':           src_ip,
+        'dname':            dname,
+        'community':        parsed['community'],
+        'trap_oid':         parsed['trap_oid'],
+        'detail':           parsed['detail'],
+        'varbinds':         parsed.get('varbinds', []),
+        'enterprise_oid':   parsed.get('enterprise_oid', ''),
+        'generic_trap_type': parsed.get('generic_trap_type', -1),
+        '_direction':       'trap',
+    }
+
+    # Enrich trap with vendor/name/severity/description
+    try:
+        from .enricher import enrich_trap
+        evt = enrich_trap(evt)
+    except Exception as _enrich_err:
+        log.debug(f"Trap enrichment error: {_enrich_err}")
+
+    state._broadcast('snmp_trap', evt)
+
+    _cap = dict(evt)
+    _db_enqueue(lambda: db_log_trap(_cap))
+
+    trap_name = evt.get('trap_name') or parsed['trap_oid'] or '?'
+    vendor    = evt.get('vendor', '')
+    log.info(
+        f"SNMP trap from {src_ip} ({dname or 'unknown'}): "
+        f"{trap_name}" + (f" [{vendor}]" if vendor and vendor != 'Unknown' else "")
+    )

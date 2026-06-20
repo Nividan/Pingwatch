@@ -293,7 +293,7 @@ function _buildSettingsTab_apitokens() {
   return `<div class="mbdy stab-fade" id="stab-apitokens" style="display:none;overflow-y:auto;flex:1">
       <div class="alrt-panel-hdr" style="margin-bottom:10px">
         <span style="color:var(--text3);font-size:12px">
-          Bearer tokens for scripts, CI, and Terraform. Read-only tokens accept GET requests only; full tokens can do anything the owning user can. See <a href="/API.md" target="_blank" style="color:var(--accent)">API.md</a> for usage.
+          Bearer tokens for scripts, CI, and Terraform. Read-only tokens accept GET requests only; full tokens can do anything the owning user can. See <a href="https://github.com/Nividan/Pingwatch/blob/main/API.md" target="_blank" rel="noopener" style="color:var(--accent)">API.md</a> for usage.
         </span>
         <button class="btn-p rbac-admin" style="font-size:12px;padding:5px 12px" onclick="openCreateApiToken()">＋ Generate Token</button>
       </div>
@@ -1255,6 +1255,10 @@ function _buildSettingsTab_sensors(sr) {
           <div class="fr"><label class="fl">Recover after <span class="fh" style="font-weight:400">(consecutive OKs before UP)</span></label>
             <input type="number" id="st-snr-ra" value="${sr.snr_recover_after||1}" min="1" max="20" style="max-width:100px"/></div>
         </div>
+        <div style="margin-top:12px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+          <button class="btn-s rbac-admin" onclick="_applyGlobalToExisting()" style="font-size:12px;padding:6px 14px">Apply to all existing sensors…</button>
+          <span class="fh" style="flex:1;min-width:240px">Pushes Interval, Timeout, Fail-after &amp; Recover-after onto <b>every existing sensor</b> of every type — the only way to change Fail/Recover after creation. Takes effect within one cycle; no restart.</span>
+        </div>
       </div>
       <div id="sdrTabBody"><div style="color:var(--text3);font-size:12px;padding:8px">Loading…</div></div>
       <div style="margin-top:16px;padding-top:16px;border-top:1px solid var(--border)">
@@ -1290,6 +1294,20 @@ function _buildSettingsTab_sensors(sr) {
         <div style="font-size:11px;font-weight:600;color:var(--text3);text-transform:uppercase;letter-spacing:.5px;margin-top:16px;margin-bottom:6px">Apply to existing sensors</div>
         <button class="btn-s rbac-admin" onclick="_anomBulkEnable()" style="font-size:12px;padding:6px 14px">Enable on all supported sensors now</button>
         <div class="fh" style="margin-top:4px">Turns the per-sensor toggle on for every ping / tcp / http / dns / http_keyword / banner sensor. Each gets a fresh cold-start window — no alert storm.</div>
+      </div>
+      <div style="margin-top:16px;padding-top:16px;border-top:1px solid var(--border)">
+        <div class="fl" style="margin-bottom:4px">🧭 Root-Cause Analysis</div>
+        <div class="fh" style="margin-bottom:12px">Correlates simultaneous outages against the Live-Map dependency graph (device parents). When every parent of a device is down, that device's alerts are treated as downstream symptoms of the upstream root.</div>
+        <div class="fr">
+          <label style="display:flex;align-items:center;gap:8px;cursor:pointer;user-select:none">
+            <input type="checkbox" id="st-rca-suppress" ${sr.rca_suppress_downstream!==0?'checked':''}>
+            <span class="fl" style="margin:0">Suppress downstream alerts while their root is down</span>
+          </label>
+          <div class="fh" style="margin-left:24px;margin-top:3px">PRTG-style dependency: symptom alerts are still recorded (as <b>suppressed</b>) but no email / webhook / syslog is sent. The root device alerts normally. Redundancy-aware — a device with any live uplink is never suppressed. Off = every device alerts independently.</div>
+        </div>
+        <div class="fr" style="margin-top:10px"><label class="fl">Correlation window (s)</label>
+          <input type="number" id="st-rca-window" value="${sr.rca_correlation_window_s??120}" min="30" max="3600" style="max-width:100px"/>
+          <div class="fh">Timing window used for root-cause evidence (“went down first”, link-down traps) and for clustering past outages in the incident history.</div></div>
       </div>
       <div style="margin-top:16px;padding-top:16px;border-top:1px solid var(--border)">
         <div class="fl" style="margin-bottom:4px">Latency Colour Thresholds</div>
@@ -2392,6 +2410,57 @@ function _sdrToggle(btn){
   btn.textContent = open ? '▾' : '▴';
 }
 
+// Push a single type's row Interval/Timeout onto every existing sensor of that
+// type. Reads the inline row inputs (the per-type defaults the user just edited).
+async function _sdrApplyExisting(stype, cnt){
+  const ivEl = document.getElementById(`sdr_${stype}_interval`);
+  const toEl = document.getElementById(`sdr_${stype}_timeout`);
+  const iv = ivEl ? parseInt(ivEl.value, 10) : NaN;
+  const to = toEl ? parseInt(toEl.value, 10) : NaN;
+  if(!(iv >= 1 && iv <= 3600)){ toast('Enter a valid interval (1–3600s) first','err'); return; }
+  if(!cnt){ toast('No existing sensors of this type','err'); return; }
+  const meta = (typeof _SDR_META!=='undefined' && _SDR_META[stype]) || {label: stype};
+  const lbl = esc(meta.label || stype);
+  const toLine = (to >= 1) ? ` · timeout <b>${to}s</b>` : '';
+  const msg = `Apply interval <b>${iv}s</b>${toLine} to all <b>${cnt}</b> existing ${lbl} sensor(s)?<br><br>
+    <span style="color:var(--text3);font-size:12px">Warn/Crit thresholds stay per-sensor. Takes effect within one cycle — no restart, no probe storm. This does <b>not</b> change the new-sensor default (use “Save Sensor Defaults” for that).</span>`;
+  _pwConfirm(msg, async () => {
+    try{
+      const b = { stype, interval: iv };
+      if(to >= 1) b.timeout = to;
+      const r = await api('POST','/api/sensors/apply-interval', b);
+      if(r && r.error){ toast(r.error,'err'); return; }
+      toast(`Updated ${r.updated} ${lbl} sensor(s)`,'ok');
+    }catch(e){ toast('Apply failed','err'); }
+  }, 'Apply', {danger:false, html:true});
+}
+
+// Push the four Global Defaults (Interval, Timeout, Fail-after, Recover-after)
+// onto every existing sensor of every type. Fail/Recover have no per-sensor
+// editor, so this is the only way to change them after a sensor is created.
+async function _applyGlobalToExisting(){
+  const gi = id => { const e=document.getElementById(id); return e ? parseInt(e.value,10) : NaN; };
+  const iv = gi('st-snr-iv'), to = gi('st-snr-tmo'), fa = gi('st-snr-fa'), ra = gi('st-snr-ra');
+  if(!(iv >= 1 && iv <= 3600)){ toast('Enter a valid Interval (1–3600s)','err'); return; }
+  if(!(to >= 1)){ toast('Enter a valid Timeout','err'); return; }
+  if(!(fa >= 1 && fa <= 20)){ toast('Enter a valid Fail-after (1–20)','err'); return; }
+  if(!(ra >= 1 && ra <= 20)){ toast('Enter a valid Recover-after (1–20)','err'); return; }
+  const total = window._sdrTotalCount || 0;
+  const who = total ? `<b>${total}</b> existing sensor(s)` : 'all existing sensors';
+  const msg = `Apply to ${who} of <b>every</b> type?<br><br>
+    <span style="color:var(--text2);font-size:12px">Interval <b>${iv}s</b> · Timeout <b>${to}s</b> · Fail-after <b>${fa}</b> · Recover-after <b>${ra}</b></span><br><br>
+    <span style="color:var(--warn);font-size:12px">⚠ This overwrites the Interval/Timeout of <b>every</b> sensor, including vmware. To keep a type on its own cadence (e.g. vmware at 60s), set the per-type Interval below and use that row's ⤓ button instead.</span><br>
+    <span style="color:var(--text3);font-size:12px">Timeout is clamped to ≤ each sensor's interval. Warn/Crit stay per-sensor. Takes effect within one cycle — no restart, no probe storm.</span>`;
+  _pwConfirm(msg, async () => {
+    try{
+      const r = await api('POST','/api/sensors/apply-interval',
+                          { interval: iv, timeout: to, fail_after: fa, recover_after: ra });
+      if(r && r.error){ toast(r.error,'err'); return; }
+      toast(`Updated ${r.updated} sensor(s)`,'ok');
+    }catch(e){ toast('Apply failed','err'); }
+  }, 'Apply to all', {danger:false, html:true});
+}
+
 async function loadSensorsDefaultsTab(){
   const el = document.getElementById('sdrTabBody');
   if(!el) return;
@@ -2400,13 +2469,17 @@ async function loadSensorsDefaultsTab(){
   for(const dev of devices)
     for(const s of (dev.sensors||[]))
       typeCounts[s.stype] = (typeCounts[s.stype]||0) + 1;
-  const types = Object.keys(typeCounts).sort();
-  if(!types.length){ el.innerHTML='<div style="color:var(--text3);font-size:12px;padding:8px">No sensors found.</div>'; return; }
+  // Show every supported type (from the catalogue) so defaults can be set up
+  // before any sensors exist — union in any live types not in the catalogue
+  // (e.g. vmware) so existing servers still list everything they monitor.
+  const types = [...new Set([...Object.keys(_SDR_META), ...Object.keys(typeCounts)])].sort();
+  window._sdrTypeCounts = typeCounts;
+  window._sdrTotalCount = Object.values(typeCounts).reduce((a,b)=>a+b,0);
   const td = window._snrTypeDefaults || {};
   const rows = types.map(t => {
     const m   = _SDR_META[t] || {ico:'?', label:t, desc:''};
     const d   = td[t] || {};
-    const cnt = typeCounts[t];
+    const cnt = typeCounts[t] || 0;
     const iv  = d.interval      != null ? d.interval      : (window._snrDef?.interval||5);
     const to  = d.timeout       != null ? d.timeout       : (window._snrDef?.timeout||3);
     const wm  = d.warn_ms  != null ? d.warn_ms  : (_SDR_WARN_DEF[t] || '');
@@ -2420,7 +2493,9 @@ async function loadSensorsDefaultsTab(){
       <td><div class="sdr-num-cell"><input type="number" id="sdr_${t}_timeout" value="${to}" min="1" max="60"/><span class="sdr-unit">s</span></div></td>
       <td><div class="sdr-num-cell"><input type="number" id="sdr_${t}_warn_ms" value="${wm}" min="1" placeholder="—"/><span class="sdr-unit">${warnUnit}</span></div></td>
       <td><div class="sdr-num-cell"><input type="number" id="sdr_${t}_crit_ms" value="${cm}" min="1" placeholder="—"/><span class="sdr-unit">${warnUnit}</span></div></td>
-      <td style="text-align:center">${extra ? `<button class="sdr-expand-btn" onclick="_sdrToggle(this)" title="Type-specific settings">▾</button>` : ''}</td>
+      <td style="text-align:center;white-space:nowrap">${cnt
+        ? `<button class="sdr-apply-btn rbac-admin" onclick="_sdrApplyExisting('${t}',${cnt})" title="Apply this row's Interval/Timeout to all ${cnt} existing ${esc(m.label)} sensor(s) — Warn/Crit unchanged">⤓</button>`
+        : `<button class="sdr-apply-btn" disabled title="No existing ${esc(m.label)} sensors to apply to yet">⤓</button>`}${extra ? `<button class="sdr-expand-btn" onclick="_sdrToggle(this)" title="Type-specific settings">▾</button>` : ''}</td>
     </tr>
     ${extra ? `<tr class="sdr-extra-row" data-for="${t}" style="display:none"><td colspan="7"><div class="sdr-extra">${extra}</div></td></tr>` : ''}`;
   }).join('');
@@ -2442,11 +2517,16 @@ function _scanPortsReset(){
 
 async function resetSensorTypeDefaults(){
   if (!confirm('Reset all sensor type defaults to built-in values?\n\nClick Save Sensor Defaults afterwards to apply.')) return;
+  // Scale-safe per-type interval/timeout (seconds). Types not listed inherit
+  // the global 60s/10s. Keep in sync with the snr_type_defaults seed in
+  // db/core.py + db/pg_schema.py.
+  const IV = {ping:30, dns:60, snmp:120, ssh:120, sftp:120, smtp:120};
+  const TO = {ping:3,  dns:5,  snmp:15,  ssh:15,  sftp:15,  smtp:15};
   const defaults = { vmware: {interval: 60, timeout: 10} };
   for (const t of Object.keys(_SDR_WARN_DEF)) {
     defaults[t] = {
-      interval: 5,
-      timeout:  3,
+      interval: IV[t] ?? 60,
+      timeout:  TO[t] ?? 10,
       warn_ms:  _SDR_WARN_DEF[t],
       crit_ms:  _SDR_CRIT_DEF[t],
     };
@@ -2493,6 +2573,8 @@ async function saveSensorTypeDefaults(){
   const anomAuto = document.getElementById('st-anom-auto')?.checked;
   const anomCold = parseInt(document.getElementById('st-anom-cold')?.value);
   const anomCkpt = parseInt(document.getElementById('st-anom-ckpt')?.value);
+  const rcaSupp  = document.getElementById('st-rca-suppress')?.checked;
+  const rcaWin   = parseInt(document.getElementById('st-rca-window')?.value);
   const globalDefaults = {};
   if(snrIv  >= 1) globalDefaults.snr_interval      = snrIv;
   if(snrTmo >= 1) globalDefaults.snr_timeout       = snrTmo;
@@ -2506,6 +2588,9 @@ async function saveSensorTypeDefaults(){
                                     globalDefaults.anomaly_cold_start_hours    = anomCold;
   if(!isNaN(anomCkpt) && anomCkpt >= 60 && anomCkpt <= 86400)
                                     globalDefaults.anomaly_checkpoint_interval_s = anomCkpt;
+  if(typeof rcaSupp === 'boolean') globalDefaults.rca_suppress_downstream = rcaSupp ? 1 : 0;
+  if(!isNaN(rcaWin) && rcaWin >= 30 && rcaWin <= 3600)
+                                    globalDefaults.rca_correlation_window_s = rcaWin;
   // Collect scan_ports from checkboxes + custom input
   const scanChecked = [...document.querySelectorAll('.st-scan-port:checked')].map(cb => cb.value);
   const scanCustomRaw = (document.getElementById('st-scan-custom')?.value || '').trim();

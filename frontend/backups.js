@@ -44,7 +44,7 @@ async function _bkInit() {
   wrap.innerHTML = '<div class="bk-loading">Loading…</div>';
   try {
     const [r, sr] = await Promise.all([fetch('/api/backups'), fetch('/api/settings')]);
-    if (r.status === 401) { if(!_loggedOut)showLogin('Session expired'); return; }
+    if (r.status === 401) { _onSessionExpired('Session expired'); return; }
     const d = await r.json();
     if (sr.ok) {
       const s = await sr.json();
@@ -565,6 +565,22 @@ async function _bkOpenSettings(did) {
           <label class="fl">Commands <span style="color:var(--text3);font-size:10px">(one per line)</span></label>
           <textarea id="bks-cmds" rows="4" style="font-family:monospace;font-size:11px">${esc((s.commands || ['show running-config']).join('\n'))}</textarea>
         </div>
+        <div class="fr">
+          <label class="fl">Expected Content <span style="color:var(--text3);font-size:10px">(optional — fail the backup if the output doesn't contain this)</span></label>
+          <input type="text" id="bks-expected" value="${esc(s.expected_content || '')}" placeholder="e.g. hostname    or    ^end$ (regex)"/>
+          <div style="display:flex;align-items:center;gap:28px;margin-top:10px;flex-wrap:wrap">
+            <div style="display:flex;align-items:center;gap:8px">
+              <label class="toggle"><input type="checkbox" id="bks-expected-regex" ${s.expected_is_regex ? 'checked' : ''}><span class="tsl"></span></label>
+              <span style="font-size:12px;color:var(--text2)">Regex <span style="color:var(--text3)">(advanced)</span></span>
+            </div>
+            <div style="display:flex;align-items:center;gap:8px">
+              <span style="font-size:12px;color:var(--text2)">Min size</span>
+              <input type="number" id="bks-minbytes" value="${s.min_bytes || 0}" min="0" max="10000000" style="max-width:96px"/>
+              <span style="font-size:12px;color:var(--text3)">bytes</span>
+            </div>
+          </div>
+          <div class="fh" style="margin-top:6px">An <b>empty</b> response is always marked failed. Substring match is case-insensitive. Min size 0 = off.</div>
+        </div>
         <div class="fr" style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:0">
           <div style="flex:1">
             <div style="font-size:11px;font-weight:500;color:var(--text2);text-transform:uppercase;letter-spacing:.5px;margin-bottom:3px">Add to Scheduled Backup</div>
@@ -605,6 +621,9 @@ async function _bkSaveSettings(did) {
     commands,
     timeout:         parseInt(document.getElementById('bks-timeout')?.value) || 30,
     in_schedule:     document.getElementById('bks-in-schedule')?.checked || false,
+    expected_content:  document.getElementById('bks-expected')?.value?.trim() || '',
+    expected_is_regex: document.getElementById('bks-expected-regex')?.checked || false,
+    min_bytes:         parseInt(document.getElementById('bks-minbytes')?.value) || 0,
   };
 
   const r = await api('PUT', `/api/backups/${did}`, payload);

@@ -103,9 +103,12 @@ def _send_one(payload: bytes, host: str, port: int, proto: str):
             s.sendto(payload, (host, port))
 
 
+_last_fail_log_ts = 0.0
+
+
 def _worker_loop():
     """Daemon thread - dequeues and sends syslog messages."""
-    global _last_ok_ts, _last_err
+    global _last_ok_ts, _last_err, _last_fail_log_ts
     while True:
         try:
             payload, host, port, proto = _Q.get(timeout=5)
@@ -116,7 +119,18 @@ def _worker_loop():
             _last_ok_ts = time.time()
         except Exception as e:
             _last_err = {'ts': time.time(), 'msg': str(e)[:200]}
-            log.warning(f"Syslog send failed ({host}:{port}/{proto}): {e}")
+            # Two guards against a feedback storm when app-log forwarding is on
+            # and the collector is down:
+            #  - `_no_syslog_forward` marks this record so SyslogAppLogHandler
+            #    skips it (otherwise the failure log re-enqueues to the same
+            #    dead server — a 1:1 self-sustaining loop that keeps the queue
+            #    full and drops real alerts).
+            #  - rate-limit to one line/minute so the local log isn't spammed.
+            now = time.time()
+            if now - _last_fail_log_ts > 60:
+                _last_fail_log_ts = now
+                log.warning(f"Syslog send failed ({host}:{port}/{proto}): {e}",
+                            extra={'_no_syslog_forward': True})
         finally:
             _Q.task_done()
 
@@ -244,6 +258,13 @@ class SyslogAppLogHandler(_logging.Handler):
 
     def emit(self, record: _logging.LogRecord) -> None:
         try:
+            # Never forward records the syslog client itself emitted — that's
+            # the feedback loop (a failed send logs a warning that would be
+            # re-enqueued to the same dead collector).
+            if getattr(record, '_no_syslog_forward', False):
+                return
+            if record.name and 'syslog_client' in record.name:
+                return
             if not int(_cfg('syslog_app_logs', 0) or 0):
                 return
             host = str(_cfg('syslog_host', '')).strip()

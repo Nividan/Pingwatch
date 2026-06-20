@@ -19,6 +19,28 @@ from db.backend import is_pg
 from core.logger import log
 
 
+def _mark_sensor_ack(STATE, did, sid, actor):
+    """Reflect an event ACK on the live sensor so tiles render the muted
+    "acknowledged-down" state. Only sticks while an incident is active —
+    ACKing a historical row of a healthy sensor changes nothing. Cleared
+    automatically on recovery (core/state.py). The updated sensor dict is
+    broadcast so open browsers flip the tile instantly."""
+    import time as _t
+    with STATE._lock:
+        dev = STATE.devices.get(did)
+        s = dev.sensors.get(sid) if dev else None
+    if not s:
+        return
+    if not (s._alerted_down or s._threshold_state in ("warn", "crit")):
+        return
+    s._ack_by = actor or ""
+    s._ack_at = _t.time()
+    try:
+        STATE._broadcast("sensor", s.to_dict())
+    except Exception:
+        pass
+
+
 def _get_flap_sensor(flap_id):
     """Return (did, sid) for a flap_log entry, or None."""
     if is_pg():
@@ -60,6 +82,11 @@ def handle(h, method, path, body):
             while True:
                 try:
                     msg = q.get(timeout=15)
+                    if msg is None:
+                        # Evicted by the broadcaster (slow client / cap / sweep).
+                        # Close the stream so EventSource reconnects instead of
+                        # heartbeating a queue nobody fans out to anymore.
+                        break
                     h.wfile.write(msg.encode("utf-8"))
                     h.wfile.flush()
                 except queue.Empty:
@@ -454,6 +481,8 @@ def handle(h, method, path, body):
             if _flap_sensor:
                 from db.alert_events import db_ack_events_by_sensor
                 db_ack_events_by_sensor(_flap_sensor[0], _flap_sensor[1], actor)
+                # Reflect on the live sensor → "acknowledged-down" tile state
+                _mark_sensor_ack(STATE, _flap_sensor[0], _flap_sensor[1], actor)
         h._json(200, {"ok": ok})
         return True
 

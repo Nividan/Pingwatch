@@ -41,6 +41,7 @@ PingWatch is a Python-based network monitoring platform for tracking the availab
 - 🚨 Hierarchical alert profiles — PRTG-style escalation stages with per-stage delays, repeat intervals, and reusable action templates (email, webhook, syslog, browser push); cascade resolution (sensor → device → group → global) so one profile covers everything; maintenance window suppression
 - 📬 **Notification batching** — combines bursts of alerts into one email/webhook instead of spamming. Configurable window and batch size; opt-in per webhook template
 - 📚 **Event collapse** — toggle to fold ≥3 related events within 30 s into one expandable row; works in both card and table modes
+- 🧭 **Root-cause analysis** — correlates simultaneous outages against the Live-Map dependency graph (device parents) to name the upstream **root** device behind a cluster of downs, with a confidence score; redundancy-aware (a device with any live uplink is never blamed upstream). Optional PRTG-style **dependency suppression** mutes downstream symptom alerts while their root is down (still recorded, just not dispatched). Surfaced three ways: an **Active Incidents** dashboard widget, a **root-cause overlay** on the Live Map (pulses the root, dims its impacted subtree), and a cross-device collapse pass in the Events view; live incidents and historical reconstruction exposed over the API
 - 🧠 Learned-baseline anomaly detection — opt-in per sensor; detects latency deviations beyond static thresholds; master switch and bulk-enable in Settings
 - 🏷 Alert tagging on sensor events — severity badge, profile name, and state shown inline; ACK / Resolve without leaving the Events tab; Events tab split into **Active** (unresolved, badge count) and **History** (resolved) inner tabs — SNMP traps without an alert rule go to History automatically
 - 👥 User groups — assign members, use groups as alert email recipient lists; emails resolved at dispatch time
@@ -157,6 +158,22 @@ sudo systemctl start|stop|restart|status pingwatch
 journalctl -u pingwatch -f                     # live logs
 sudo bash linux/start.sh --uninstall-service
 ```
+
+### Updating a running install
+
+Update with the safe-deploy script for your platform rather than a manual `git pull` + restart. Each one pulls the latest code, syntax-checks **every** source file, and restarts **only if the check passes** — so a bad pull can't take your server down.
+
+**Linux:**
+```bash
+bash linux/deploy.sh
+```
+If the pulled code has a syntax error, the script aborts and leaves the running instance untouched (it keeps serving the previous version) so you can fix and re-pull. The systemd service is also hardened to back this up: it refuses to start code that won't compile, and caps restart attempts so a failed update parks the unit in a clear `failed` state instead of crash-looping. After upgrading from a version that predates this script, run `sudo bash linux/start.sh --install-service` once to refresh the unit file.
+
+**Windows:**
+```powershell
+powershell -ExecutionPolicy Bypass -File windows\deploy.ps1
+```
+Same flow — pull → compile-check → relaunch only if clean — so a failed check leaves the running instance serving the old code. A successful relaunch runs `windows\start.bat`, whose launcher frees the ports by stopping the old instance and then starts the new code. (Windows has no service supervisor, so there's no crash-loop to guard against, but the relaunch is a hard restart with no graceful drain.)
 
 ### Air-Gapped Installation
 

@@ -13,48 +13,64 @@ import time
 from core.logger import log
 
 
+def _is_scheduled_day(sch: dict, d: datetime.date) -> bool:
+    """Return True if `d` is an eligible day for this schedule's cadence."""
+    freq = (sch.get("freq") or "monthly").lower()
+    if freq == "daily":
+        return True
+    if freq == "weekly":
+        try:
+            days = {int(x) for x in str(sch.get("day_of_week") or "1").split(",") if x.strip()}
+        except Exception:
+            return False
+        return (d.weekday() + 1) in days   # 1=Mon … 7=Sun
+    try:
+        dom = int(sch.get("day_of_month") or 1)
+    except Exception:
+        dom = 1
+    # Clamp to the month length so day 29/30/31 still fires in shorter months
+    # (a "31st" schedule otherwise silently skipped Feb/Apr/Jun/Sep/Nov).
+    import calendar
+    dom = min(dom, calendar.monthrange(d.year, d.month)[1])
+    if freq == "monthly":
+        return d.day == dom
+    if freq == "quarterly":
+        return d.month in (1, 4, 7, 10) and d.day == dom
+    return False
+
+
 def _matches_schedule(sch: dict, now_dt: datetime.datetime) -> bool:
-    """Return True if the schedule's cadence + time of day matches 'now'."""
+    """Catch-up semantics: fire if the most recent eligible slot is in the past
+    and we have not already fired since that slot.
+
+    Exact-minute matching (the previous approach) silently skipped a run on
+    DST spring-forward (the 02:xx slot never occurs), when the 30 s poll was
+    busy through the target minute, or across a restart spanning the minute.
+    Comparing against the persisted last_run_ts makes any poll after the slot
+    fire exactly once.
+    """
     try:
         h, m = map(int, (sch.get("time_str") or "03:00").split(":"))
     except Exception:
         log.warning(f"reports.scheduler bad time_str: {sch.get('time_str')!r}")
         return False
 
-    if now_dt.hour != h or now_dt.minute != m:
+    # Find today's slot; if today isn't an eligible day or its slot hasn't
+    # arrived yet, walk back to the most recent eligible slot (handles a
+    # weekend/overnight outage spanning the scheduled day).
+    slot = None
+    for back in range(0, 400):   # generous bound (covers quarterly + slack)
+        day = (now_dt - datetime.timedelta(days=back)).date()
+        if _is_scheduled_day(sch, day):
+            cand = datetime.datetime(day.year, day.month, day.day, h, m)
+            if cand <= now_dt:
+                slot = cand
+                break
+    if slot is None:
         return False
 
-    freq = (sch.get("freq") or "monthly").lower()
-
-    if freq == "daily":
-        return True
-
-    if freq == "weekly":
-        days_str = sch.get("day_of_week") or "1"
-        try:
-            days = {int(d) for d in str(days_str).split(",") if d.strip()}
-        except Exception:
-            return False
-        return (now_dt.weekday() + 1) in days   # 1=Mon … 7=Sun
-
-    if freq == "monthly":
-        try:
-            dom = int(sch.get("day_of_month") or 1)
-        except Exception:
-            dom = 1
-        return now_dt.day == dom
-
-    if freq == "quarterly":
-        # Fire on day_of_month of the first month of each quarter
-        if now_dt.month not in (1, 4, 7, 10):
-            return False
-        try:
-            dom = int(sch.get("day_of_month") or 1)
-        except Exception:
-            dom = 1
-        return now_dt.day == dom
-
-    return False
+    last_run = float(sch.get("last_run_ts") or 0)
+    return last_run < slot.timestamp()
 
 
 def _prune_history_once() -> int:
@@ -133,12 +149,19 @@ def _scheduler_loop():
                 if prev and (now - prev).total_seconds() < 90:
                     continue
                 last_fired[sid] = now
+                # Record the run NOW (not after run_schedule completes): the
+                # catch-up check keys on last_run_ts, so a report that takes
+                # longer than one poll interval would otherwise re-fire on the
+                # next poll. Stamp it before dispatch to make firing idempotent.
+                try:
+                    db_record_schedule_run(sid, now.timestamp())
+                except Exception as e:
+                    log.warning(f"reports.scheduler: record run {sid} failed: {e}")
                 log.info(f"Report scheduler firing schedule {sid} ({sch.get('name')!r})")
 
                 def _fire(_sch):
                     try:
                         run_schedule(_sch)
-                        db_record_schedule_run(_sch["id"], time.time())
                     except Exception as e:
                         log.error(f"Scheduled report crashed ({_sch.get('id')}): {e}",
                                   exc_info=True)

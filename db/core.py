@@ -7,6 +7,7 @@ import queue
 import shutil
 import sqlite3
 import threading
+import time
 
 from core.auth   import _hash_pw, _SESSIONS, _SESSIONS_LOCK
 from core.config import DB_PATH, LOGS_DB_PATH
@@ -14,8 +15,34 @@ from core.logger import log
 from db.backend  import is_pg
 
 # ── Single-writer queues (Main DB + Logs DB) ─────────────────────────────────
-_DB_QUEUE:   queue.Queue = queue.Queue()
-_LOGS_QUEUE: queue.Queue = queue.Queue()
+# Bounded: if the SQLite writer stalls (slow disk, AV scan, lock storm) an
+# unbounded queue grows without limit — each queued autosave closure pins a
+# full device/sensor snapshot. When full, new work is dropped with a
+# rate-limited warning (bounded loss beats OOM, matching the sample buffer).
+_DB_QUEUE:   queue.Queue = queue.Queue(maxsize=50_000)
+_LOGS_QUEUE: queue.Queue = queue.Queue(maxsize=50_000)
+_writers_stopped = False           # set by shutdown_writers()
+_q_drop_logged   = {"main": 0.0, "logs": 0.0}
+
+
+def _put_or_drop(q, fn, name):
+    """Enqueue for the writer thread; drop with a warning when saturated.
+    After shutdown_writers() the threads are gone — execute inline (best
+    effort) so late writes aren't silently queued into the void."""
+    if _writers_stopped:
+        try:
+            fn()
+        except Exception as e:
+            log.error(f"{name} DB write after writer shutdown failed: {e}")
+        return
+    try:
+        q.put_nowait(fn)
+    except queue.Full:
+        now = time.time()
+        if now - _q_drop_logged[name] > 60:
+            log.warning(f"{name} DB writer queue full ({q.maxsize}) — dropping "
+                        "write. Writer is stalled; check disk I/O and locks.")
+            _q_drop_logged[name] = now
 
 
 def _db_writer_loop():
@@ -67,14 +94,19 @@ def shutdown_writers(timeout: float = 10.0) -> dict:
     writes were dropped — surface it in ops logs instead of silently
     proceeding.
     """
+    global _writers_stopped
     half = max(0.1, timeout / 2)
     # Capture pending counts BEFORE enqueuing the sentinel — otherwise the
     # sentinel itself inflates the count by 1, producing the misleading
     # 'pending=1' on otherwise-idle queues.
     main_pending = _DB_QUEUE.qsize()
     logs_pending = _LOGS_QUEUE.qsize()
-    _DB_QUEUE.put(None)
-    _LOGS_QUEUE.put(None)
+    _writers_stopped = True   # later enqueues execute inline instead of vanishing
+    # Bounded put: on a wedged/full queue, don't hang shutdown forever.
+    try: _DB_QUEUE.put(None, timeout=half)
+    except queue.Full: pass
+    try: _LOGS_QUEUE.put(None, timeout=half)
+    except queue.Full: pass
     _db_writer_thread.join(timeout=half)
     _logs_writer_thread.join(timeout=half)
     return {
@@ -95,7 +127,7 @@ def _db_enqueue(fn):
         except Exception as e:
             log.error(f"DB writer error: {e}")
     else:
-        _DB_QUEUE.put(fn)
+        _put_or_drop(_DB_QUEUE, fn, "main")
 
 
 def _logs_enqueue(fn):
@@ -107,7 +139,7 @@ def _logs_enqueue(fn):
         except Exception as e:
             log.error(f"Logs DB writer error: {e}")
     else:
-        _LOGS_QUEUE.put(fn)
+        _put_or_drop(_LOGS_QUEUE, fn, "logs")
 
 
 # ── Schema init ──────────────────────────────────────────────────
@@ -161,20 +193,23 @@ def db_init():
                 username TEXT NOT NULL,
                 expires  REAL NOT NULL
             )""")
-        # Bearer-token auth for scripts / CI / Terraform. token_hash is
-        # SHA-256 of the plaintext token (plaintext never stored). scope
-        # gates HTTP method: 'read' = GET/HEAD/OPTIONS only, 'full' = any.
+        # Bearer-token auth for scripts / CI / Terraform / remote probes.
+        # token_hash is SHA-256 of the plaintext token (plaintext never
+        # stored). scope gates access: 'read' = GET/HEAD/OPTIONS only,
+        # 'full' = any, 'probe' = /api/agent/* endpoints only (distributed
+        # probes, v1.3). probe_id links a probe-scoped token to its probe.
         con.execute("""
             CREATE TABLE IF NOT EXISTS api_tokens (
                 id           INTEGER PRIMARY KEY AUTOINCREMENT,
                 token_hash   TEXT NOT NULL UNIQUE,
                 name         TEXT NOT NULL,
                 username     TEXT NOT NULL,
-                scope        TEXT NOT NULL CHECK(scope IN ('read','full')),
+                scope        TEXT NOT NULL CHECK(scope IN ('read','full','probe')),
                 created_at   REAL NOT NULL,
                 expires_at   REAL,
                 last_used_at REAL,
-                revoked_at   REAL
+                revoked_at   REAL,
+                probe_id     TEXT DEFAULT NULL
             )""")
         con.execute("CREATE INDEX IF NOT EXISTS idx_api_tokens_user "
                     "ON api_tokens(username)")
@@ -215,6 +250,9 @@ def db_init():
                 target TEXT    DEFAULT '',
                 detail TEXT    DEFAULT ''
             )""")
+        # db_log_audit trims per-insert with `ORDER BY ts DESC`; index ts so the
+        # trim and the newest-first list query don't full-scan + sort.
+        con.execute("CREATE INDEX IF NOT EXISTS idx_audit_ts ON audit_log(ts)")
         con.execute("""
             CREATE TABLE IF NOT EXISTS dashboards (
                 id         INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -239,7 +277,10 @@ def db_init():
                 commands     TEXT    DEFAULT '["show running-config"]',
                 paging_cmd   TEXT    DEFAULT '',
                 timeout      INTEGER DEFAULT 30,
-                in_schedule  INTEGER DEFAULT 0
+                in_schedule  INTEGER DEFAULT 0,
+                expected_content  TEXT    DEFAULT '',
+                expected_is_regex INTEGER DEFAULT 0,
+                min_bytes         INTEGER DEFAULT 0
             )""")
         con.execute("""
             CREATE TABLE IF NOT EXISTS backup_runs (
@@ -275,10 +316,20 @@ def db_init():
         for _k, _v in [
             ("session_ttl",        "86400"),
             ("retention_days",     "365"),
-            ("snr_interval",       "5"),
-            ("snr_timeout",        "4"),
-            ("snr_fail_after",     "2"),
-            ("snr_recover_after",  "1"),
+            ("snr_interval",       "60"),
+            ("snr_timeout",        "10"),
+            ("snr_fail_after",     "3"),
+            ("snr_recover_after",  "2"),
+            # Scale-safe per-type interval/timeout overrides for new sensors.
+            # Types omitted here inherit the global Interval/Timeout above.
+            ("snr_type_defaults",
+             '{"ping":{"interval":30,"timeout":3},'
+             '"dns":{"interval":60,"timeout":5},'
+             '"snmp":{"interval":120,"timeout":15},'
+             '"ssh":{"interval":120,"timeout":15},'
+             '"sftp":{"interval":120,"timeout":15},'
+             '"smtp":{"interval":120,"timeout":15},'
+             '"vmware":{"interval":60,"timeout":10}}'),
             ("max_flaps_display",  "50"),
             ("max_flap_entries",   "2000"),
             ("max_trap_entries",   "2000"),
@@ -341,6 +392,8 @@ def db_init():
             ("log_audit_days",         "365"),
             ("log_backup_max_mb",      "5"),
             ("log_backup_backups",     "5"),
+            ("log_probes_max_mb",      "5"),
+            ("log_probes_backups",     "5"),
             # Tunables surfaced in per-feature tabs (SMTP/DB/Auto-Discovery/Sensors/Import)
             ("smtp_timeout_s",                 "10"),
             ("pg_statement_timeout_s",         "30"),
@@ -348,6 +401,17 @@ def db_init():
             ("auto_discover_scan_deadline_s", "300"),
             ("sftp_checksum_max_mb",           "10"),
             ("import_max_payload_mb",          "8"),
+            # Distributed probes (v1.3) — optional probe-offline email
+            ("probe_offline_email",            "0"),
+            ("probe_offline_email_to",         ""),
+            # Startup grace: seconds after boot during which down/threshold
+            # events are deferred (still-failing sensors emit at the end).
+            # Soaks up restart blips (cold vCenter sessions etc.). 0 = off.
+            ("startup_grace_s",                "60"),
+            # Root-Cause Analysis (dependency correlation). When a device's
+            # parents are all down, its own alerts are downstream symptoms.
+            ("rca_suppress_downstream",        "1"),   # 1=suppress symptom alerts while root down
+            ("rca_correlation_window_s",       "120"), # timing window for evidence + history clustering
         ]:
             if not con.execute("SELECT 1 FROM app_settings WHERE key=?", (_k,)).fetchone():
                 con.execute("INSERT INTO app_settings VALUES (?,?)", (_k, _v))
@@ -580,6 +644,18 @@ def db_init():
             con.commit()
         except Exception:
             pass  # column already exists
+        # Backup output validation (v1.4) — assert a real config came back, not
+        # just a clean SSH/auth handshake. See backup/engine._validate_output.
+        for _bk_col_def in (
+            "expected_content TEXT DEFAULT ''",
+            "expected_is_regex INTEGER DEFAULT 0",
+            "min_bytes INTEGER DEFAULT 0",
+        ):
+            try:
+                con.execute(f"ALTER TABLE backup_devices ADD COLUMN {_bk_col_def}")
+                con.commit()
+            except Exception:
+                pass  # column already exists
         # Site grouping on devices (v1.0+) — Site → Group → Device hierarchy.
         # Free-text; sourced via autocomplete from UNION(ipam_subnets.site, devices.site).
         try:
@@ -818,6 +894,22 @@ def db_init():
                 con.commit()
             except Exception:
                 pass
+        # HTTPS cert-expiry thresholds (days remaining; 0 = off) — lets an
+        # http sensor warn/crit on an approaching cert expiry alongside its
+        # latency check, without a separate TLS sensor.
+        for _col in ("cert_warn_days", "cert_crit_days"):
+            try:
+                con.execute(f"ALTER TABLE sensors ADD COLUMN {_col} INTEGER DEFAULT 0")
+                con.commit()
+            except Exception:
+                pass
+        # Pause persistence — 0 = paused (left stopped on restart), 1 = running.
+        # Without this a paused device/sensor came back running after a restart.
+        try:
+            con.execute("ALTER TABLE sensors ADD COLUMN running INTEGER DEFAULT 1")
+            con.commit()
+        except Exception:
+            pass
         # Anomaly detection — EWMA baseline checkpoints (restored on startup)
         con.execute("""
             CREATE TABLE IF NOT EXISTS sensor_anomaly_baselines (
@@ -1074,6 +1166,174 @@ def db_init():
                 con.commit()
             except Exception:
                 pass
+        # ── Distributed probes (v1.3) ─────────────────────────────────
+        # Remote agents that run sensor probes in branch networks and ship
+        # results back over HTTPS. probes = registry + enrollment + liveness;
+        # agent_tasks = on-demand work queue (IPAM scans, discovery sweeps).
+        # Scan results never land here — they flow into the in-memory _SCANS
+        # registry exactly like local scans.
+        con.execute("""
+            CREATE TABLE IF NOT EXISTS probes (
+                probe_id          TEXT PRIMARY KEY,
+                name              TEXT NOT NULL,
+                description       TEXT DEFAULT '',
+                status            TEXT DEFAULT 'pending',
+                enroll_token_hash TEXT DEFAULT NULL,
+                enroll_expires    REAL DEFAULT NULL,
+                token_id          INTEGER DEFAULT NULL,
+                config_version    INTEGER DEFAULT 1,
+                last_seen         REAL DEFAULT 0,
+                last_checkin_ip   TEXT DEFAULT '',
+                agent_version     TEXT DEFAULT '',
+                protocol_version  INTEGER DEFAULT 0,
+                os_info           TEXT DEFAULT '',
+                capabilities      TEXT DEFAULT '{}',
+                spool_depth       INTEGER DEFAULT 0,
+                offline_alerted   INTEGER DEFAULT 0,
+                clock_skew_s      REAL DEFAULT 0,
+                created_at        REAL NOT NULL,
+                created_by        TEXT DEFAULT ''
+            )""")
+        con.execute("""
+            CREATE TABLE IF NOT EXISTS agent_tasks (
+                id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                probe_id      TEXT NOT NULL,
+                task_type     TEXT NOT NULL,
+                payload       TEXT DEFAULT '{}',
+                state         TEXT DEFAULT 'pending',
+                progress      TEXT DEFAULT '{}',
+                error         TEXT DEFAULT '',
+                created_by    TEXT DEFAULT '',
+                created_at    REAL DEFAULT 0,
+                dispatched_at REAL DEFAULT 0,
+                finished_at   REAL DEFAULT 0
+            )""")
+        con.execute(
+            "CREATE INDEX IF NOT EXISTS idx_agent_tasks_probe_state "
+            "ON agent_tasks(probe_id, state)"
+        )
+        # ── Managed agent updates (v1.4) ──────────────────────────────
+        # Per-probe update lifecycle + reported build identity + supervisor
+        # capability, an audit log of every update attempt, and the campaign
+        # orchestration tables (staged rollout / canary / auto-halt).
+        for stmt in [
+            "ALTER TABLE probes ADD COLUMN build_id TEXT DEFAULT ''",
+            "ALTER TABLE probes ADD COLUMN supervisor INTEGER DEFAULT 0",
+            "ALTER TABLE probes ADD COLUMN update_state TEXT DEFAULT ''",
+            "ALTER TABLE probes ADD COLUMN update_target TEXT DEFAULT ''",
+            "ALTER TABLE probes ADD COLUMN update_campaign_id INTEGER DEFAULT NULL",
+            "ALTER TABLE probes ADD COLUMN update_attempt_id TEXT DEFAULT ''",
+            "ALTER TABLE probes ADD COLUMN update_changed_at REAL DEFAULT 0",
+            "ALTER TABLE probes ADD COLUMN update_error TEXT DEFAULT ''",
+        ]:
+            try:
+                con.execute(stmt)
+                con.commit()
+            except Exception:
+                pass  # column already exists
+        con.execute("""
+            CREATE TABLE IF NOT EXISTS agent_update_reports (
+                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                probe_id     TEXT NOT NULL,
+                campaign_id  INTEGER DEFAULT NULL,
+                attempt_id   TEXT DEFAULT '',
+                outcome      TEXT DEFAULT '',
+                from_build   TEXT DEFAULT '',
+                to_build     TEXT DEFAULT '',
+                target_build TEXT DEFAULT '',
+                reason       TEXT DEFAULT '',
+                log          TEXT DEFAULT '',
+                ts           REAL DEFAULT 0
+            )""")
+        con.execute(
+            "CREATE INDEX IF NOT EXISTS idx_update_reports_probe "
+            "ON agent_update_reports(probe_id, ts)"
+        )
+        con.execute("""
+            CREATE TABLE IF NOT EXISTS update_campaigns (
+                id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                name          TEXT DEFAULT '',
+                target_build  TEXT NOT NULL,
+                package_sha256 TEXT DEFAULT '',
+                canary        INTEGER DEFAULT 1,
+                batch_size    INTEGER DEFAULT 5,
+                halt_on_fail  INTEGER DEFAULT 1,
+                window_secs   INTEGER DEFAULT 86400,
+                probation_secs INTEGER DEFAULT 120,
+                state         TEXT DEFAULT 'running',
+                note          TEXT DEFAULT '',
+                created_by    TEXT DEFAULT '',
+                created_at    REAL DEFAULT 0,
+                started_at    REAL DEFAULT 0,
+                finished_at   REAL DEFAULT 0
+            )""")
+        con.execute("""
+            CREATE TABLE IF NOT EXISTS campaign_probes (
+                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                campaign_id  INTEGER NOT NULL,
+                probe_id     TEXT NOT NULL,
+                state        TEXT DEFAULT 'queued',
+                attempt_id   TEXT DEFAULT '',
+                wave         INTEGER DEFAULT 0,
+                queued_at    REAL DEFAULT 0,
+                started_at   REAL DEFAULT 0,
+                finished_at  REAL DEFAULT 0,
+                error        TEXT DEFAULT ''
+            )""")
+        con.execute(
+            "CREATE INDEX IF NOT EXISTS idx_campaign_probes_cs "
+            "ON campaign_probes(campaign_id, state)"
+        )
+        # probe_id assignment columns — '' = inherit (sensor→device→site→
+        # central), literal 'central' = explicit pin back to central probing.
+        for stmt in [
+            "ALTER TABLE devices ADD COLUMN probe_id TEXT DEFAULT ''",
+            "ALTER TABLE sensors ADD COLUMN probe_id TEXT DEFAULT ''",
+            "ALTER TABLE sites   ADD COLUMN probe_id TEXT DEFAULT ''",
+        ]:
+            try:
+                con.execute(stmt)
+                con.commit()
+            except Exception:
+                pass  # column already exists
+        # api_tokens 'probe' scope — the original CHECK(scope IN
+        # ('read','full')) must be widened and probe_id added. SQLite cannot
+        # alter a CHECK constraint → one-time table rebuild, gated on the
+        # probe_id column's absence. The pre-migration file backup at the
+        # top of db_init() already covers this DB.
+        _api_cols = [r[1] for r in con.execute("PRAGMA table_info(api_tokens)").fetchall()]
+        if "probe_id" not in _api_cols:
+            try:
+                con.execute("ALTER TABLE api_tokens RENAME TO api_tokens_old")
+                con.execute("""
+                    CREATE TABLE api_tokens (
+                        id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                        token_hash   TEXT NOT NULL UNIQUE,
+                        name         TEXT NOT NULL,
+                        username     TEXT NOT NULL,
+                        scope        TEXT NOT NULL CHECK(scope IN ('read','full','probe')),
+                        created_at   REAL NOT NULL,
+                        expires_at   REAL,
+                        last_used_at REAL,
+                        revoked_at   REAL,
+                        probe_id     TEXT DEFAULT NULL
+                    )""")
+                con.execute(
+                    "INSERT INTO api_tokens (id, token_hash, name, username, scope,"
+                    " created_at, expires_at, last_used_at, revoked_at)"
+                    " SELECT id, token_hash, name, username, scope, created_at,"
+                    " expires_at, last_used_at, revoked_at FROM api_tokens_old")
+                con.execute("DROP TABLE api_tokens_old")
+                con.execute("CREATE INDEX IF NOT EXISTS idx_api_tokens_user "
+                            "ON api_tokens(username)")
+                con.execute("CREATE INDEX IF NOT EXISTS idx_api_tokens_hash "
+                            "ON api_tokens(token_hash)")
+                con.commit()
+                log.info("api_tokens migrated: 'probe' scope + probe_id column")
+            except Exception as _ae:
+                con.rollback()
+                log.error(f"api_tokens probe-scope migration failed: {_ae}")
+        con.commit()
     finally:
         con.close()
     log.info("DB init: schema ready")
@@ -1281,6 +1541,12 @@ def logs_db_init():
                 stype TEXT,
                 msg   TEXT
             )""")
+        # db_log_err trims per-insert with a `(did,sid)` subquery on every
+        # sensor error — without this index that's two full scans, and error
+        # volume peaks exactly during outages.
+        con.execute(
+            "CREATE INDEX IF NOT EXISTS idx_err_log_did_sid ON sensor_err_log(did, sid)"
+        )
         con.execute("""
             CREATE TABLE IF NOT EXISTS snmp_traps (
                 id                 INTEGER PRIMARY KEY AUTOINCREMENT,

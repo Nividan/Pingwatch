@@ -124,6 +124,16 @@ function sensorFormHTML(dev, s=null) {
       <label class="fl">Expected Status Code <span style="color:var(--text3);font-weight:400">(0 = any 2xx–3xx)</span></label>
       <input type="number" id="as-xstatus" value="${s?.http_expected_status||0}" min="0" max="599" style="max-width:120px"/>
     </div>
+    <div class="fr" style="margin-top:4px">
+      <label class="fl">Certificate Expiry Alert <span style="color:var(--text3);font-weight:400">(days remaining; 0 = off — HTTPS only)</span></label>
+      <div class="fgrid">
+        <div class="fr"><label class="fl">Warn ≤ days</label>
+          <input type="number" id="as-certwarn" value="${s?(s.cert_warn_days||0):90}" min="0" max="3650" style="max-width:120px"/></div>
+        <div class="fr"><label class="fl">Crit ≤ days</label>
+          <input type="number" id="as-certcrit" value="${s?(s.cert_crit_days||0):30}" min="0" max="3650" style="max-width:120px"/></div>
+      </div>
+      <div class="fh">Warns/crits as the served cert nears expiry — one HTTPS sensor covers health <em>and</em> cert lifetime. Needs a verifiable cert (Verify SSL on).</div>
+    </div>
   </div>
   <!-- SNMP -->
   <div class="fg ${curType==='snmp'?'vis':''}" id="fg-snmp">
@@ -631,9 +641,12 @@ function sensorFormHTML(dev, s=null) {
     <div class="snr-section-lbl">Probe Timing</div>
     <div class="fgrid">
       <div class="fr"><label class="fl">Interval (s)</label>
-        <input type="number" id="as-iv" value="${s?.interval||(window._snrDef?.interval||5)}" min="1" max="300"/></div>
+        <input type="number" id="as-iv" value="${s?.interval||(window._snrDef?.interval||60)}" min="1" max="300"/></div>
       <div class="fr"><label class="fl">Timeout (s)</label>
-        <input type="number" id="as-tmo" value="${s?.timeout||(window._snrDef?.timeout||4)}" min="1" max="60"/></div>
+        <input type="number" id="as-tmo" value="${s?.timeout||(window._snrDef?.timeout||10)}" min="1" max="60"/></div>
+    </div>
+    <div class="fr" style="margin-top:8px"><label class="fl">Run from <span style="color:var(--text3);font-weight:400;font-size:11px">(override which probe measures this sensor)</span></label>
+      ${typeof _probeSelectHtml==='function' ? _probeSelectHtml('as-probe', s?.probe_id||'', 'Inherit from device / site') : '<select id="as-probe"><option value="">Inherit</option></select>'}
     </div>
   </div>
   ${isEdit ? '' : `<!-- Start Immediately -->
@@ -1750,7 +1763,7 @@ async function _vmApiTimed(method, path, body, timeoutMs){
     const o = {method, headers:{'Content-Type':'application/json'}, signal: ctrl.signal};
     if (body) o.body = JSON.stringify(body);
     const r = await fetch(path, o);
-    if (r.status === 401) { if (!_loggedOut) showLogin('Session expired. Please sign in again.'); return {}; }
+    if (r.status === 401) { _onSessionExpired('Session expired. Please sign in again.'); return {}; }
     if (!r.ok) {
       const err = await r.json().catch(() => ({error: r.statusText}));
       const e = new Error(err.error || r.statusText);
@@ -2408,6 +2421,7 @@ function collectSensorForm(did){
   let host=null,port=null,url=null,verify_ssl=true,
       snmp_community='public',snmp_oid='1.3.6.1.2.1.1.1.0',snmp_version='2c',snmp_unit='',
       dns_query='',dns_record_type='A',dns_server='',http_expected_status=0,
+      cert_warn_days=0,cert_crit_days=0,
       keyword='',keyword_case=false,banner_regex='';
   const _devHost = S.devices[did]?.host || '';
   if(type==='ping'){
@@ -2422,6 +2436,8 @@ function collectSensorForm(did){
     host='';  // HTTP uses URL — host always inherited from device
     verify_ssl=document.getElementById('as-vssl')?.checked!==false;
     http_expected_status=parseInt(document.getElementById('as-xstatus')?.value)||0;
+    cert_warn_days=parseInt(document.getElementById('as-certwarn')?.value)||0;
+    cert_crit_days=parseInt(document.getElementById('as-certcrit')?.value)||0;
   } else if(type==='snmp'){
     host=document.getElementById('as-sh')?.value.trim()||'';
     port=parseInt(document.getElementById('as-sp')?.value)||161;
@@ -2477,8 +2493,11 @@ function collectSensorForm(did){
   const payload={type,name,host,port,url,interval:iv,timeout:tmo,
           verify_ssl,snmp_community,snmp_oid,snmp_version,snmp_unit,
           dns_query,dns_record_type,dns_server,http_expected_status,
+          cert_warn_days,cert_crit_days,
           warn_ms,crit_ms,loss_warn_pct,loss_crit_pct,
           keyword,keyword_case,banner_regex,alerts_muted};
+  { const _asp=document.getElementById('as-probe');
+    if(_asp) payload.probe_id=_asp.value||''; }
   // SNMPv3 per-sensor override — only send when type=snmp + version=3.  Empty
   // fields round-trip as "" so the backend inherits from the device default.
   if(type==='snmp' && snmp_version==='3'){

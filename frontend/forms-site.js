@@ -6,6 +6,12 @@
  *   openSiteModal(mode, name)  — primary entry point used by Devices tab
  *   _lmOpenSiteModal           — legacy alias kept for the Live Map sidebar
  *
+ * Markup is context-aware: inside the Live Map iframe it keeps the neon
+ * .lm-modal look (rules from livemap.css, injected here as a fallback);
+ * in the main app it uses the standard modal vocabulary (.mo/.mbox/.fr/
+ * .btn-p…) from style.css so it matches every other dialog and follows
+ * the dark/light theme.
+ *
  * Refresh-after-save: calls every known callback that's wired up in the
  * current context — _refreshDevices (Devices tab), _lmRefresh (Live Map
  * iframe), and posts lm_refresh to the livemap-frame so a hidden iframe
@@ -14,10 +20,15 @@
 (function() {
 'use strict';
 
-// Inject the modal CSS exactly once. livemap.css carries these rules for the
-// Live Map iframe; when this script runs in the main app the styles aren't
-// loaded, so the modal would render unstyled at top-left of the page.
+// True when running inside the Live Map iframe (served at /livemap).
+const IN_LM = location.pathname.indexOf('livemap') !== -1;
+
+// Inject the Live-Map modal CSS exactly once (iframe only — livemap.css
+// normally carries these rules; this keeps the modal styled even if that
+// stylesheet ever trims them). The main app needs nothing: it uses the
+// standard classes from style.css.
 function _injectModalCss() {
+  if (!IN_LM) return;
   if (document.getElementById('forms-site-css')) return;
   const css = '' +
     '.lm-modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,0.6);' +
@@ -72,6 +83,63 @@ function esc(s) {
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;');
+}
+
+// ── Context-aware markup helpers ─────────────────────────────────
+// One template, two skins. Ids and structure are identical in both
+// contexts — only class names / chrome differ.
+
+function _shellHtml(title, bodyHtml, footHtml, closeId) {
+  if (IN_LM) {
+    return '<div class="lm-modal">' +
+        '<div class="lm-modal-head">' + esc(title.toUpperCase()) + '</div>' +
+        '<div class="lm-modal-body">' + bodyHtml + '</div>' +
+        '<div class="lm-modal-foot">' + footHtml + '</div>' +
+      '</div>';
+  }
+  return '<div class="mbox" style="max-width:480px">' +
+      '<div class="mhd"><div class="mttl">' + esc(title) + '</div>' +
+        '<button class="mclose" id="' + esc(closeId) + '">&#10005;</button></div>' +
+      '<div class="mbdy">' + bodyHtml + '</div>' +
+      '<div class="mft">' + footHtml + '</div>' +
+    '</div>';
+}
+
+function _fieldHtml(label, controlHtml, hint) {
+  if (IN_LM) {
+    return '<div class="lm-field"><label>' + label + '</label>' + controlHtml +
+      (hint ? '<span class="hint">' + hint + '</span>' : '') + '</div>';
+  }
+  return '<div class="fr"><label class="fl">' + label + '</label>' + controlHtml +
+    (hint ? '<div style="font-size:11px;color:var(--text3);line-height:1.5;margin-top:4px">' +
+            hint + '</div>' : '') + '</div>';
+}
+
+function _checkHtml(inputId, text, hint, checked) {
+  const box = '<input id="' + esc(inputId) + '" type="checkbox"' + (checked ? ' checked' : '') + '/> ';
+  if (IN_LM) {
+    return '<div class="lm-field"><label class="check">' + box + text + '</label>' +
+      (hint ? '<span class="hint">' + hint + '</span>' : '') + '</div>';
+  }
+  return '<div class="fr"><label style="display:flex;align-items:center;gap:8px;' +
+      'font-size:13px;color:var(--text2);cursor:pointer;user-select:none">' + box + text + '</label>' +
+    (hint ? '<div style="font-size:11px;color:var(--text3);line-height:1.5;margin-top:4px">' +
+            hint + '</div>' : '') + '</div>';
+}
+
+// kind: 'primary' | 'secondary' | 'danger'. Live Map keeps its uppercase
+// mono buttons; the main app uses the standard .btn-p/.btn-s vocabulary.
+function _btnHtml(id, label, kind, style) {
+  if (IN_LM) {
+    const cls = 'lm-btn' + (kind === 'danger' ? ' danger' : '');
+    const st = kind === 'primary'
+      ? 'background:rgba(0,212,255,0.15);border-color:var(--accent)' : '';
+    return '<button class="' + cls + '" id="' + esc(id) + '"' +
+      (st ? ' style="' + st + '"' : '') + '>' + esc(label.toUpperCase()) + '</button>';
+  }
+  const cls = kind === 'primary' ? 'btn-p' : (kind === 'danger' ? 'btn-s is-danger' : 'btn-s');
+  return '<button class="' + cls + '" id="' + esc(id) + '"' +
+    (style ? ' style="' + style + '"' : '') + '>' + esc(label) + '</button>';
 }
 
 function closeModal() {
@@ -129,54 +197,48 @@ async function openModal(mode, name) {
     }
   }
 
-  const title = mode === 'edit' ? 'EDIT SITE' : 'ADD SITE';
+  const title = mode === 'edit' ? 'Edit Site' : 'Add Site';
   const nameVal = existing ? existing.name : '';
   const kindVal = existing ? existing.kind : 'lab';
   const displayVal = existing ? existing.display_name : '';
   // Pin/unpin lives on the Live Map sidebar context menu now — not in this modal.
 
+  const body =
+    _fieldHtml('Name',
+      '<input id="lm-f-name" type="text" maxlength="100" placeholder="e.g. BSLAB" value="' + esc(nameVal) + '"/>',
+      'Free-text. Devices in this group will carry this site label.') +
+    _fieldHtml('Kind',
+      '<select id="lm-f-kind">' + buildOptions(kindVal) + '</select>',
+      'Drives the sidebar pill colour and the Sites by Type widget.') +
+    _fieldHtml('Display name (optional)',
+      '<input id="lm-f-display" type="text" maxlength="100" placeholder="(falls back to Name)" value="' + esc(displayVal) + '"/>',
+      '') +
+    _fieldHtml('Measured from (remote probe)',
+      (typeof _probeSelectHtml === 'function'
+        // omitCentral: at site level '' already means central, so the
+        // explicit 'central' pin would render as a duplicate option.
+        ? _probeSelectHtml('lm-f-probe', (existing && existing.probe_id) || '', 'Central (this server)', true)
+        : '<select id="lm-f-probe"><option value="">Central</option></select>'),
+      'Devices in this site are probed from this agent unless they override it. ' +
+      'IPAM scans of subnets tagged with this site also run there.') +
+    (mode === 'edit' && nameVal
+      ? _checkHtml('lm-f-rename-devs', 'Also rename devices&#39; site values',
+          'Off by default &mdash; turn on if you change Name and want every device in this site to follow.',
+          false)
+      : '');
+
+  const foot =
+    (mode === 'edit'
+      ? _btnHtml('lm-f-delete', 'Delete Site', 'danger', 'margin-right:auto') +
+        (IN_LM ? '<div style="flex:1"></div>' : '')
+      : (IN_LM ? '<div style="flex:1"></div>' : '')) +
+    _btnHtml('lm-f-cancel', 'Cancel', 'secondary') +
+    _btnHtml('lm-f-save', mode === 'edit' ? 'Save' : 'Create', 'primary');
+
   const overlay = document.createElement('div');
-  overlay.className = 'lm-modal-overlay';
+  overlay.className = IN_LM ? 'lm-modal-overlay' : 'mo';
   overlay.id = 'lm-site-modal';
-  overlay.innerHTML =
-    '<div class="lm-modal">' +
-      '<div class="lm-modal-head">' + esc(title) + '</div>' +
-      '<div class="lm-modal-body">' +
-        '<div class="lm-field">' +
-          '<label>Name</label>' +
-          '<input id="lm-f-name" type="text" maxlength="100" placeholder="e.g. BSLAB" value="' + esc(nameVal) + '"' +
-            (mode === 'edit' ? '' : '') + '/>' +
-          '<span class="hint">Free-text. Devices in this group will carry this site label.</span>' +
-        '</div>' +
-        '<div class="lm-field">' +
-          '<label>Kind</label>' +
-          '<select id="lm-f-kind">' + buildOptions(kindVal) + '</select>' +
-          '<span class="hint">Drives the sidebar pill colour and the Sites by Type widget.</span>' +
-        '</div>' +
-        '<div class="lm-field">' +
-          '<label>Display name (optional)</label>' +
-          '<input id="lm-f-display" type="text" maxlength="100" placeholder="(falls back to Name)" value="' + esc(displayVal) + '"/>' +
-        '</div>' +
-        (mode === 'edit' && nameVal
-          ? '<div class="lm-field">' +
-              '<label class="check">' +
-                '<input id="lm-f-rename-devs" type="checkbox"/> Also rename devices.site values' +
-              '</label>' +
-              '<span class="hint">Off by default — turn on if you change Name and want every device in this site to follow.</span>' +
-            '</div>'
-          : '') +
-      '</div>' +
-      '<div class="lm-modal-foot">' +
-        (mode === 'edit'
-          ? '<button class="lm-btn danger" id="lm-f-delete">DELETE METADATA</button>' +
-            '<div style="flex:1"></div>'
-          : '<div style="flex:1"></div>') +
-        '<button class="lm-btn" id="lm-f-cancel">CANCEL</button>' +
-        '<button class="lm-btn" id="lm-f-save" style="background:rgba(0,212,255,0.15);border-color:var(--accent)">' +
-          (mode === 'edit' ? 'SAVE' : 'CREATE') +
-        '</button>' +
-      '</div>' +
-    '</div>';
+  overlay.innerHTML = _shellHtml(title, body, foot, 'lm-f-x');
 
   document.body.appendChild(overlay);
 
@@ -185,6 +247,8 @@ async function openModal(mode, name) {
     if (e.target === overlay) closeModal();
   });
   document.getElementById('lm-f-cancel').onclick = closeModal;
+  const xBtn = document.getElementById('lm-f-x');
+  if (xBtn) xBtn.onclick = closeModal;
   document.getElementById('lm-f-name').focus();
   document.getElementById('lm-f-name').select();
 
@@ -206,6 +270,8 @@ async function openModal(mode, name) {
           kind: inKind,
           display_name: inDisplay,
         };
+        { const _pf = document.getElementById('lm-f-probe');
+          if (_pf && _pf.value !== ((existing && existing.probe_id) || '')) body.probe_id = _pf.value; }
         if (inName !== nameVal) {
           body.new_name = inName;
           body.also_rename = renameDevs;
@@ -231,6 +297,17 @@ async function openModal(mode, name) {
         }).then(async function(r) {
           if (!r.ok) { const j = await r.json().catch(function(){return{};}); throw new Error(j.error || r.statusText); }
         });
+        // Probe binding rides a follow-up PUT (the create endpoint is
+        // metadata-only); skipped when left at Central.
+        const _pfNew = document.getElementById('lm-f-probe');
+        if (_pfNew && _pfNew.value) {
+          await fetch('/api/sites/meta/' + encodeURIComponent(inName), {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'same-origin',
+            body: JSON.stringify({ kind: inKind, probe_id: _pfNew.value }),
+          });
+        }
       }
       closeModal();
       _broadcastRefresh();
@@ -259,39 +336,37 @@ async function openModal(mode, name) {
 
 function _openDeleteConfirm(name, usage) {
   _injectModalCss();
-  // Reuse the same overlay class; rendered on top of the edit modal.
-  const overlay = document.createElement('div');
-  overlay.className = 'lm-modal-overlay';
-  overlay.id = 'lm-site-confirm';
   const hasUsage = (usage.devices > 0 || usage.subnets > 0);
   const usageLine = hasUsage
     ? '<strong>' + usage.devices + ' device' + (usage.devices === 1 ? '' : 's') + '</strong> and ' +
       '<strong>' + usage.subnets + ' subnet' + (usage.subnets === 1 ? '' : 's') + '</strong> currently use this site.'
     : 'No devices or subnets are currently assigned to this site.';
-  overlay.innerHTML =
-    '<div class="lm-modal" style="width:min(460px,92vw)">' +
-      '<div class="lm-modal-head">DELETE SITE</div>' +
-      '<div class="lm-modal-body">' +
-        '<div style="font-family:\'JetBrains Mono\',monospace;font-size:11px;line-height:1.55;color:var(--text)">' +
-          'Delete <strong style="color:var(--accent)">' + esc(name) + '</strong>?<br/><br/>' +
-          usageLine +
-        '</div>' +
-        (hasUsage
-          ? '<div class="lm-field">' +
-              '<label class="check">' +
-                '<input id="lm-f-cascade" type="checkbox" checked/> ' +
-                'Also clear this site from devices and subnets' +
-              '</label>' +
-              '<span class="hint">When ON, devices.site and ipam_subnets.site fields are reset to blank for any row tagged with this name. When OFF, only the metadata row (kind / pinned / display name) is removed; the site continues to appear via those references.</span>' +
-            '</div>'
-          : '<input id="lm-f-cascade" type="hidden" value="0"/>') +
-      '</div>' +
-      '<div class="lm-modal-foot">' +
-        '<div style="flex:1"></div>' +
-        '<button class="lm-btn" id="lm-f-cancel-del">CANCEL</button>' +
-        '<button class="lm-btn danger" id="lm-f-confirm-del">DELETE</button>' +
-      '</div>' +
-    '</div>';
+  const bodyTextStyle = IN_LM
+    ? 'font-family:\'JetBrains Mono\',monospace;font-size:11px;line-height:1.55;color:var(--text)'
+    : 'font-size:13px;line-height:1.6;color:var(--text)';
+
+  const body =
+    '<div style="' + bodyTextStyle + '">' +
+      'Delete <strong style="color:var(--accent)">' + esc(name) + '</strong>?<br/><br/>' +
+      usageLine +
+    '</div>' +
+    (hasUsage
+      ? _checkHtml('lm-f-cascade', 'Also clear this site from devices and subnets',
+          'When ON, devices.site and ipam_subnets.site fields are reset to blank for any row tagged ' +
+          'with this name. When OFF, only the metadata row (kind / pinned / display name) is removed; ' +
+          'the site continues to appear via those references.', true)
+      : '<input id="lm-f-cascade" type="hidden" value="0"/>');
+
+  const foot =
+    (IN_LM ? '<div style="flex:1"></div>' : '') +
+    _btnHtml('lm-f-cancel-del', 'Cancel', 'secondary') +
+    _btnHtml('lm-f-confirm-del', 'Delete', 'danger');
+
+  // Reuse the same overlay class; rendered on top of the edit modal.
+  const overlay = document.createElement('div');
+  overlay.className = IN_LM ? 'lm-modal-overlay' : 'mo';
+  overlay.id = 'lm-site-confirm';
+  overlay.innerHTML = _shellHtml('Delete Site', body, foot, 'lm-f-x-del');
   document.body.appendChild(overlay);
 
   function closeConfirm() {
@@ -300,6 +375,8 @@ function _openDeleteConfirm(name, usage) {
   }
   overlay.addEventListener('mousedown', function(e) { if (e.target === overlay) closeConfirm(); });
   document.getElementById('lm-f-cancel-del').onclick = closeConfirm;
+  const xBtn = document.getElementById('lm-f-x-del');
+  if (xBtn) xBtn.onclick = closeConfirm;
   document.getElementById('lm-f-confirm-del').onclick = async function() {
     const cascadeEl = document.getElementById('lm-f-cascade');
     const cascade = cascadeEl && cascadeEl.type === 'checkbox' ? cascadeEl.checked : false;

@@ -179,10 +179,10 @@ def handle(h, method, path, body):
             "report_brand_color":    _settings.get("report_brand_color", ""),
             "report_retention_days": int(_settings.get("report_retention_days", 365) or 365),
             # Group A — sensor defaults
-            "snr_interval":      int(_settings.get("snr_interval",      5)),
-            "snr_timeout":       int(_settings.get("snr_timeout",       4)),
-            "snr_fail_after":    int(_settings.get("snr_fail_after",    2)),
-            "snr_recover_after": int(_settings.get("snr_recover_after", 1)),
+            "snr_interval":      int(_settings.get("snr_interval",      60)),
+            "snr_timeout":       int(_settings.get("snr_timeout",       10)),
+            "snr_fail_after":    int(_settings.get("snr_fail_after",    3)),
+            "snr_recover_after": int(_settings.get("snr_recover_after", 2)),
             # Group B — event & history limits
             "max_flaps_display": int(_settings.get("max_flaps_display", 50)),
             "max_flap_entries":  int(_settings.get("max_flap_entries",  2000)),
@@ -196,6 +196,9 @@ def handle(h, method, path, body):
             "anomaly_cold_start_hours":      int(_settings.get("anomaly_cold_start_hours", 24)),
             "anomaly_checkpoint_interval_s": int(_settings.get("anomaly_checkpoint_interval_s", 3600)),
             "anomaly_default_new_sensors":   int(_settings.get("anomaly_default_new_sensors", 0)),
+            # Group F3 — root-cause analysis (dependency correlation)
+            "rca_suppress_downstream":   int(_settings.get("rca_suppress_downstream", 1)),
+            "rca_correlation_window_s":  int(_settings.get("rca_correlation_window_s", 120)),
             # Group D — branding
             "org_name":          _settings.get("org_name", ""),
             # Group E — latency colour thresholds
@@ -308,6 +311,22 @@ def handle(h, method, path, body):
         user, _ = h._require("admin")
         if not user: return True
         _MASKED_KEYS = {'smtp_pass'}
+        # Opaque/binary blobs (e.g. base64 logo data URI) — summarize by size in
+        # the audit detail instead of dumping the value. A ~2 MB base64 logo would
+        # otherwise flood the audit log file and DB on every settings save.
+        _REDACT_KEYS = {'email_logo_data'}
+        _AUDIT_VAL_MAX = 120
+
+        def _audit_val(k, v):
+            """Render a setting value for the audit detail: mask secrets,
+            summarize opaque blobs by size, cap anything else to a sane length."""
+            if k in _MASKED_KEYS:
+                return '***'
+            s = str(v)
+            if k in _REDACT_KEYS:
+                return f'<{len(s)} bytes>' if s else '(empty)'
+            return s if len(s) <= _AUDIT_VAL_MAX else f'{s[:_AUDIT_VAL_MAX]}…(+{len(s) - _AUDIT_VAL_MAX} chars)'
+
         _old_vals = {k: ('***' if k in _MASKED_KEYS else str(_settings.get(k, ''))) for k in body}
         ttl = body.get("session_ttl")
         if ttl is not None:
@@ -498,6 +517,7 @@ def handle(h, method, path, body):
             "login_fail_max", "login_fail_window", "totp_remember_hours",
             "anomaly_global_enabled", "anomaly_cold_start_hours",
             "anomaly_checkpoint_interval_s", "anomaly_default_new_sensors",
+            "rca_suppress_downstream",
             "org_name", "latency_good_ms", "latency_warn_ms",
             "syslog_host", "syslog_port", "syslog_proto", "syslog_min_severity",
         ):
@@ -544,6 +564,8 @@ def handle(h, method, path, body):
             # Alert batching — window 5s-1h, max size 2-500
             ("alert_batch_window_s",           5,    3600),
             ("alert_batch_max_size",           2,    500),
+            # Root-cause correlation window (evidence + history clustering)
+            ("rca_correlation_window_s",       30,   3600),
         ]:
             if _k in body:
                 try:
@@ -572,7 +594,7 @@ def handle(h, method, path, body):
             _settings.load({"alert_batch_enabled": _abe})
             _db_enqueue(lambda _v=_abe: db_save_settings({"alert_batch_enabled": _v}))
         _changes = '; '.join(
-            f"{k}: {_old_vals.get(k, '')} → {'***' if k in _MASKED_KEYS else str(body[k])}"
+            f"{k}: {_audit_val(k, _old_vals.get(k, ''))} → {_audit_val(k, body[k])}"
             for k in body
             if k in _MASKED_KEYS or str(_old_vals.get(k, '')) != str(body[k])
         )
@@ -628,12 +650,26 @@ def handle(h, method, path, body):
         if not user: return True
         from monitoring.smtp_alert import test_smtp
         from db.backups import decrypt_pw as _dec_smtp_pw
+        _test_host = (body.get("smtp_host") or "").strip()
+        _pw = (body.get("smtp_pass") or "").strip()
+        if not _pw:
+            # Fall back to the stored password ONLY when testing the host it
+            # belongs to. Otherwise an admin could point smtp_host at a
+            # rogue relay and harvest the stored credential during AUTH.
+            _saved_host = (_settings.get("smtp_host", "") or "").strip()
+            if _test_host and _test_host.lower() == _saved_host.lower():
+                _pw = _dec_smtp_pw(_settings.get("smtp_pass", "")).strip()
+            else:
+                h._json(400, {"ok": False,
+                              "msg": "Enter the SMTP password to test a different host "
+                                     "(the saved password is only reused when testing the saved host)."})
+                return True
         cfg = {
-            "host":      (body.get("smtp_host") or "").strip(),
+            "host":      _test_host,
             "port":      body.get("smtp_port", 587),
             "tls":       (body.get("smtp_tls")  or "starttls").strip(),
             "user":      (body.get("smtp_user") or "").strip(),
-            "password":  (body.get("smtp_pass") or _dec_smtp_pw(_settings.get("smtp_pass", ""))).strip(),
+            "password":  _pw,
             "from_addr": (body.get("smtp_from") or "").strip(),
             "to_addr":   (body.get("smtp_to")   or "").strip(),
         }
@@ -1083,6 +1119,72 @@ def handle(h, method, path, body):
         db_log_audit(user, h.client_address[0], 'anomaly_bulk_enable',
                      '', f"enabled={enabled} skipped={skipped}")
         h._json(200, {"ok": True, "enabled": enabled, "skipped": skipped})
+        return True
+
+    # ── /api/sensors/apply-interval POST — push scheduling fields onto existing sensors ──
+    # Type defaults and global defaults only seed *new* sensors. This action
+    # bulk-applies any of interval / timeout / fail_after / recover_after to
+    # existing sensors — either one stype (per-type rows) or every type
+    # (global defaults, when "stype" is omitted). All four are read live by the
+    # probe loop (interval at reschedule, the rest at the next probe/result), so
+    # there is no stop/restart and no probe storm — unlike update_sensor().
+    if path == "/api/sensors/apply-interval" and method == "POST":
+        user, _ = h._require("admin")
+        if not user: return True
+        stype = (body.get("stype") or "").strip()   # "" = apply to every type
+        from core.validation import validate_interval, validate_timeout
+        # Collect only the fields actually supplied; each is independently optional.
+        fields = {}
+        if body.get("interval") not in (None, ""):
+            try:
+                fields["interval"] = validate_interval(body.get("interval"), 1, 3600)
+            except (ValueError, TypeError):
+                h._json(400, {"error": "interval must be an integer between 1 and 3600"}); return True
+        if body.get("timeout") not in (None, ""):
+            try:
+                fields["timeout"] = validate_timeout(body.get("timeout"), 1, 300)
+            except (ValueError, TypeError):
+                h._json(400, {"error": "timeout must be an integer"}); return True
+        for _fld in ("fail_after", "recover_after"):
+            if body.get(_fld) not in (None, ""):
+                try:
+                    fields[_fld] = max(1, min(20, int(body.get(_fld))))
+                except (ValueError, TypeError):
+                    h._json(400, {"error": f"{_fld} must be an integer between 1 and 20"}); return True
+        if not fields:
+            h._json(400, {"error": "no fields to apply"}); return True
+        from db import db_save
+        STATE = app_state.STATE
+        updated = 0
+        with STATE._lock:
+            for dev in STATE.devices.values():
+                for s in dev.sensors.values():
+                    if stype and s.stype != stype:
+                        continue
+                    # Timeout must never exceed the (new or existing) interval.
+                    _iv_eff = fields.get("interval", int(getattr(s, "interval", 5) or 5))
+                    changed = False
+                    for k, v in fields.items():
+                        vv = max(1, min(_iv_eff, v)) if k == "timeout" else v
+                        if int(getattr(s, k, 0) or 0) != vv:
+                            setattr(s, k, vv)
+                            changed = True
+                    if changed:
+                        updated += 1
+        if updated:
+            _db_enqueue(lambda: db_save(STATE))
+            # Remote-assigned sensors read interval/timeout from the agent config
+            # payload — bump so every agent re-pulls once and picks up the change.
+            # Cheap (one UPDATE); no-op when no probes exist.
+            try:
+                from routes.probes import _bump_all_probe_configs
+                _bump_all_probe_configs()
+            except Exception:
+                pass
+        _det = " ".join(f"{k}={v}" for k, v in fields.items())
+        db_log_audit(user, h.client_address[0], 'sensor_bulk_apply',
+                     (stype or "*"), f"{_det} updated={updated}")
+        h._json(200, {"ok": True, "updated": updated, "stype": (stype or "*")})
         return True
 
     return False

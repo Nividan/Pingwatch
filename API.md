@@ -145,6 +145,7 @@ pre-login screen to render SSO buttons.
 | `POST` | `/api/sensors/{did}/{sid}/anomaly/reset` | operator | Wipe the learned anomaly baseline (in-memory + DB row) |
 | `POST` | `/api/device/{did}/scan` | operator | Trigger port scan (async) |
 | `POST` | `/api/anomaly/bulk-enable` | admin | Enable anomaly detection on every supported sensor that's currently off; resets each baseline to a fresh cold-start window |
+| `POST` | `/api/sensors/apply-interval` | admin | Bulk-apply scheduling fields to **existing** sensors. Body: any of `interval`, `timeout`, `fail_after`, `recover_after`, plus optional `stype` (one type; omit for every type). Applied live (no restart/storm), persisted, agents re-pull. Returns `{updated}` |
 
 ---
 
@@ -169,6 +170,25 @@ iframe debounces and re-fetches on a 2-second flush.
 | `GET` | `/api/livemap/sites` | viewer | Per-site rollup with metadata — `{sites: [{name, kind, pinned, display_name, devices, up, warn, down, alerts}]}` |
 | `GET` | `/api/livemap/noc/summary` | viewer | NOC widgets payload — `{sites:{up,warn,down,total}, devices:{...}, alerts:{active,down,warn,ack}, uptime_24h, flaps_24h, incidents_24h, by_kind:{...}, top_problems:[...], recent_alerts:[...], off_site:[...]}` |
 | `GET` | `/api/livemap/sites/{name}/tree` | viewer | Tier tree for one site — `{site:{...}, isp:[...], wan_switches:[...], firewalls:[...], core_switches:[...], switches:[...], chassis:[clusters], hypervisors:[clusters], vm_clusters:[clusters], ipmi:[clusters], other:[devices]}` |
+
+### Root-cause incidents (RCA)
+
+Read-only correlation of the live down-set against the parent dependency graph
+(`devices.parent_device_ids` + `pw_group_parents` fallback). An *incident* is one
+upstream **root** device plus the impacted downstream devices its outage explains
+(redundancy-aware — a device with any live uplink is its own root, never blamed
+upstream). Powers the Active Incidents widget, the Live Map root-cause overlay,
+and the Events-view cross-device collapse.
+
+| Method | Path | Min role | Description |
+|--------|------|----------|-------------|
+| `GET` | `/api/incidents` | viewer | Live incidents — `{incidents:[{root:{did,name,host,tier,status,site,group,down_since}, impacted:[{did,name,tier,status,site,down_since}], impacted_count, confidence:"high"\|"medium"\|"low", reasons:[…], site}], correlated_count, suppress_enabled, generated_at}`. Memoised ~5 s; sorted most-impactful first |
+| `GET` | `/api/incidents/history` | viewer | Past incidents reconstructed from `flap_log` — `?window=1h\|6h\|24h\|7d\|30d` (or raw seconds; default `24h`) → `{incidents:[{root:{did,name,host}, impacted:[{did,name}], impacted_count, started_at, ended_at, duration_s}], window_s, topology_caveat:true}`. `topology_caveat` flags that attribution uses today's graph (no historical topology snapshots are stored) |
+
+Downstream **alert suppression** (PRTG-style dependency) is controlled by the
+`rca_suppress_downstream` setting (default on) via `PATCH /api/settings`; while a
+root is down, symptom alerts are recorded `state="suppressed"` but not dispatched.
+`rca_correlation_window_s` (default `120`) tunes the evidence + history window.
 
 ---
 

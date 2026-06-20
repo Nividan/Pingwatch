@@ -25,31 +25,34 @@ TIER_WAN_SWITCH  = "wan_switch"
 TIER_FIREWALL    = "firewall"
 TIER_CORE_SWITCH = "core_switch"
 TIER_SWITCH      = "switch"          # access switch (legacy key, renamed label)
+TIER_AP          = "ap"              # wireless access point (between access switch + chassis)
 TIER_CHASSIS     = "chassis"
 TIER_HYPERVISOR  = "hypervisor"
 TIER_VM          = "vm"
 TIER_IPMI        = "ipmi"
 TIER_OTHER       = "other"
 
-# Tier keys an Edit Group dropdown may persist. "auto" / "" both mean
-# "fall back to the regex inference below" — the override is opt-in.
+# Tier keys an Edit Group / Edit Device dropdown may persist. "auto" / "" both
+# mean "fall back to the regex inference below" — the override is opt-in.
 _VALID_TIERS = {
     TIER_ISP, TIER_WAN_SWITCH, TIER_FIREWALL, TIER_CORE_SWITCH, TIER_SWITCH,
-    TIER_CHASSIS, TIER_HYPERVISOR, TIER_VM, TIER_IPMI, TIER_OTHER,
+    TIER_AP, TIER_CHASSIS, TIER_HYPERVISOR, TIER_VM, TIER_IPMI, TIER_OTHER,
 }
 
 # Per-device Topology Role (ip_allocations.kind, set in the Edit Device modal)
-# → live-map tier. This is an explicit, user-set signal so it outranks both
-# the per-group override and the regex inference. Backbone (aggregation) and
-# core both render in the single CORE SWITCH row; gateway is the edge/firewall
-# row. The remaining roles ('reserved'/'conflict'/'discovered') aren't tier
-# signals and are intentionally absent — they fall through to the regex.
-_ROLE_TO_TIER = {
+# → live-map tier. Explicit user-set signal — outranks per-group override and
+# regex inference. The UI now shows the full _VALID_TIERS list (same options as
+# the per-group dropdown), so any tier key written by the new dropdown is an
+# identity match. The legacy IPAM-style aliases below remain so existing
+# `ip_allocations.kind` values written by the old 4-option dropdown still map
+# correctly without a data migration.
+_ROLE_TO_TIER = {t: t for t in _VALID_TIERS}     # identity for all current tier keys
+_ROLE_TO_TIER.update({                            # legacy IPAM-style aliases
     "core":     TIER_CORE_SWITCH,
     "backbone": TIER_CORE_SWITCH,
-    "switch":   TIER_SWITCH,
     "gateway":  TIER_FIREWALL,
-}
+    # "switch" is already identity → TIER_SWITCH, no alias needed
+})
 
 
 def _load_group_tier_overrides() -> dict:
@@ -157,6 +160,16 @@ _TIER_RULES = [
                                   r"l3[-_\s]?(?:sw|switch)|spine[-_\s]?(?:sw|switch)|spine\d|"
                                   r"n[79]k|nexus[-_\s]?[79]\d{3}|asr\d|"
                                   r"cat(?:alyst)?[-_\s]?[69]\d{3})\b", re.I)),
+    # Access Point — must come BEFORE the switch rule so "aruba-ap-3" doesn't
+    # get caught by the generic "aruba" marker in TIER_SWITCH. \d+ on every
+    # branch so multi-digit model numbers (AP-12, MR46, R700) consume cleanly
+    # — using a single \d leaves the trailing \b stuck between two digits.
+    (TIER_AP,          re.compile(r"\b(?:ap[-_]?\d+|wap[-_]?\d+|"
+                                  r"uap(?:[-_]|\d+)|"
+                                  r"wifi|wireless|access[-_\s]?point|"
+                                  r"aruba[-_]?(?:i?ap|inst)|"
+                                  r"meraki[-_]?mr\d*|"
+                                  r"ruckus[-_]?(?:r|h|t)\d+)\b", re.I)),
     # Generic / access switch — TOR, Nexus 5K, EX2200, Catalyst 2/3/4xxx.
     (TIER_SWITCH,      re.compile(r"\b(switch|sw\d|sw-|tor-|ex[-\s]?\d+|n5k|"
                                   r"catalyst|nexus|junos|mikrotik|aruba|cisco-sw|"
@@ -230,7 +243,7 @@ def _cluster_card(name: str, devs: list, alerts_by_did: dict,
     members disagree (mixed parents), all listed parents are included and
     the frontend draws a line per parent — visually the cluster fans out.
     """
-    up = warn = down = 0
+    up = warn = down = pause = 0
     cells = []
     alerts = 0
     parents = []
@@ -239,9 +252,10 @@ def _cluster_card(name: str, devs: list, alerts_by_did: dict,
     member_parent_sigs = set()
     for d in devs:
         st = _device_status(d)
-        if   st == "up":   up   += 1
-        elif st == "warn": warn += 1
-        elif st == "down": down += 1
+        if   st == "up":    up    += 1
+        elif st == "warn":  warn  += 1
+        elif st == "down":  down  += 1
+        elif st == "pause": pause += 1
         d_parents = _resolve_parents(d, group_parents or {})
         cells.append({
             "did":               d.device_id,
@@ -271,6 +285,7 @@ def _cluster_card(name: str, devs: list, alerts_by_did: dict,
         "up":                up,
         "warn":              warn,
         "down":              down,
+        "pause":             pause,
         "alerts":            alerts,
         "cells":             cells,
         "parent_device_ids": parents,
@@ -294,7 +309,7 @@ def _cluster_card(name: str, devs: list, alerts_by_did: dict,
 # outside the connection canvas, so its order never affects crossings.
 _SWEEP_ORDER = [
     TIER_ISP, TIER_WAN_SWITCH, TIER_FIREWALL, TIER_CORE_SWITCH, TIER_SWITCH,
-    TIER_CHASSIS, TIER_HYPERVISOR, TIER_IPMI, TIER_VM,
+    TIER_AP, TIER_CHASSIS, TIER_HYPERVISOR, TIER_IPMI, TIER_VM,
 ]
 
 
@@ -481,6 +496,7 @@ def site_tree(site_name: str) -> dict:
         TIER_FIREWALL:    [],
         TIER_CORE_SWITCH: [],
         TIER_SWITCH:      [],
+        TIER_AP:          [],
         TIER_CHASSIS:     [],
         TIER_HYPERVISOR:  [],
         TIER_VM:          [],
@@ -493,7 +509,7 @@ def site_tree(site_name: str) -> dict:
         tier = infer_tier(d, group_overrides, role_overrides)
         by_tier_devices[tier].append(d)
 
-    # ISP / WAN / Firewall / Core / Access render as individual device cards.
+    # ISP / WAN / Firewall / Core / Access / AP render as individual device cards.
     isp_cards     = [_device_card(d, alerts_by_did, group_parents)
                      for d in by_tier_devices[TIER_ISP]]
     wan_cards     = [_device_card(d, alerts_by_did, group_parents)
@@ -504,6 +520,8 @@ def site_tree(site_name: str) -> dict:
                      for d in by_tier_devices[TIER_CORE_SWITCH]]
     switches      = [_device_card(d, alerts_by_did, group_parents)
                      for d in by_tier_devices[TIER_SWITCH]]
+    access_points = [_device_card(d, alerts_by_did, group_parents)
+                     for d in by_tier_devices[TIER_AP]]
 
     # Chassis / VMs / IPMI render as cluster cards grouped by devices.grp.
     # Hypervisors do too. Chassis is its own row between switches + hypervisors.
@@ -570,6 +588,9 @@ def site_tree(site_name: str) -> dict:
     for sc in switches:
         _push_ref(sc["parent_device_ids"],
                   {"kind": "device", "tier": TIER_SWITCH, "did": sc["did"]})
+    for ap in access_points:
+        _push_ref(ap["parent_device_ids"],
+                  {"kind": "device", "tier": TIER_AP, "did": ap["did"]})
     for cc in chassis:
         _push_ref(cc["parent_device_ids"],
                   {"kind": "cluster", "tier": TIER_CHASSIS, "name": cc["name"]})
@@ -607,6 +628,7 @@ def site_tree(site_name: str) -> dict:
             TIER_FIREWALL:    firewalls,
             TIER_CORE_SWITCH: core_switches,
             TIER_SWITCH:      switches,
+            TIER_AP:          access_points,
             TIER_CHASSIS:     chassis,
             TIER_HYPERVISOR:  hypervisors,
             TIER_IPMI:        ipmi,
@@ -629,6 +651,7 @@ def site_tree(site_name: str) -> dict:
         "firewalls":     firewalls,
         "core_switches": core_switches,
         "switches":      switches,
+        "access_points": access_points,
         "chassis":       chassis,
         "hypervisors":   hypervisors,
         "vm_clusters":   vm_clusters,

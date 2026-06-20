@@ -264,6 +264,18 @@ def _filter_known_parents(STATE, refs: list, exclude_did: str = "") -> list:
     return out
 
 
+def _valid_probe_ref(v: str) -> bool:
+    """Validate a probe_id assignment value: '' (inherit), the literal
+    'central' (explicit pin), or an existing probe record."""
+    if v in ("", "central"):
+        return True
+    try:
+        from db.probes import db_get_probe
+        return db_get_probe(v) is not None
+    except Exception:
+        return False
+
+
 def handle(h, method, path, body):
     """Return True if this module handled the request, False otherwise."""
     STATE = app_state.STATE  # always current reference
@@ -448,6 +460,9 @@ def handle(h, method, path, body):
             h._json(400, {"error": "webhook_url too long (max 2048)"}); return True
         if not h._valid_host(host):
             h._json(400, {"error": "invalid host — use a hostname or IP address"}); return True
+        probe_id = str(body.get("probe_id", "") or "").strip()
+        if not _valid_probe_ref(probe_id):
+            h._json(400, {"error": "unknown probe"}); return True
         snmp_community_default  = body.get("snmp_community_default", "").strip()
         snmp_version_default    = body.get("snmp_version_default", "").strip()
         if snmp_version_default not in ("", "1", "2c", "3"):
@@ -486,6 +501,7 @@ def handle(h, method, path, body):
         did = STATE.add_device(name, host, group, site=site)
         with STATE._lock:
             if did in STATE.devices:
+                STATE.devices[did].probe_id = probe_id
                 STATE.devices[did].webhook_url = webhook_url
                 STATE.devices[did].snmp_community_default  = snmp_community_default
                 STATE.devices[did].snmp_version_default    = snmp_version_default
@@ -557,6 +573,34 @@ def handle(h, method, path, body):
         if not dev:
             h._json(404, {"error": "not found"}); return True
         host    = dev.host
+
+        # Devices measured from a remote probe are scanned there too —
+        # central usually can't even reach them. Long-polls the agent
+        # task channel (~10s pickup + ~8s scan), same response shape.
+        from core.probe_assign import effective_probe
+        pid = effective_probe(dev)
+        if pid:
+            from db.probes import db_get_probe
+            probe = db_get_probe(pid)
+            pname = (probe or {}).get("name") or pid
+            if not probe or probe.get("status") != "enrolled":
+                h._json(409, {"error": f"Probe '{pname}' is not enrolled — "
+                              "this device can only be scanned from there"})
+                return True
+            if _time.time() - float(probe.get("last_seen") or 0) > 35:
+                h._json(503, {"error": f"Probe '{pname}' is offline — "
+                              "this device can only be scanned from there"})
+                return True
+            from routes.agent import run_remote_device_scan
+            services, err = run_remote_device_scan(
+                probe, host, _get_scan_targets(), user)
+            if services is None:
+                h._json(502, {"error": err or "remote scan failed"})
+                return True
+            h._json(200, {"did": did, "host": host, "services": services,
+                          "via_probe": probe["name"]})
+            return True
+
         results = []
         _lock   = threading.Lock()
 
@@ -623,18 +667,24 @@ def handle(h, method, path, body):
         user, _ = h._require("operator")
         if not user: return True
         did = m.group(1)
+        if "probe_id" in body and not _valid_probe_ref(str(body.get("probe_id") or "").strip()):
+            h._json(400, {"error": "unknown probe"}); return True
         with STATE._lock:
             dev = STATE.devices.get(did)
             if not dev:
                 h._json(404, {"error": "device not found"}); return True
             _old_host = dev.host
             _old_name = dev.name
+            _old_site  = getattr(dev, "site", "")
+            _old_probe = getattr(dev, "probe_id", "")
             if "group" in body: dev.group = body["group"]
             if "site" in body:
                 _site = str(body.get("site") or "").strip()
                 if len(_site) > 80:
                     h._json(400, {"error": "site too long (max 80 chars)"}); return True
                 dev.site = _site
+            if "probe_id" in body:
+                dev.probe_id = str(body.get("probe_id") or "").strip()
             if "name" in body:
                 _n = str(body["name"]).strip()
                 if len(_n) > 255:
@@ -741,7 +791,17 @@ def handle(h, method, path, body):
             _dev_edit_name = dev.name
             _new_host = dev.host
             _new_name = dev.name
+            _new_site  = getattr(dev, "site", "")
+            _new_probe = getattr(dev, "probe_id", "")
+            _assign_sids = list(dev.sensors.keys())
         _db_enqueue(lambda: db_save(STATE))
+        # Site or probe changes can move this device's sensors between the
+        # central scheduler and a remote probe — re-apply scheduling and let
+        # every agent re-pull its config.
+        if _old_site != _new_site or _old_probe != _new_probe:
+            STATE.apply_probe_assignment([(did, _sid) for _sid in _assign_sids])
+            from routes.probes import _bump_all_probe_configs
+            _bump_all_probe_configs()
         _d = did
         _db_enqueue(lambda: ipam_sync_device_update(_d, _old_host, _new_host, _new_name))
         db_log_audit(user, h.client_address[0], 'device_edit', _dev_edit_name)
@@ -786,18 +846,22 @@ def handle(h, method, path, body):
         return True
 
     # ── /api/device/{did}/role PUT ─────────────────────────────────
-    # Topology role tag for NTM Live auto-links. Whitelist: '', 'switch',
-    # 'gateway', 'backbone'. Persisted on ip_allocations.kind for the device's
-    # host IP (one row per matching subnet). Silent no-op if host isn't a
-    # plain IP or no IPAM subnet covers it.
+    # Topology role tag for NTM Live auto-links. Whitelist = the full Live
+    # Map tier set (mirrors the per-group dropdown) PLUS the legacy IPAM-style
+    # aliases ('backbone', 'core', 'gateway') so previously-written values
+    # remain settable from automation/scripts without a data migration.
+    # Persisted on ip_allocations.kind for the device's host IP (one row per
+    # matching subnet). Silent no-op if host isn't a plain IP or no IPAM
+    # subnet covers it.
     m_role = _RE_DEVICE_ROLE.match(path)
     if m_role and method == "PUT":
         user, _ = h._require("operator")
         if not user: return True
         did_r = m_role.group(1)
         role  = (body.get("role") or "").strip().lower()
-        if role not in ("", "switch", "backbone", "core", "gateway"):
-            h._json(400, {"error": "role must be one of: switch, backbone, core, gateway, or empty"})
+        from monitoring.site_tree import _ROLE_TO_TIER
+        if role != "" and role not in _ROLE_TO_TIER:
+            h._json(400, {"error": "invalid role"})
             return True
         with STATE._lock:
             devr = STATE.devices.get(did_r)
@@ -916,7 +980,7 @@ def handle(h, method, path, body):
         for k in ["name", "stype", "host", "url", "interval", "timeout",
                   "verify_ssl", "snmp_community", "snmp_oid", "snmp_version",
                   "dns_query", "dns_record_type", "dns_server",
-                  "http_expected_status",
+                  "http_expected_status", "cert_warn_days", "cert_crit_days",
                   "warn_ms", "crit_ms",
                   "loss_warn_pct", "loss_crit_pct",
                   "keyword", "keyword_case", "banner_regex", "alerts_muted",
@@ -930,8 +994,13 @@ def handle(h, method, path, body):
                   "radius_test_level", "radius_username", "radius_nas_id",
                   "snmp_v3_user", "snmp_v3_level",
                   "snmp_v3_auth_proto", "snmp_v3_priv_proto", "snmp_v3_context",
-                  "anomaly_enabled", "anomaly_sensitivity", "anomaly_min_samples"]:
+                  "anomaly_enabled", "anomaly_sensitivity", "anomaly_min_samples",
+                  "probe_id"]:
             if k in body: kwargs[k] = body[k]
+        if "probe_id" in kwargs:
+            kwargs["probe_id"] = str(kwargs["probe_id"] or "").strip()
+            if not _valid_probe_ref(kwargs["probe_id"]):
+                h._json(400, {"error": "unknown probe"}); return True
         # Normalize anomaly fields to safe ranges
         if "anomaly_enabled" in kwargs:
             kwargs["anomaly_enabled"] = 1 if kwargs["anomaly_enabled"] else 0
@@ -947,6 +1016,13 @@ def handle(h, method, path, body):
                 kwargs["anomaly_min_samples"] = max(5, min(10000, _m))
             except (TypeError, ValueError):
                 h._json(400, {"error": "anomaly_min_samples must be an integer"}); return True
+        # HTTPS cert-expiry thresholds (days; 0 = off) — clamp to a sane range
+        for _cf in ("cert_warn_days", "cert_crit_days"):
+            if _cf in kwargs and kwargs[_cf] not in (None, ""):
+                try:
+                    kwargs[_cf] = max(0, min(3650, int(kwargs[_cf])))
+                except (TypeError, ValueError):
+                    h._json(400, {"error": f"{_cf} must be an integer"}); return True
         # VMware password: encrypt if provided, skip if empty (keep existing)
         if body.get("vmware_password"):
             from db.backups import encrypt_pw
@@ -1040,6 +1116,11 @@ def handle(h, method, path, body):
         ok = STATE.update_sensor(did, sid, **kwargs)
         if not ok:
             h._json(404, {"error": "sensor not found"}); return True
+        # update_sensor's stop/start already re-resolved the scheduling mode
+        # for probe_id changes; agents still need a config re-pull.
+        if "probe_id" in kwargs:
+            from routes.probes import _bump_all_probe_configs
+            _bump_all_probe_configs()
         _db_enqueue(lambda: db_save(STATE))
         with STATE._lock:
             _se_dev   = STATE.devices.get(did)
@@ -1106,8 +1187,8 @@ def handle(h, method, path, body):
         port  = body.get("port")
         url   = (body.get("url") or "").strip() or None
         try:
-            iv    = max(1, min(3600, int(body.get("interval", 5))))
-            to    = max(1, min(iv, int(body.get("timeout", 4))))
+            iv    = max(1, min(3600, int(body.get("interval", 60))))
+            to    = max(1, min(iv, int(body.get("timeout", 10))))
         except (TypeError, ValueError):
             h._json(400, {"error": "interval and timeout must be integers"}); return True
         vssl  = bool(body.get("verify_ssl", True))
@@ -1123,6 +1204,8 @@ def handle(h, method, path, body):
             cms   = int(body["crit_ms"])  if body.get("crit_ms")  else None
             lwp   = int(body.get("loss_warn_pct", 0) or 0)
             lcp   = int(body.get("loss_crit_pct", 0) or 0)
+            cwd   = max(0, min(3650, int(body.get("cert_warn_days", 0) or 0)))
+            ccd   = max(0, min(3650, int(body.get("cert_crit_days", 0) or 0)))
         except (TypeError, ValueError):
             h._json(400, {"error": "Numeric fields must be integers"}); return True
         kw    = body.get("keyword", "")
@@ -1234,10 +1317,10 @@ def handle(h, method, path, body):
             h._json(400, {"error": "invalid host"}); return True
         try:
             import core.settings as _settings
-            _fa = int(_settings.get("snr_fail_after",    2) or 2)
-            _ra = int(_settings.get("snr_recover_after", 1) or 1)
+            _fa = int(_settings.get("snr_fail_after",    3) or 3)
+            _ra = int(_settings.get("snr_recover_after", 2) or 2)
         except (TypeError, ValueError):
-            _fa, _ra = 2, 1
+            _fa, _ra = 3, 2
         sid = STATE.add_sensor(did, name, stype, host, port, url,
                                iv, to, vssl, comm, oid, sver,
                                fail_after=_fa, recover_after=_ra,
@@ -1285,6 +1368,13 @@ def handle(h, method, path, body):
                 s2.dns_record_type      = body.get("dns_record_type", "A")
                 s2.dns_server           = body.get("dns_server", "")
                 s2.http_expected_status = xstat
+                s2.cert_warn_days       = cwd
+                s2.cert_crit_days       = ccd
+                # Distributed probes: per-sensor override must land BEFORE the
+                # sensor starts so start_sensor resolves the right scheduler.
+                _new_probe = str(body.get("probe_id") or "").strip()
+                if _new_probe and _valid_probe_ref(_new_probe):
+                    s2.probe_id = _new_probe
                 # Optional anomaly config on create (UI enables post-creation; API may set here).
                 if "anomaly_enabled" in body:
                     s2.anomaly_enabled = 1 if body["anomaly_enabled"] else 0

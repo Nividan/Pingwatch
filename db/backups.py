@@ -394,7 +394,10 @@ def db_get_backup_settings(did: str, *, with_secrets: bool = False) -> dict | No
                 cur.execute(
                     "SELECT did, enabled, method, port, username, password_enc, "
                     "enable_enc, commands, paging_cmd, timeout, "
-                    "COALESCE(in_schedule, 0) AS in_schedule "
+                    "COALESCE(in_schedule, 0) AS in_schedule, "
+                    "COALESCE(expected_content, '') AS expected_content, "
+                    "COALESCE(expected_is_regex, 0) AS expected_is_regex, "
+                    "COALESCE(min_bytes, 0) AS min_bytes "
                     "FROM backup_devices WHERE did=%s", (did,)
                 )
                 r = cur.fetchone()
@@ -407,6 +410,9 @@ def db_get_backup_settings(did: str, *, with_secrets: bool = False) -> dict | No
                 "commands": _parse_cmds(r["commands"]),
                 "paging_cmd": r["paging_cmd"], "timeout": r["timeout"],
                 "in_schedule": bool(r["in_schedule"]),
+                "expected_content": r["expected_content"] or '',
+                "expected_is_regex": bool(r["expected_is_regex"]),
+                "min_bytes": int(r["min_bytes"] or 0),
             }
             if with_secrets:
                 result["password_enc"] = r["password_enc"] or ''
@@ -421,7 +427,10 @@ def db_get_backup_settings(did: str, *, with_secrets: bool = False) -> dict | No
         r = con.execute(
             "SELECT did, enabled, method, port, username, password_enc, "
             "enable_enc, commands, paging_cmd, timeout, "
-            "COALESCE(in_schedule, 0) "
+            "COALESCE(in_schedule, 0), "
+            "COALESCE(expected_content, ''), "
+            "COALESCE(expected_is_regex, 0), "
+            "COALESCE(min_bytes, 0) "
             "FROM backup_devices WHERE did=?", (did,)
         ).fetchone()
         if not r:
@@ -433,6 +442,9 @@ def db_get_backup_settings(did: str, *, with_secrets: bool = False) -> dict | No
             "commands": _parse_cmds(r[7]),
             "paging_cmd": r[8], "timeout": r[9],
             "in_schedule": bool(r[10]),
+            "expected_content": r[11] or '',
+            "expected_is_regex": bool(r[12]),
+            "min_bytes": int(r[13] or 0),
         }
         if with_secrets:
             result["password_enc"] = r[5] or ''
@@ -472,14 +484,18 @@ def db_save_backup_settings(did: str, data: dict):
                 cur.execute("""
                     INSERT INTO backup_devices
                         (did, enabled, method, port, username, password_enc, enable_enc,
-                         commands, paging_cmd, timeout, in_schedule)
-                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                         commands, paging_cmd, timeout, in_schedule,
+                         expected_content, expected_is_regex, min_bytes)
+                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
                     ON CONFLICT(did) DO UPDATE SET
                         enabled=EXCLUDED.enabled, method=EXCLUDED.method, port=EXCLUDED.port,
                         username=EXCLUDED.username, password_enc=EXCLUDED.password_enc,
                         enable_enc=EXCLUDED.enable_enc, commands=EXCLUDED.commands,
                         paging_cmd=EXCLUDED.paging_cmd, timeout=EXCLUDED.timeout,
-                        in_schedule=EXCLUDED.in_schedule
+                        in_schedule=EXCLUDED.in_schedule,
+                        expected_content=EXCLUDED.expected_content,
+                        expected_is_regex=EXCLUDED.expected_is_regex,
+                        min_bytes=EXCLUDED.min_bytes
                 """, (
                     did,
                     1 if data.get('enabled') else 0,
@@ -491,6 +507,9 @@ def db_save_backup_settings(did: str, data: dict):
                     data.get('paging_cmd', ''),
                     int(data.get('timeout', 30)),
                     1 if data.get('in_schedule') else 0,
+                    (data.get('expected_content') or '')[:200],
+                    1 if data.get('expected_is_regex') else 0,
+                    int(data.get('min_bytes', 0) or 0),
                 ))
         except Exception as e:
             log.error(f"backup save_settings error (did={did}): {e}")
@@ -520,14 +539,18 @@ def db_save_backup_settings(did: str, data: dict):
         con.execute("""
             INSERT INTO backup_devices
                 (did, enabled, method, port, username, password_enc, enable_enc,
-                 commands, paging_cmd, timeout, in_schedule)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?)
+                 commands, paging_cmd, timeout, in_schedule,
+                 expected_content, expected_is_regex, min_bytes)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             ON CONFLICT(did) DO UPDATE SET
                 enabled=excluded.enabled, method=excluded.method, port=excluded.port,
                 username=excluded.username, password_enc=excluded.password_enc,
                 enable_enc=excluded.enable_enc, commands=excluded.commands,
                 paging_cmd=excluded.paging_cmd, timeout=excluded.timeout,
-                in_schedule=excluded.in_schedule
+                in_schedule=excluded.in_schedule,
+                expected_content=excluded.expected_content,
+                expected_is_regex=excluded.expected_is_regex,
+                min_bytes=excluded.min_bytes
         """, (
             did,
             1 if data.get('enabled') else 0,
@@ -540,6 +563,9 @@ def db_save_backup_settings(did: str, data: dict):
             data.get('paging_cmd', ''),
             int(data.get('timeout', 30)),
             1 if data.get('in_schedule') else 0,
+            (data.get('expected_content') or '')[:200],
+            1 if data.get('expected_is_regex') else 0,
+            int(data.get('min_bytes', 0) or 0),
         ))
         con.commit()
     finally:

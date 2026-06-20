@@ -75,7 +75,7 @@ _JS_FILES = _VENDOR_JS_FILES + [
     "forms-settings.js", "forms-io.js", "forms-users.js", "forms-ldap.js", "forms-radius.js",
     "forms-saml.js", "forms-oidc.js",
     "forms-discovery.js", "forms-import.js",
-    "dashboard.js", "events.js", "backups.js", "ipam.js", "reports.js", "logs.js", "alerting.js", "app.js",
+    "dashboard.js", "events.js", "backups.js", "ipam.js", "reports.js", "logs.js", "alerting.js", "probes.js", "app.js",
 ]
 
 # Vendored CSS appended to the inline <style> block in the same order.
@@ -170,7 +170,16 @@ def _load_html() -> bytes:
 class QuietServer(http.server.ThreadingHTTPServer):
     """ThreadingHTTPServer that suppresses noisy browser-disconnect errors."""
 
-    _IGNORED = ('ConnectionAbortedError', 'ConnectionResetError', 'BrokenPipeError', 'SSLEOFError')
+    # All of these mean "the client went away mid-request" and are not
+    # actionable. 'SSLError' is the base class and catches the platform-
+    # dependent write-time variants OpenSSL raises when a TLS peer disappears
+    # mid-flush — e.g. "ssl.SSLError: [SYS] unknown error (_ssl.c:NNNN)"
+    # (SSL_ERROR_SYSCALL/EOF) — which 'SSLEOFError' does NOT match as a
+    # substring. 'SSLZeroReturnError' is a clean TLS close_notify. These only
+    # ever reach handle_error per-connection (cert/key load errors surface at
+    # startup, not here), so suppressing the whole family is safe.
+    _IGNORED = ('ConnectionAbortedError', 'ConnectionResetError', 'BrokenPipeError',
+                'SSLEOFError', 'SSLZeroReturnError', 'SSLError')
 
     def handle_error(self, request, client_address):
         if any(e in traceback.format_exc() for e in self._IGNORED):
@@ -181,6 +190,13 @@ class QuietServer(http.server.ThreadingHTTPServer):
 # ── HTTP Handler ─────────────────────────────────────────────────
 
 class Handler(http.server.BaseHTTPRequestHandler):
+    # Per-socket timeout (socketserver applies it in setup()). Without it the
+    # default is None: a stalled client pins its handler thread forever in
+    # readline()/read()/write() — slowloris or just flaky clients accumulate
+    # threads without bound on a 24/7 deployment. The timeout is per-recv/send,
+    # so slow-but-progressing uploads and SSE streams are unaffected.
+    timeout = 60
+
     def log_message(self, fmt, *args): pass
 
     # ── Auth helpers ──────────────────────────────────────────────
@@ -235,6 +251,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if kind == "api_token" and self.path.startswith("/events"):
             self._json(400, {"error": "SSE requires cookie session"})
             return None
+        # Probe-scoped tokens are jailed to the agent API — a compromised
+        # branch host must not be able to read or mutate anything else.
+        if kind == "api_token" and _scope == "probe" \
+                and not self.path.startswith("/api/agent/"):
+            self._json(403, {"error": "forbidden"})
+            return None
         return user
 
     def _auth_role(self):
@@ -258,6 +280,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if _ROLE_RANK.get(role, 0) < _ROLE_RANK.get(min_role, 0):
             self._json(403, {"error": f"Requires {min_role} role"}); return None, None
         if kind == "api_token":
+            # Probe-scoped tokens are jailed to /api/agent/* — even if a
+            # future role default would let them pass the rank check above.
+            if scope == "probe" and not self.path.startswith("/api/agent/"):
+                self._json(403, {"error": "forbidden"})
+                return None, None
             if scope == "read" and self.command not in ("GET", "HEAD", "OPTIONS"):
                 self._json(403, {"error": "read-only token cannot perform writes"})
                 return None, None
@@ -470,11 +497,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 return
 
         # ── API routes ────────────────────────────────────────────
-        from routes import tls as _tls_mod, ipam, ldap as _ldap_mod, radius as _radius_mod, alert_profiles as _alert_profiles_mod, alert_events as _alert_events_mod, maintenance_windows as _maint_mod, groups as _groups_mod, discovery as _disc_mod, licenses as _lic_mod, reports as _reports_mod, saml as _saml_mod, oidc as _oidc_mod, imports as _imports_mod, auto_discovery as _ad_mod, diagnostics as _diag_mod, sites as _sites_mod, livemap as _livemap_mod, api_tokens as _api_tokens_mod
+        from routes import tls as _tls_mod, ipam, ldap as _ldap_mod, radius as _radius_mod, alert_profiles as _alert_profiles_mod, alert_events as _alert_events_mod, maintenance_windows as _maint_mod, groups as _groups_mod, discovery as _disc_mod, licenses as _lic_mod, reports as _reports_mod, saml as _saml_mod, oidc as _oidc_mod, imports as _imports_mod, auto_discovery as _ad_mod, diagnostics as _diag_mod, sites as _sites_mod, livemap as _livemap_mod, api_tokens as _api_tokens_mod, probes as _probes_mod, agent as _agent_mod
         # _imports_mod handles GET only for the Import Subnets CSV template
         # (every other import endpoint is POST). Adding it to the GET dispatch
         # list lets the template download <a href> resolve.
-        for mod in (auth, devices, monitoring, settings, topology, export, backups, ipam, _ldap_mod, _radius_mod, _tls_mod, _alert_profiles_mod, _alert_events_mod, _maint_mod, _groups_mod, _disc_mod, _lic_mod, _reports_mod, _saml_mod, _oidc_mod, _imports_mod, _ad_mod, _diag_mod, _sites_mod, _livemap_mod, _api_tokens_mod):
+        for mod in (auth, devices, monitoring, settings, topology, export, backups, ipam, _ldap_mod, _radius_mod, _tls_mod, _alert_profiles_mod, _alert_events_mod, _maint_mod, _groups_mod, _disc_mod, _lic_mod, _reports_mod, _saml_mod, _oidc_mod, _imports_mod, _ad_mod, _diag_mod, _sites_mod, _livemap_mod, _api_tokens_mod, _probes_mod, _agent_mod):
             if mod.handle(self, 'GET', p, {}):
                 return
 
@@ -499,8 +526,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
         body = self._body()
         if body is None: return
 
-        from routes import ipam, ldap as _ldap_mod, radius as _radius_mod, alert_profiles as _alert_profiles_mod, alert_events as _alert_events_mod, maintenance_windows as _maint_mod, groups as _groups_mod, discovery as _disc_mod, licenses as _lic_mod, reports as _reports_mod, saml as _saml_mod, oidc as _oidc_mod, imports as _imports_mod, auto_discovery as _ad_mod, diagnostics as _diag_mod, sites as _sites_mod, api_tokens as _api_tokens_mod
-        for mod in (auth, devices, monitoring, settings, topology, export, backups, ipam, _ldap_mod, _radius_mod, _tls_mod, _alert_profiles_mod, _alert_events_mod, _maint_mod, _groups_mod, _disc_mod, _lic_mod, _reports_mod, _saml_mod, _oidc_mod, _imports_mod, _ad_mod, _diag_mod, _sites_mod, _api_tokens_mod):
+        from routes import ipam, ldap as _ldap_mod, radius as _radius_mod, alert_profiles as _alert_profiles_mod, alert_events as _alert_events_mod, maintenance_windows as _maint_mod, groups as _groups_mod, discovery as _disc_mod, licenses as _lic_mod, reports as _reports_mod, saml as _saml_mod, oidc as _oidc_mod, imports as _imports_mod, auto_discovery as _ad_mod, diagnostics as _diag_mod, sites as _sites_mod, api_tokens as _api_tokens_mod, probes as _probes_mod, agent as _agent_mod
+        for mod in (auth, devices, monitoring, settings, topology, export, backups, ipam, _ldap_mod, _radius_mod, _tls_mod, _alert_profiles_mod, _alert_events_mod, _maint_mod, _groups_mod, _disc_mod, _lic_mod, _reports_mod, _saml_mod, _oidc_mod, _imports_mod, _ad_mod, _diag_mod, _sites_mod, _api_tokens_mod, _probes_mod, _agent_mod):
             if mod.handle(self, 'POST', p, body):
                 return
 
@@ -508,12 +535,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
     # ── PATCH ─────────────────────────────────────────────────────
     def do_PATCH(self):
-        from routes import auth, devices, settings, topology, tls as _tls_mod, ldap as _ldap_mod, radius as _radius_mod, alert_profiles as _alert_profiles_mod, maintenance_windows as _maint_mod, groups as _groups_mod, licenses as _lic_mod, reports as _reports_mod, saml as _saml_mod, oidc as _oidc_mod, ipam as _ipam_mod
+        from routes import auth, devices, settings, topology, tls as _tls_mod, ldap as _ldap_mod, radius as _radius_mod, alert_profiles as _alert_profiles_mod, maintenance_windows as _maint_mod, groups as _groups_mod, licenses as _lic_mod, reports as _reports_mod, saml as _saml_mod, oidc as _oidc_mod, ipam as _ipam_mod, probes as _probes_mod
         p    = urlparse(self.path).path
         body = self._body()
         if body is None: return
 
-        for mod in (auth, devices, settings, topology, _ldap_mod, _radius_mod, _tls_mod, _alert_profiles_mod, _maint_mod, _groups_mod, _lic_mod, _reports_mod, _saml_mod, _oidc_mod, _ipam_mod):
+        for mod in (auth, devices, settings, topology, _ldap_mod, _radius_mod, _tls_mod, _alert_profiles_mod, _maint_mod, _groups_mod, _lic_mod, _reports_mod, _saml_mod, _oidc_mod, _ipam_mod, _probes_mod):
             if mod.handle(self, 'PATCH', p, body):
                 return
 
@@ -549,8 +576,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
         from routes import auth, devices, topology, backups
         p = urlparse(self.path).path
 
-        from routes import ipam, alert_profiles as _alert_profiles_mod, maintenance_windows as _maint_mod, groups as _groups_mod, discovery as _disc_mod, licenses as _lic_mod, reports as _reports_mod, sites as _sites_mod, api_tokens as _api_tokens_mod
-        for mod in (auth, devices, topology, backups, ipam, _alert_profiles_mod, _maint_mod, _groups_mod, _disc_mod, _lic_mod, _reports_mod, _sites_mod, _api_tokens_mod):
+        from routes import ipam, alert_profiles as _alert_profiles_mod, maintenance_windows as _maint_mod, groups as _groups_mod, discovery as _disc_mod, licenses as _lic_mod, reports as _reports_mod, sites as _sites_mod, api_tokens as _api_tokens_mod, probes as _probes_mod
+        for mod in (auth, devices, topology, backups, ipam, _alert_profiles_mod, _maint_mod, _groups_mod, _disc_mod, _lic_mod, _reports_mod, _sites_mod, _api_tokens_mod, _probes_mod):
             if mod.handle(self, 'DELETE', p, {}):
                 return
 
@@ -600,6 +627,51 @@ def _start_http_redirect(http_port: int, https_port: int):
         log.info(f"HTTP→HTTPS redirect active: http://:{http_port} → https://:{https_port}")
     except OSError as _e:
         log.warning(f"HTTP redirect server could not bind to port {http_port}: {_e}")
+
+
+def _start_vmware_prewarm():
+    """Background-login AND warm (perf catalog + inventory) every distinct
+    vCenter used by centrally-run vmware sensors, so the first probe reuses a
+    warm session instead of racing a cold one (which returns "VM not found" /
+    "metric not available" → false DOWN that recovers a cycle later). Each
+    vCenter warms on its own thread so the head start (start_sensor delays
+    vmware first probes ~12s) covers them all in parallel, not serially."""
+    from core.probe_assign import effective_probe
+    from db.backups import decrypt_pw
+    specs = {}
+    with app_state.STATE._lock:
+        pairs = [(d, s) for d in app_state.STATE.devices.values()
+                 for s in d.sensors.values()]
+    for d, s in pairs:
+        if s.stype != "vmware" or not s.running:
+            continue
+        if effective_probe(d, s):
+            continue                    # measured from a remote probe
+        user = s.vmware_user or getattr(d, "vmware_user_default", "") or ""
+        pw_enc = (s.vmware_password or
+                  getattr(d, "vmware_password_default", "") or "")
+        try:
+            pw = decrypt_pw(pw_enc) if pw_enc else ""
+        except Exception:
+            continue
+        if not (s.host and user and pw):
+            continue
+        specs[(s.host, user, int(s.port or 443))] = (
+            s.host, user, pw, int(s.port or 443), bool(s.verify_ssl))
+    if not specs:
+        return
+
+    def _warm_one(host, user, pw, port, vssl):
+        try:
+            from vmware.client import prewarm_session
+        except Exception:
+            return                      # pyvmomi shim/module unavailable
+        ok = prewarm_session(host, user, pw, port=port, verify_ssl=vssl)
+        log.info(f"vCenter session prewarm "
+                 f"{'ok' if ok else 'failed'}: {host}:{port}")
+    for host, user, pw, port, vssl in specs.values():
+        threading.Thread(target=_warm_one, args=(host, user, pw, port, vssl),
+                         daemon=True, name="vmw-prewarm").start()
 
 
 # ── Entry point ───────────────────────────────────────────────────
@@ -944,6 +1016,31 @@ def main():
     except Exception as _e:
         log.warning(f"Auto-Discovery loop did not start: {_e}")
 
+    # Distributed-probes watchdog — flags probes that stop checking in
+    # (one probe_offline event, stale-grey sensors) and expires stuck
+    # agent tasks. Cheap 10s sweep over a tiny table.
+    try:
+        from monitoring.probe_watchdog import probe_watchdog_loop
+        threading.Thread(target=probe_watchdog_loop, daemon=True,
+                         name="probe-watchdog").start()
+    except Exception as _e:
+        log.warning(f"Probe watchdog did not start: {_e}")
+
+    # Startup grace — defer down/threshold events while first probes settle
+    # (cold vCenter sessions, slow first probes); sensors still failing at
+    # the end of the window emit with their true transition timestamps.
+    try:
+        app_state.STATE.begin_startup_grace()
+    except Exception as _e:
+        log.warning(f"Startup grace not armed: {_e}")
+
+    # Pre-warm vCenter sessions so the first vmware probe cycle reuses a
+    # cached login instead of paying SmartConnect and tripping false DOWNs.
+    try:
+        _start_vmware_prewarm()
+    except Exception as _e:
+        log.warning(f"vmware prewarm did not start: {_e}")
+
     threading.Thread(target=server.serve_forever, daemon=True).start()
 
     _scheme = "https" if app_state.tls_active else "http"
@@ -1050,26 +1147,73 @@ def main():
         _headless_stop.wait()
 
     # ── Graceful shutdown ─────────────────────────────────────────
+    # Order: stop probe sources → drain in-flight probes (bounded) → persist
+    # config + final samples → stop writers → stop remaining loops → drain
+    # alerts → close pool. Draining probes BEFORE the final flush means their
+    # last results land in the buffer and get written; bounding the drain
+    # keeps total shutdown inside systemd's default 90 s kill window even
+    # when a probe is wedged at its hard cap.
     log.info("Shutting down...")
-    STATE.stop_all()
-    STATE._executor.shutdown(wait=False)
-    db_save(STATE)
-    log.info("Configuration saved.")
-    # Flush the in-memory sample buffer BEFORE draining the writer queues —
-    # flush enqueues one final batch-insert that the drain then writes. The
-    # reverse order would discard the last buffer.
-    try:
-        db_flush_samples()
-    except Exception as e:
-        log.error(f"db_flush_samples at shutdown failed: {e}")
-    # Stop the 60 s autosave loop BEFORE tearing down writers / the PG pool.
-    # Otherwise its uninterrupted sleep can wake up after pg_close_pool() and
-    # emit a misleading 'PostgreSQL pool is closed' error.
+    # Snapshot each sensor's run/pause intent BEFORE stop_all flips running=False
+    # on every sensor (a clean probe halt, NOT a user pause). The shutdown save
+    # below restores this so a running sensor isn't persisted as paused and left
+    # stopped on the next boot.
+    _run_intent = {(s.device_id, s.sensor_id): s.running
+                   for d in STATE.devices.values() for s in d.sensors.values()}
+    # resolve_events=False: restarting the monitor mid-outage must not close
+    # open incidents (downtime continuity, ack state, boot re-hydration).
+    STATE.stop_all(resolve_events=False)
+    # Stop periodic background feeders early so nothing races the teardown
+    # below (autosave waking after pool close, flush loop double-draining).
     try:
         from db.persistence import stop_autosave
         stop_autosave()
     except Exception as e:
         log.warning(f"stop_autosave failed: {e}")
+    try:
+        from db.samples import stop_sample_flush, stop_rollup_worker
+        stop_sample_flush()
+        stop_rollup_worker()
+    except Exception as e:
+        log.warning(f"stop sample/rollup workers failed: {e}")
+    # Bounded drain of probe workers: shutdown(wait=True) alone can block up
+    # to the 90 s probe hard cap. Also needed before closing the PG pool —
+    # an in-flight alert-engine query against a closed pool raises
+    # "InterfaceError: cursor already closed".
+    try:
+        STATE._executor.shutdown(wait=False)
+        _drain_deadline = time.time() + 15
+        for _wt in list(getattr(STATE._executor, "_threads", []) or []):
+            _wt.join(timeout=max(0.1, _drain_deadline - time.time()))
+        _stuck = sum(1 for _wt in getattr(STATE._executor, "_threads", [])
+                     if _wt.is_alive())
+        if _stuck:
+            log.warning(f"{_stuck} probe worker(s) still busy after 15s drain "
+                        "— proceeding with shutdown")
+    except Exception as e:
+        log.warning(f"executor drain failed: {e}")
+    # Past the bounded drain: workers that finished in time already buffered
+    # their last sample. Gate _process_result so any still-wedged worker that
+    # finishes later (e.g. a VMware probe on its 60s hard cap) drops its result
+    # instead of dispatching alerts and writing to the closing pool — the
+    # source of the "PostgreSQL pool is closed" / false "missing template" spam.
+    STATE._shutting_down = True
+    # Restore pre-shutdown run/pause intent so db_save persists what the user had
+    # running — not the transient stop_all state (process is exiting; safe).
+    for _d in STATE.devices.values():
+        for _s in _d.sensors.values():
+            _ri = _run_intent.get((_s.device_id, _s.sensor_id))
+            if _ri is not None:
+                _s.running = _ri
+    db_save(STATE)
+    log.info("Configuration saved.")
+    # Flush the in-memory sample buffer BEFORE draining the writer queues —
+    # the flush writes directly; doing it after probe drain captures the
+    # final probe results too.
+    try:
+        db_flush_samples()
+    except Exception as e:
+        log.error(f"db_flush_samples at shutdown failed: {e}")
     try:
         summary = shutdown_writers(timeout=10.0)
         log.info(
@@ -1085,15 +1229,6 @@ def main():
             )
     except Exception as e:
         log.error(f"shutdown_writers failed: {e}")
-    # Stop periodic background threads before tearing down the pool,
-    # otherwise they race pg_close_pool() and spam 'NoneType has no
-    # attribute getconn' errors until the process actually exits.
-    try:
-        from db.samples import stop_sample_flush, stop_rollup_worker
-        stop_sample_flush()
-        stop_rollup_worker()
-    except Exception as e:
-        log.warning(f"stop sample/rollup workers failed: {e}")
     try:
         from core.ldap_auth import stop_ldap_sync
         stop_ldap_sync()
@@ -1114,16 +1249,11 @@ def main():
         stop_backup_scheduler()
     except Exception as e:
         log.warning(f"stop backup scheduler failed: {e}")
-    # Final drain of probe workers BEFORE closing the PG pool. The earlier
-    # `STATE._executor.shutdown(wait=False)` lets the rest of shutdown run in
-    # parallel, but a probe that cleared its `s.running` check continues
-    # through the alert-engine path (e.g. db_get_stage_state on alert_profile_state).
-    # Closing the pool while such a query is mid-flight raises
-    # "InterfaceError: cursor already closed".
     try:
-        STATE._executor.shutdown(wait=True)
+        from monitoring.probe_watchdog import stop_probe_watchdog
+        stop_probe_watchdog()
     except Exception as e:
-        log.warning(f"executor final drain failed: {e}")
+        log.warning(f"stop probe watchdog failed: {e}")
     # Drain pending alert batches synchronously — otherwise alert_batcher's
     # atexit hook runs after pg_close_pool() and every dispatch raises
     # "PostgreSQL pool is closed".

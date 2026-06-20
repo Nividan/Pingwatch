@@ -172,6 +172,89 @@ def _now_monotonic() -> float:
     return _t.monotonic()
 
 
+def _ipam_status_label(kind: str, name: str) -> str:
+    """Human-readable allocation status, mirroring the IPAM grid badge."""
+    return {
+        'gateway':    'Gateway',
+        'reserved':   'Reserved',
+        'conflict':   'Conflict',
+        'stale':      'Stale',
+        'discovered': 'Discovered',
+    }.get((kind or '').lower(), 'Used' if (name or '').strip() else 'Free')
+
+
+def _build_ipam_csv():
+    """Assemble the IPAM export CSV — every allocation across every subnet.
+
+    Returns (utf8_bytes_with_bom, filename, row_count). Columns:
+    Site, Subnet, IP Address, Name, DNS, Status, Licenses, Modified By,
+    Last Modified. UTF-8 BOM so Excel renders non-ASCII names/sites.
+    """
+    import csv, io, datetime
+    from db.helpers import db_query
+
+    rows = [dict(r) for r in db_query(
+        'main',
+        "SELECT s.site AS site, s.cidr AS cidr, a.ip AS ip, "
+        "COALESCE(a.name,'') AS name, COALESCE(a.dns_name,'') AS dns_name, "
+        "COALESCE(a.kind,'') AS kind, COALESCE(a.modified_by,'') AS modified_by, "
+        "COALESCE(a.modified_at,0) AS modified_at, "
+        "COALESCE(a.device_id,'') AS device_id "
+        "FROM ip_allocations a JOIN ipam_subnets s ON a.subnet_id = s.id"
+    )]
+
+    # device_id → ["LicName (expiry; status)", …]. Best-effort: the table may
+    # be absent on a very old DB — an empty Licenses column is fine then.
+    lic_map = {}
+    try:
+        for _r in db_query(
+                'main',
+                "SELECT did, COALESCE(license_name,'') AS license_name, "
+                "COALESCE(expiry_date,'') AS expiry_date, "
+                "COALESCE(last_status,'') AS last_status "
+                "FROM device_licenses ORDER BY did, expiry_date"):
+            r = dict(_r)
+            label = (r['license_name'] or '').strip()
+            if not label:
+                continue
+            extra = '; '.join(p for p in (str(r['expiry_date'] or '').strip(),
+                                          str(r['last_status'] or '').strip()) if p)
+            lic_map.setdefault(r['did'], []).append(
+                f"{label} ({extra})" if extra else label)
+    except Exception as e:
+        log.warning(f"IPAM export: licenses unavailable: {e}")
+
+    def _ip_key(ip):
+        try:
+            return (0, int(ipaddress.ip_address(ip)))
+        except ValueError:
+            return (1, 0)
+    rows.sort(key=lambda r: ((r['site'] or '').lower(),
+                             (r['cidr'] or ''), _ip_key(r['ip'])))
+
+    buf = io.StringIO()
+    w = csv.writer(buf, lineterminator='\n')
+    w.writerow(['Site', 'Subnet', 'IP Address', 'Name', 'DNS', 'Status',
+                'Licenses', 'Modified By', 'Last Modified'])
+    for r in rows:
+        ma = r.get('modified_at') or 0
+        try:
+            last_mod = (datetime.datetime.utcfromtimestamp(float(ma))
+                        .strftime('%Y-%m-%d %H:%M:%S') if ma else '')
+        except (TypeError, ValueError, OSError):
+            last_mod = ''
+        w.writerow([
+            r['site'] or '', r['cidr'] or '', r['ip'] or '',
+            r['name'] or '', r['dns_name'] or '',
+            _ipam_status_label(r['kind'], r['name']),
+            '; '.join(lic_map.get(r['device_id'], [])),
+            r['modified_by'] or '', last_mod,
+        ])
+    data = (chr(0xFEFF) + buf.getvalue()).encode('utf-8')   # BOM for Excel
+    fname = f"pingwatch-ipam-{datetime.date.today().isoformat()}.csv"
+    return data, fname, len(rows)
+
+
 def handle(h, method, path, body):
     """Return True if this module handled the request, False otherwise."""
     # ── GET /api/sites ───────────────────────────────────────────
@@ -226,6 +309,25 @@ def handle(h, method, path, body):
         user, _ = h._require('viewer')
         if not user: return True
         h._json(200, {'subnets': db_list_subnets()})
+        return True
+
+    # ── GET /api/ipam/export → CSV of every allocation, all subnets ──
+    if path == '/api/ipam/export' and method == 'GET':
+        user, _ = h._require('viewer')
+        if not user: return True
+        try:
+            data, fname, n = _build_ipam_csv()
+        except Exception as e:
+            h._error(500, 'IPAM export failed', e, context='ipam_export')
+            return True
+        db_log_audit(user, h.client_address[0], 'ipam_export', f'{n} allocations')
+        h.send_response(200)
+        h.send_header('Content-Type', 'text/csv; charset=utf-8')
+        h.send_header('Content-Disposition', f'attachment; filename="{fname}"')
+        h.send_header('Content-Length', str(len(data)))
+        h.send_header('Cache-Control', 'no-store')
+        h.end_headers()
+        h.wfile.write(data)
         return True
 
     # ── GET /api/ipam/search?q=… ──────────────────────────────────
@@ -476,15 +578,46 @@ def handle(h, method, path, body):
                 # instead of failing with a 409.
                 h._json(200, {'ok': True, 'scan_id': existing, 'already_running': True})
                 return True
-        # Reuse the discovery scanner with skip_monitored=False so already-
-        # monitored IPs still get refreshed in the allocation grid. Mode is
-        # 'ping' (cheaper, no port-scan enrichment) — IPAM only needs the
-        # ip + hostname; sensor-suggestion data isn't displayed in the grid.
-        from monitoring.subnet_discovery import start_scan
-        scan_id, err = start_scan(sub['cidr'], skip_monitored=False, mode='ping')
-        if not scan_id:
-            log.warning(f"IPAM scan start failed: subnet={subnet_id} cidr={sub['cidr']!r} err={err!r}")
-            h._json(400, {'error': err or 'scan start failed'}); return True
+        # Distributed probes: a subnet whose site is bound to a probe scans
+        # FROM that probe — central usually can't reach branch ranges. The
+        # registry entry looks identical to a local scan, so the poll
+        # endpoint and the apply worker below need no changes.
+        from core.probe_assign import site_probe
+        _probe_id = site_probe((sub.get('site') or '').strip())
+        if _probe_id:
+            from db.probes import db_get_probe, db_create_task
+            _probe = db_get_probe(_probe_id)
+            if not _probe or _probe.get('status') != 'enrolled':
+                h._json(409, {'error': "this subnet's site is bound to a probe "
+                                       "that is not enrolled — scan unavailable"})
+                return True
+            from monitoring.subnet_discovery import (register_remote_scan,
+                                                     bind_remote_scan_task,
+                                                     complete_remote_scan)
+            scan_id, err = register_remote_scan(sub['cidr'], 'ping', _probe_id)
+            if not scan_id:
+                h._json(400, {'error': err or 'scan start failed'}); return True
+            import json as _json
+            _tid = db_create_task(_probe_id, 'ipam_scan',
+                                  _json.dumps({'scan_id': scan_id,
+                                               'cidr': sub['cidr'],
+                                               'mode': 'ping',
+                                               'subnet_id': subnet_id}),
+                                  user)
+            if not _tid:
+                complete_remote_scan(scan_id, [], error='failed to queue task')
+                h._json(500, {'error': 'failed to queue scan task'}); return True
+            bind_remote_scan_task(scan_id, _tid)
+        else:
+            # Reuse the discovery scanner with skip_monitored=False so already-
+            # monitored IPs still get refreshed in the allocation grid. Mode is
+            # 'ping' (cheaper, no port-scan enrichment) — IPAM only needs the
+            # ip + hostname; sensor-suggestion data isn't displayed in the grid.
+            from monitoring.subnet_discovery import start_scan
+            scan_id, err = start_scan(sub['cidr'], skip_monitored=False, mode='ping')
+            if not scan_id:
+                log.warning(f"IPAM scan start failed: subnet={subnet_id} cidr={sub['cidr']!r} err={err!r}")
+                h._json(400, {'error': err or 'scan start failed'}); return True
         with _active_scans_mutex:
             _active_scans[subnet_id] = scan_id
         t = threading.Thread(
@@ -533,9 +666,15 @@ def handle(h, method, path, body):
         if not user: return True
         subnet_id = int(m.group(1))
         scan_id   = m.group(2)
-        from monitoring.subnet_discovery import cancel_scan
+        from monitoring.subnet_discovery import cancel_scan, get_scan
         ok = cancel_scan(scan_id)
         if ok:
+            # Remote scans: flip the agent task too so the probe aborts the
+            # sweep (relayed via the checkin response's cancelled_tasks).
+            _st = get_scan(scan_id)
+            if _st and _st.get('task_id'):
+                from db.probes import db_set_task_state
+                db_set_task_state(int(_st['task_id']), 'cancelled')
             log.info(f"IPAM scan cancelled: subnet={subnet_id} scan_id={scan_id} by={user!r}")
         h._json(200, {'ok': bool(ok)})
         return True

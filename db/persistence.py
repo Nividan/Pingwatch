@@ -14,6 +14,18 @@ from db.backend   import is_pg
 from db.core      import _db_enqueue, _logs_enqueue
 import core.settings as _settings
 
+# Set True only after a load pass completes without error. db_save() refuses
+# to run until then: its "delete every row not present in memory" semantics
+# would otherwise wipe the whole device/sensor configuration on the first
+# autosave after a transiently failed load (PG blip at boot, SQLite file
+# locked past its timeout, …).
+_LOAD_OK = False
+
+
+def _mark_load_ok():
+    global _LOAD_OK
+    _LOAD_OK = True
+
 
 def _int_or_none(v):
     """Coerce a value to int or None. Accepts None, '' → None. Everything else
@@ -87,7 +99,8 @@ def _pg_save(state):
              getattr(dev, "snmp_v3_priv_pass_default", ""),
              getattr(dev, "snmp_v3_context_default", ""),
              json.dumps(getattr(dev, "parent_device_ids", []) or []),
-             json.dumps(getattr(dev, "parent_device_ports", {}) or {}))
+             json.dumps(getattr(dev, "parent_device_ports", {}) or {}),
+             getattr(dev, "probe_id", "") or "")
             for dev in state.devices.values()
         ]
         snr_rows = [
@@ -146,7 +159,11 @@ def _pg_save(state):
              getattr(s, "snmp_v3_auth_pass", ""),
              getattr(s, "snmp_v3_priv_proto", ""),
              getattr(s, "snmp_v3_priv_pass", ""),
-             getattr(s, "snmp_v3_context", ""))
+             getattr(s, "snmp_v3_context", ""),
+             getattr(s, "probe_id", "") or "",
+             int(getattr(s, "cert_warn_days", 0) or 0),
+             int(getattr(s, "cert_crit_days", 0) or 0),
+             int(bool(getattr(s, "running", True))))
             for dev in state.devices.values()
             for s in dev.sensors.values()
         ]
@@ -169,7 +186,7 @@ def _pg_save(state):
                     "snmp_v3_user_default,snmp_v3_level_default,"
                     "snmp_v3_auth_proto_default,snmp_v3_auth_pass_default,"
                     "snmp_v3_priv_proto_default,snmp_v3_priv_pass_default,"
-                    "snmp_v3_context_default,parent_device_ids,parent_device_ports) "
+                    "snmp_v3_context_default,parent_device_ids,parent_device_ports,probe_id) "
                     "VALUES %s "
                     "ON CONFLICT (did) DO UPDATE SET "
                     "name=EXCLUDED.name, host=EXCLUDED.host, grp=EXCLUDED.grp, site=EXCLUDED.site, "
@@ -191,7 +208,8 @@ def _pg_save(state):
                     "snmp_v3_priv_pass_default=EXCLUDED.snmp_v3_priv_pass_default, "
                     "snmp_v3_context_default=EXCLUDED.snmp_v3_context_default, "
                     "parent_device_ids=EXCLUDED.parent_device_ids, "
-                    "parent_device_ports=EXCLUDED.parent_device_ports",
+                    "parent_device_ports=EXCLUDED.parent_device_ports, "
+                    "probe_id=EXCLUDED.probe_id",
                     dev_rows,
                 )
             # Delete orphaned devices
@@ -221,7 +239,8 @@ def _pg_save(state):
                     "sftp_remote_path,sftp_expected_sha256,"
                     "radius_secret,radius_test_level,radius_username,radius_password,radius_nas_id,"
                     "snmp_v3_user,snmp_v3_level,snmp_v3_auth_proto,snmp_v3_auth_pass,"
-                    "snmp_v3_priv_proto,snmp_v3_priv_pass,snmp_v3_context) "
+                    "snmp_v3_priv_proto,snmp_v3_priv_pass,snmp_v3_context,probe_id,"
+                    "cert_warn_days,cert_crit_days,running) "
                     "VALUES %s "
                     "ON CONFLICT (did, sid) DO UPDATE SET "
                     "name=EXCLUDED.name, stype=EXCLUDED.stype, host=EXCLUDED.host, "
@@ -265,7 +284,11 @@ def _pg_save(state):
                     "snmp_v3_auth_pass=EXCLUDED.snmp_v3_auth_pass, "
                     "snmp_v3_priv_proto=EXCLUDED.snmp_v3_priv_proto, "
                     "snmp_v3_priv_pass=EXCLUDED.snmp_v3_priv_pass, "
-                    "snmp_v3_context=EXCLUDED.snmp_v3_context",
+                    "snmp_v3_context=EXCLUDED.snmp_v3_context, "
+                    "probe_id=EXCLUDED.probe_id, "
+                    "cert_warn_days=EXCLUDED.cert_warn_days, "
+                    "cert_crit_days=EXCLUDED.cert_crit_days, "
+                    "running=EXCLUDED.running",
                     snr_rows,
                 )
             # Delete orphaned sensors
@@ -289,6 +312,11 @@ def _pg_save(state):
 
 def db_save(state):
     """Upsert all devices and sensors; remove deleted rows."""
+    if not _LOAD_OK:
+        log.warning("DB save skipped — initial device/sensor load has not "
+                    "completed successfully; saving now could erase the stored "
+                    "configuration. Fix the load error and restart.")
+        return
     with state._lock:
         _nd = len(state.devices)
         _ns = sum(len(d.sensors) for d in state.devices.values())
@@ -323,7 +351,8 @@ def db_save(state):
              getattr(dev, "snmp_v3_priv_pass_default", ""),
              getattr(dev, "snmp_v3_context_default", ""),
              json.dumps(getattr(dev, "parent_device_ids", []) or []),
-             json.dumps(getattr(dev, "parent_device_ports", {}) or {}))
+             json.dumps(getattr(dev, "parent_device_ports", {}) or {}),
+             getattr(dev, "probe_id", "") or "")
             for dev in state.devices.values()
         ]
         snr_rows = [
@@ -382,7 +411,11 @@ def db_save(state):
              getattr(s, "snmp_v3_auth_pass", ""),
              getattr(s, "snmp_v3_priv_proto", ""),
              getattr(s, "snmp_v3_priv_pass", ""),
-             getattr(s, "snmp_v3_context", ""))
+             getattr(s, "snmp_v3_context", ""),
+             getattr(s, "probe_id", "") or "",
+             int(getattr(s, "cert_warn_days", 0) or 0),
+             int(getattr(s, "cert_crit_days", 0) or 0),
+             int(bool(getattr(s, "running", True))))
             for dev in state.devices.values()
             for s in dev.sensors.values()
         ]
@@ -404,8 +437,8 @@ def db_save(state):
             "snmp_v3_user_default,snmp_v3_level_default,"
             "snmp_v3_auth_proto_default,snmp_v3_auth_pass_default,"
             "snmp_v3_priv_proto_default,snmp_v3_priv_pass_default,"
-            "snmp_v3_context_default,parent_device_ids,parent_device_ports) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", dev_rows)
+            "snmp_v3_context_default,parent_device_ids,parent_device_ports,probe_id) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", dev_rows)
         if live_dids:
             cur.execute(
                 f"DELETE FROM devices WHERE did NOT IN ({','.join('?'*len(live_dids))})",
@@ -429,8 +462,9 @@ def db_save(state):
             "sftp_remote_path,sftp_expected_sha256,"
             "radius_secret,radius_test_level,radius_username,radius_password,radius_nas_id,"
             "snmp_v3_user,snmp_v3_level,snmp_v3_auth_proto,snmp_v3_auth_pass,"
-            "snmp_v3_priv_proto,snmp_v3_priv_pass,snmp_v3_context) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "snmp_v3_priv_proto,snmp_v3_priv_pass,snmp_v3_context,probe_id,"
+            "cert_warn_days,cert_crit_days,running) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             snr_rows
         )
         if live_sids:
@@ -476,7 +510,8 @@ def _pg_load(state):
                 "COALESCE(snmp_v3_context_default,'') AS snmp_v3_context_default,"
                 "COALESCE(site,'') AS site,"
                 "COALESCE(parent_device_ids,'[]') AS parent_device_ids,"
-                "COALESCE(parent_device_ports,'{}') AS parent_device_ports "
+                "COALESCE(parent_device_ports,'{}') AS parent_device_ports,"
+                "COALESCE(probe_id,'') AS probe_id "
                 "FROM devices"
             )
             devs = cur.fetchall()
@@ -524,7 +559,11 @@ def _pg_load(state):
                 "COALESCE(snmp_v3_auth_pass,'') AS snmp_v3_auth_pass,"
                 "COALESCE(snmp_v3_priv_proto,'') AS snmp_v3_priv_proto,"
                 "COALESCE(snmp_v3_priv_pass,'') AS snmp_v3_priv_pass,"
-                "COALESCE(snmp_v3_context,'') AS snmp_v3_context "
+                "COALESCE(snmp_v3_context,'') AS snmp_v3_context,"
+                "COALESCE(probe_id,'') AS probe_id,"
+                "COALESCE(cert_warn_days,0) AS cert_warn_days,"
+                "COALESCE(cert_crit_days,0) AS cert_crit_days,"
+                "COALESCE(running,1) AS running "
                 "FROM sensors"
             )
             srows = cur.fetchall()
@@ -536,6 +575,7 @@ def _pg_load(state):
     log.info(f"DB load: found {len(devs)} device(s), {len(srows)} sensor(s) in PostgreSQL")
     if not devs:
         log.info("DB load: no devices in database — starting with empty state")
+        _mark_load_ok()   # successful load of an empty DB — saves are safe
         return
 
     max_did = 0
@@ -580,6 +620,7 @@ def _pg_load(state):
             dev.parent_device_ports = _normalize_pp_shape(_pp_raw)
         except (json.JSONDecodeError, TypeError):
             dev.parent_device_ports = {}
+        dev.probe_id = (row[25] or "") if len(row) > 25 else ""
         state.devices[did] = dev
 
     for row in srows:
@@ -642,6 +683,10 @@ def _pg_load(state):
         s.snmp_v3_priv_proto   = row[65] or "" if len(row) > 65 else ""
         s.snmp_v3_priv_pass    = row[66] or "" if len(row) > 66 else ""
         s.snmp_v3_context      = row[67] or "" if len(row) > 67 else ""
+        s.probe_id             = row[68] or "" if len(row) > 68 else ""
+        s.cert_warn_days       = int(row[69] or 0) if len(row) > 69 else 0
+        s.cert_crit_days       = int(row[70] or 0) if len(row) > 70 else 0
+        s._autostart           = bool(row[71]) if len(row) > 71 else True
         dev.sensors[row[1]] = s
 
     state._did_ctr = max_did
@@ -700,9 +745,28 @@ def _pg_load(state):
 
     db_load_anomaly_baselines(state)
 
-    for did in list(state.devices):
-        state.start_device(did)
-    log.info("Auto-started all sensors.")
+    # Re-hydrate _alerted_down / _threshold_state from unresolved flap_log rows
+    # so post-restart probes don't fire duplicate 'down'/'threshold_*' flap
+    # entries for sensors that were already in those states pre-restart.
+    try:
+        from db.events import db_load_unresolved_flap_state
+        db_load_unresolved_flap_state(state)
+    except Exception as _e:
+        log.error(f"db_load_unresolved_flap_state hook error: {_e}")
+
+    # Auto-start only sensors that were running at last save; sensors paused
+    # before the restart (running=0, persisted) stay stopped so a paused
+    # device/sensor sticks across restarts. First probes are staggered so a few
+    # hundred sensors don't fire one synchronized burst at boot (ping congestion
+    # + vCenter cold-cache reconnect herd); the startup-grace window stays open
+    # until that staggered first cycle completes.
+    _to_start = [(dev.device_id, sid)
+                 for dev in state.devices.values()
+                 for sid in list(dev.sensors)
+                 if getattr(dev.sensors.get(sid), "_autostart", True)]
+    started = state.start_sensors_staggered(_to_start)
+    log.info(f"Auto-started {started} sensor(s) (staggered); paused sensors left stopped.")
+    _mark_load_ok()
 
 
 def db_load(state):
@@ -727,7 +791,8 @@ def db_load(state):
             "COALESCE(snmp_v3_context_default,''),"
             "COALESCE(site,''),"
             "COALESCE(parent_device_ids,'[]'),"
-            "COALESCE(parent_device_ports,'{}') "
+            "COALESCE(parent_device_ports,'{}'),"
+            "COALESCE(probe_id,'') "
             "FROM devices"
         ).fetchall()
         srows = con.execute(
@@ -757,7 +822,10 @@ def db_load(state):
             "COALESCE(snmp_v3_user,''),COALESCE(snmp_v3_level,''),"
             "COALESCE(snmp_v3_auth_proto,''),COALESCE(snmp_v3_auth_pass,''),"
             "COALESCE(snmp_v3_priv_proto,''),COALESCE(snmp_v3_priv_pass,''),"
-            "COALESCE(snmp_v3_context,'') "
+            "COALESCE(snmp_v3_context,''),"
+            "COALESCE(probe_id,''),"
+            "COALESCE(cert_warn_days,0),COALESCE(cert_crit_days,0),"
+            "COALESCE(running,1) "
             "FROM sensors"
         ).fetchall()
     except Exception as e:
@@ -770,6 +838,7 @@ def db_load(state):
     log.info(f"DB load: found {len(devs)} device(s), {len(srows)} sensor(s) in {DB_PATH}")
     if not devs:
         log.info("DB load: no devices in database — starting with empty state")
+        _mark_load_ok()   # successful load of an empty DB — saves are safe
         return
 
     max_did = 0
@@ -782,7 +851,7 @@ def db_load(state):
          v3_auth_proto_default, v3_auth_pass_default,
          v3_priv_proto_default, v3_priv_pass_default,
          v3_context_default, site, parent_ids_json,
-         parent_ports_json) = _row
+         parent_ports_json, dev_probe_id) = _row
         dev = Device(did, name, host, grp, site=site or "")
         try:
             n = int(did.replace("d", ""))
@@ -820,6 +889,7 @@ def db_load(state):
             dev.parent_device_ports = _normalize_pp_shape(_pports)
         except (json.JSONDecodeError, TypeError):
             dev.parent_device_ports = {}
+        dev.probe_id = dev_probe_id or ""
         state.devices[did] = dev
 
     for (did, sid, name, stype, host, port, url, interval, timeout,
@@ -842,7 +912,8 @@ def db_load(state):
          snmp_v3_user, snmp_v3_level,
          snmp_v3_auth_proto, snmp_v3_auth_pass,
          snmp_v3_priv_proto, snmp_v3_priv_pass,
-         snmp_v3_context) in srows:
+         snmp_v3_context, snr_probe_id,
+         snr_cert_warn_days, snr_cert_crit_days, snr_running) in srows:
         dev = state.devices.get(did)
         if not dev: continue
         s = Sensor(did, sid, name, stype, host or dev.host,
@@ -901,6 +972,10 @@ def db_load(state):
         s.snmp_v3_priv_proto   = snmp_v3_priv_proto or ""
         s.snmp_v3_priv_pass    = snmp_v3_priv_pass or ""
         s.snmp_v3_context      = snmp_v3_context or ""
+        s.probe_id             = snr_probe_id or ""
+        s.cert_warn_days       = int(snr_cert_warn_days or 0)
+        s.cert_crit_days       = int(snr_cert_crit_days or 0)
+        s._autostart           = bool(snr_running)
         dev.sensors[sid] = s
 
     state._did_ctr = max_did
@@ -962,9 +1037,28 @@ def db_load(state):
 
     db_load_anomaly_baselines(state)
 
-    for did in list(state.devices):
-        state.start_device(did)
-    log.info("Auto-started all sensors.")
+    # Re-hydrate _alerted_down / _threshold_state from unresolved flap_log rows
+    # so post-restart probes don't fire duplicate 'down'/'threshold_*' flap
+    # entries for sensors that were already in those states pre-restart.
+    try:
+        from db.events import db_load_unresolved_flap_state
+        db_load_unresolved_flap_state(state)
+    except Exception as _e:
+        log.error(f"db_load_unresolved_flap_state hook error: {_e}")
+
+    # Auto-start only sensors that were running at last save; sensors paused
+    # before the restart (running=0, persisted) stay stopped so a paused
+    # device/sensor sticks across restarts. First probes are staggered so a few
+    # hundred sensors don't fire one synchronized burst at boot (ping congestion
+    # + vCenter cold-cache reconnect herd); the startup-grace window stays open
+    # until that staggered first cycle completes.
+    _to_start = [(dev.device_id, sid)
+                 for dev in state.devices.values()
+                 for sid in list(dev.sensors)
+                 if getattr(dev.sensors.get(sid), "_autostart", True)]
+    started = state.start_sensors_staggered(_to_start)
+    log.info(f"Auto-started {started} sensor(s) (staggered); paused sensors left stopped.")
+    _mark_load_ok()
 
 
 # ── Background autosave ──────────────────────────────────────────
@@ -993,6 +1087,15 @@ def autosave_loop(state):
         _iter += 1
         if _iter % 60 == 0:    # every ~hour
             _logs_enqueue(db_clean_samples)
+            # Prune resolved alert events (main DB) on the same cadence.
+            def _clean_alert_events():
+                try:
+                    from db.alert_events import db_clean_alert_events
+                    _rd = int(_settings.get("alert_events_retain_days", 90) or 90)
+                    db_clean_alert_events(_rd)
+                except Exception as _ae:
+                    log.warning(f"alert_events retention error: {_ae}")
+            _db_enqueue(_clean_alert_events)
         if _iter % 360 == 0:   # every ~6 hours
             # Check license expirations
             try:

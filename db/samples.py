@@ -53,6 +53,12 @@ _startup_ts = time.monotonic()
 _TRIM_BATCH   = 10_000
 _TRIM_YIELD_S = 0.05
 
+# SQLite VACUUM gating — see _clean_sqlite. In-memory timestamp: a restart
+# re-arms it, which is fine (at most one extra vacuum per boot).
+_VACUUM_MIN_INTERVAL_S   = 7 * 86400
+_VACUUM_MIN_TRIMMED_ROWS = 10_000
+_last_vacuum_ts          = 0.0
+
 
 def db_buffer_sample(did, sid, ok, ms, value, ts, rate=None):
     """Append one probe result to the in-memory buffer (thread-safe, no I/O).
@@ -117,8 +123,37 @@ def db_sample_buffer_stats() -> dict:
         }
 
 
+def _requeue_failed_rows(rows):
+    """Put a failed flush batch back at the head of the buffer so the next
+    flush retries it.
+
+    A transient 'database is locked' / PG restart used to discard the whole
+    5 s batch even though the buffer can absorb hours of outage. The buffer
+    cap still bounds memory: if requeueing would overflow, the oldest rows
+    are dropped and counted (which also self-heals a poison batch — it ages
+    out instead of blocking forever)."""
+    global _sample_drops_total
+    if not rows:
+        return
+    with _SAMPLE_BUF_LOCK:
+        space = _SAMPLE_BUF_MAX - len(_SAMPLE_BUF)
+        if space <= 0:
+            keep, dropped = [], len(rows)
+        elif len(rows) > space:
+            keep, dropped = rows[-space:], len(rows) - space   # keep newest
+        else:
+            keep, dropped = rows, 0
+        if keep:
+            _SAMPLE_BUF[:0] = keep        # re-prepend, chronological order kept
+        if dropped:
+            _sample_drops_total += dropped
+            now = time.time()
+            _sample_drops_window.extend([now] * min(dropped, 5000))
+
+
 def _do_insert_samples(rows):
-    """Write a batch of sample rows (called on the writer thread)."""
+    """Write a batch of sample rows (called on the writer thread).
+    On failure the batch is requeued into the buffer for the next flush."""
     global _last_flush_ms, _last_flush_rows, _last_flush_ts
     t0 = time.monotonic()
     try:
@@ -138,9 +173,10 @@ def _do_insert_samples(rows):
                 # WARNING; let it count this attempt silently. Otherwise log
                 # the actual error so non-outage failures still surface.
                 if is_pg_in_outage():
-                    log.debug(f"DB flush samples skipped (PG outage): {e}")
+                    log.debug(f"DB flush samples failed, requeued (PG outage): {e}")
                 else:
-                    log.error(f"DB flush samples error: {e}")
+                    log.error(f"DB flush samples error ({len(rows)} rows requeued): {e}")
+                _requeue_failed_rows(rows)
             return
         # SQLite
         con = None
@@ -152,7 +188,8 @@ def _do_insert_samples(rows):
             )
             con.commit()
         except Exception as e:
-            log.error(f"DB flush samples error: {e}")
+            log.error(f"DB flush samples error ({len(rows)} rows requeued): {e}")
+            _requeue_failed_rows(rows)
         finally:
             if con:
                 con.close()
@@ -1035,15 +1072,24 @@ def db_clean_samples(retention_days=None):
 
 def _bounded_delete_pg(con, cur, table, cutoff):
     """Delete rows in batches of _TRIM_BATCH; commit between batches so locks
-    release and concurrent sample inserts can proceed. Returns total deleted."""
+    release and concurrent sample inserts can proceed. Returns total deleted.
+
+    The outer DELETE carries its own `ts < cutoff` predicate. On the
+    range-partitioned sensor_samples table, ctid values are only unique per
+    physical partition — a ctid harvested from the expiring partition also
+    matches unrelated FRESH rows in every other partition, silently deleting
+    live monitoring data. The ts guard limits any collision to rows that are
+    themselves expired (a batch may then delete slightly more than LIMIT per
+    pass, which is harmless for retention)."""
     from psycopg2 import sql as _pgsql
     query = _pgsql.SQL(
         "DELETE FROM {tbl} WHERE ctid IN "
-        "(SELECT ctid FROM {tbl} WHERE ts < %s LIMIT %s)"
+        "(SELECT ctid FROM {tbl} WHERE ts < %s LIMIT %s) "
+        "AND ts < %s"
     ).format(tbl=_pgsql.Identifier(table))
     total = 0
     while True:
-        cur.execute(query, (cutoff, _TRIM_BATCH))
+        cur.execute(query, (cutoff, _TRIM_BATCH, cutoff))
         deleted = cur.rowcount or 0
         if deleted <= 0:
             break
@@ -1136,6 +1182,7 @@ def _bounded_delete_sqlite(con, table, cutoff):
 def _clean_sqlite(cutoff_raw, cutoff_5m, cutoff_1h):
     """SQLite cleanup with VACUUM in background thread."""
     con = None
+    n_raw = n_5m = n_1h = 0
     try:
         con = sqlite3.connect(LOGS_DB_PATH, timeout=30)
         n_raw = _bounded_delete_sqlite(con, "sensor_samples",    cutoff_raw)
@@ -1156,6 +1203,17 @@ def _clean_sqlite(cutoff_raw, cutoff_5m, cutoff_1h):
     finally:
         if con:
             con.close()
+    # VACUUM at most weekly, and only after a meaningful trim. VACUUM is a
+    # full-file rewrite that takes the write lock for the duration — running
+    # it hourly blocked sample flushes (whose batches then failed) and burned
+    # SSD writes for no benefit: SQLite recycles freed pages for new inserts,
+    # so VACUUM only matters for shrinking the file after a large purge.
+    global _last_vacuum_ts
+    if (n_raw + n_5m + n_1h) < _VACUUM_MIN_TRIMMED_ROWS:
+        return
+    if time.time() - _last_vacuum_ts < _VACUUM_MIN_INTERVAL_S:
+        return
+    _last_vacuum_ts = time.time()
     # VACUUM in a separate thread so sample writes are not blocked
     def _vacuum_bg():
         try:

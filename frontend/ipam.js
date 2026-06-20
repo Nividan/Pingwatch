@@ -98,6 +98,7 @@ function _ipamRenderShell() {
         <!-- Left group — always available (subnet inventory). -->
         <button class="btn primary rbac-op" onclick="_ipamOpenAddSubnet()" title="Create a new subnet">${icon('plus',13)} Add Subnet</button>
         <button class="btn rbac-op" onclick="_ipamOpenImport()" title="Bulk-import subnets from a CSV file or paste">${icon('upload',13)} Import</button>
+        <button class="btn" onclick="_ipamExportCsv(this)" title="Download every allocation across all subnets as CSV (Site, Subnet, IP, Name, DNS, Status, Licenses, Modified By, Last Modified)">${icon('download',13)} Export CSV</button>
         <span class="ipam-tb-divider" aria-hidden="true"></span>
         <!-- Right group — operate on the selected subnet. Disabled until one is picked. -->
         <button class="btn rbac-op" id="ipam-scan-btn" onclick="_ipamScanActive()" disabled title="Ping every IP in this subnet and populate the grid with the active ones (no devices created)">${icon('activity',13)} Scan hosts</button>
@@ -168,6 +169,32 @@ async function _ipamOnLicenseUpdate() {
   if (_ipamSelectedId) _ipamApplyFilter(document.getElementById('ipam-search')?.value || '');
 }
 
+// ── Export every allocation (all subnets) to CSV ───────────────────────────
+// Server builds the CSV (it joins subnets + allocations + licenses across the
+// whole DB, not just the loaded subnet); we stream the blob to a download
+// using the server's Content-Disposition filename.
+async function _ipamExportCsv(btn) {
+  if (btn) btn.disabled = true;
+  try {
+    const r = await fetch('/api/ipam/export', { credentials: 'same-origin' });
+    if (r.status === 401) { _onSessionExpired('Session expired'); return; }
+    if (!r.ok) { toast('Export failed', 'err'); return; }
+    const blob = await r.blob();
+    const cd = r.headers.get('Content-Disposition') || '';
+    const m = cd.match(/filename="?([^"]+)"?/);
+    const fname = (m && m[1]) || 'pingwatch-ipam.csv';
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = fname;
+    document.body.appendChild(a); a.click(); a.remove();
+    URL.revokeObjectURL(url);
+  } catch (e) {
+    toast('Export failed', 'err');
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
 // ── Subnet loading ─────────────────────────────────────────────────────────
 // Cache of all known site names (UNION of devices.site + ipam_subnets.site +
 // sites metadata table). Populated each time we load subnets so empty Live
@@ -176,7 +203,7 @@ let _ipamKnownSites = [];
 
 async function _ipamLoadSubnets() {
   const r = await fetch('/api/ipam/subnets');
-  if (r.status === 401) { if(!_loggedOut)showLogin('Session expired'); return; }
+  if (r.status === 401) { _onSessionExpired('Session expired'); return; }
   if (!r.ok) { toast('Failed to load subnets', 'err'); return; }
   const d = await r.json();
   _ipamSubnets = d.subnets || [];
@@ -1277,8 +1304,7 @@ function _ipamOpenAddSubnet() {
         </div>
         <div class="fr">
           <label class="fl">Site / zone <span style="color:var(--text3);font-size:10px">(optional — groups the sidebar)</span></label>
-          <input type="text" id="ipam-add-site" placeholder="e.g. NYC, DC1, HQ" list="ipam-site-options" autocomplete="off" maxlength="40"/>
-          <datalist id="ipam-site-options">${_ipamSiteDatalist()}</datalist>
+          ${siteComboHtml('ipam-add-site', '', 'e.g. NYC, DC1, HQ')}
         </div>
         <div class="fr">
           <label class="fl">VLAN ID <span style="color:var(--text3);font-size:10px">(optional — 1..4094, leave blank for untagged)</span></label>
@@ -1302,16 +1328,6 @@ function _ipamOpenAddSubnet() {
     if (e.key === 'Enter') _ipamSaveSubnet();
   });
   setTimeout(() => o.querySelector('#ipam-add-cidr').focus(), 50);
-}
-
-// Build a <datalist> body of existing site values for autocomplete in the
-// Add / Edit modals. De-duplicates and sorts.
-function _ipamSiteDatalist() {
-  const set = new Set();
-  for (const s of (_ipamSubnets || [])) {
-    if (s.site) set.add(s.site);
-  }
-  return [...set].sort().map(v => `<option value="${esc(v)}"></option>`).join('');
 }
 
 async function _ipamSaveSubnet() {
@@ -1384,10 +1400,7 @@ function _ipamOpenEdit() {
           </div>
           <div class="fr">
             <label class="fl">Site / zone <span class="fh" style="margin-left:6px">(groups the sidebar)</span></label>
-            <input type="text" id="ipam-edit-site" value="${esc(sub.site||'')}"
-                   placeholder="e.g. NYC, DC1, HQ" list="ipam-site-options"
-                   autocomplete="off" maxlength="40"/>
-            <datalist id="ipam-site-options">${_ipamSiteDatalist()}</datalist>
+            ${siteComboHtml('ipam-edit-site', sub.site||'', 'e.g. NYC, DC1, HQ')}
           </div>
           <div class="fr">
             <label class="fl">VLAN ID <span class="fh" style="margin-left:6px">(optional — 1..4094)</span></label>
