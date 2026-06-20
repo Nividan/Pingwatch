@@ -443,13 +443,34 @@ function _pbCopyToken(){
 }
 
 // ── Row actions ──────────────────────────────────────────────────
-function _pbDownload(pid, os){
-  // Plain navigation → browser save dialog; the endpoint re-arms a fresh
-  // one-time token inside the zip on every download. `os` (windows|linux)
-  // selects which installer set the zip ships with.
+async function _pbDownload(pid, os){
+  // Fetch the zip (not a tab navigation) so a server error surfaces as a toast
+  // instead of dumping raw JSON onto a blank page. The endpoint re-arms a fresh
+  // one-time token inside the zip on every successful download. `os`
+  // (windows|linux) selects which installer set ships.
   const q=(os==='windows'||os==='linux')?`?os=${os}`:'';
-  window.location.href=`/api/probes/${encodeURIComponent(pid)}/package${q}`;
-  setTimeout(_probesLoad, 1500);
+  const label=os==='windows'?'Windows':os==='linux'?'Linux':'';
+  try{
+    const r=await fetch(`/api/probes/${encodeURIComponent(pid)}/package${q}`,
+                        {headers:{'Accept':'application/zip'}});
+    if(!r.ok){
+      let msg='Download failed';
+      try{ const j=await r.json(); if(j&&j.error) msg=j.error; }catch(_){}
+      toast(msg,'err');
+      return;
+    }
+    const blob=await r.blob();
+    let fn=`pingwatch-agent${label?'-'+label.toLowerCase():''}.zip`;
+    const m=/filename="?([^"]+)"?/.exec(r.headers.get('Content-Disposition')||'');
+    if(m) fn=m[1];
+    const a=document.createElement('a'), u=URL.createObjectURL(blob);
+    a.href=u; a.download=fn; document.body.appendChild(a); a.click();
+    a.remove(); URL.revokeObjectURL(u);
+    toast(`${label||'Agent'} package downloaded`,'ok');
+    setTimeout(_probesLoad, 1500);
+  }catch(e){
+    toast('Download failed — network error','err');
+  }
 }
 
 async function _pbReenroll(pid){
