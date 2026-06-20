@@ -81,14 +81,31 @@ def _advance(c):
         log_probes.warning(f"campaign {cid} HALTED — {n} probe(s) failed")
         return
 
-    # 2. failed_offline: dispatched but silent past the deadline (download +
-    #    restart + 2× probation gives ample slack before declaring it dark).
+    # 2. Reconcile or fail dispatched probes from OBSERVED state — don't trust
+    #    the agent's update-report as the only signal (it can be lost/dropped):
+    #      • online + already on the target build past the probation window ⇒
+    #        the agent committed (a rollback reverts the build_id), even if its
+    #        success report never landed → succeeded. Self-heals a stuck "in
+    #        progress" without any manual re-dispatch.
+    #      • offline + silent past the deadline ⇒ dark (needs hands-on) →
+    #        failed_offline (download + restart + 2× probation = ample slack).
     deadline_slack = probation * 2 + 120
+    commit_slack   = probation + 90      # probation fully elapsed → terminal state
+    target_build   = str(c.get("target_build") or "")
     transitioned = False
     for p in by_state.get("dispatched", []):
-        if now <= float(p.get("started_at") or now) + deadline_slack:
-            continue
+        started_p = float(p.get("started_at") or now)
         pr = db_get_probe(p["probe_id"])
+        if (target_build and _online(pr) and now - started_p > commit_slack
+                and str((pr or {}).get("build_id") or "") == target_build):
+            db_set_campaign_probe_state(cid, p["probe_id"], "succeeded", finished=True)
+            db_set_probe_update_state(p["probe_id"], "succeeded", target=target_build)
+            log_probes.info(f"campaign {cid} probe {p['probe_id']} → succeeded "
+                            f"(reconciled from reported build_id; no update-report)")
+            transitioned = True
+            continue
+        if now <= started_p + deadline_slack:
+            continue
         if not _online(pr):
             db_set_campaign_probe_state(cid, p["probe_id"], "failed_offline",
                 error="no checkin after update within deadline", finished=True)
