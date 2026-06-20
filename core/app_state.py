@@ -15,7 +15,7 @@ STATE = MonitorState()
 # Release checklist: bump AGENT_VERSION in agent/agent.py alongside this —
 # the Probes page shows "update available" when a deployed agent differs.
 APP_VERSION      = "1.4"
-APP_VERSION_NAME = "reliability & ack state"
+APP_VERSION_NAME = "Root Cause & Acknowledgement"
 SERVER_START = time.time()
 
 # Distributed-probes wire protocol. Introduced in v1.3; still 1 as of v1.4 —
