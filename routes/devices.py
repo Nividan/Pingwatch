@@ -331,6 +331,7 @@ def handle(h, method, path, body):
         # because those helpers acquire the lock internally and have broadcast +
         # persistence side effects.
         if action == "move":
+            _site_changed_pairs = []   # (did, sid) where the SITE actually changed
             with STATE._lock:
                 for did in valid_dids:
                     dev = STATE.devices.get(did)
@@ -338,10 +339,21 @@ def handle(h, method, path, body):
                         if target_group:
                             dev.group = target_group
                         if target_site is not None:
+                            if (getattr(dev, "site", "") or "") != target_site:
+                                _site_changed_pairs.extend(
+                                    (did, _sid) for _sid in dev.sensors.keys())
                             dev.site = target_site
                         applied += 1
                         results.append({"did": did, "ok": True})
             _db_enqueue(lambda: db_save(STATE))
+            # A site change can move a device's sensors between central and a
+            # remote probe when "Measured from" is Inherit (effective_probe falls
+            # through to the site's binding). Re-resolve scheduling and let agents
+            # re-pull — same as the single-device edit path.
+            if _site_changed_pairs:
+                STATE.apply_probe_assignment(_site_changed_pairs)
+                from routes.probes import _bump_all_probe_configs
+                _bump_all_probe_configs()
             # Broadcast once so open tabs refresh grouping without reloading.
             STATE._broadcast("devices_bulk_updated", {
                 "action": "move",
