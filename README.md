@@ -85,6 +85,7 @@ PingWatch is a Python-based network monitoring platform for tracking the availab
 - 📊 Scheduled PDF/CSV Reports — Executive / Technical / Inventory / Custom kinds; compare-to-previous deltas; incident aggregation and Device Health Scores; scheduled email delivery with bulk delete
 - 🔧 **Diagnostics tab (Settings)** — System Overview, Database Health, consolidated Health Checks (LDAP/RADIUS/SAML/OIDC/SMTP/Syslog/DB Backup/NTP/DNS), Probe-from-Server tool, Recent Errors, Maintenance actions, and support bundle download
 - 🪵 Professional log viewer — dedicated top-level **Logs** tab with live tail, minimum-level filter, time range, text search; word-wrap, copy, CSV/JSON export; keyboard shortcuts; real-time unread count
+- 🤖 **MCP server for AI agents** — opt-in, read-only [Model Context Protocol](https://modelcontextprotocol.io) endpoint at `/api/mcp` so AI agents (Claude, etc.) can query device status, alerts, root-cause incidents, metrics, topology, and more through 12 curated, hard-capped tools. Guarded by a dedicated `mcp` token scope jailed to `/api/mcp`, off by default, and every call is audited. See [API.md](API.md#mcp-server-for-ai-agents)
 
 ### Supported Sensor Types
 

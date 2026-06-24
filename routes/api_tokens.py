@@ -28,7 +28,9 @@ _RE_TOKENS_COLL = re.compile(r"^/api/tokens/?$")
 _RE_TOKENS_ITEM = re.compile(r"^/api/tokens/(\d+)/?$")
 
 _NAME_MAX  = 100
-_VALID_SCOPES = ("read", "full")
+# 'mcp' tokens are jailed to /api/mcp (read-only AI-agent tooling), exactly
+# as 'probe' tokens are jailed to /api/agent/* — see server.py _auth/_require.
+_VALID_SCOPES = ("read", "full", "mcp")
 
 
 def _gen_token() -> str:
@@ -95,7 +97,7 @@ def handle(h, method, path, body):
         if len(name) > _NAME_MAX:
             h._json(400, {"error": f"name too long (max {_NAME_MAX})"}); return True
         if scope not in _VALID_SCOPES:
-            h._json(400, {"error": "scope must be 'read' or 'full'"}); return True
+            h._json(400, {"error": "scope must be 'read', 'full', or 'mcp'"}); return True
         # expires_at is optional; accept None/"" or a positive numeric epoch.
         if exp in (None, ""):
             expires_at = None

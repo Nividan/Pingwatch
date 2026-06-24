@@ -297,6 +297,13 @@ function _buildSettingsTab_apitokens() {
         </span>
         <button class="btn-p rbac-admin" style="font-size:12px;padding:5px 12px" onclick="openCreateApiToken()">＋ Generate Token</button>
       </div>
+      <div class="fr" style="margin-bottom:12px;padding:12px;border:1px solid var(--border);border-radius:8px;background:var(--bg2)">
+        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;user-select:none">
+          <input type="checkbox" id="mcp-enabled-tog" class="rbac-admin" onchange="_mcpToggleSave(this)">
+          <span class="fl" style="margin:0">Enable MCP server for AI agents (read-only)</span>
+        </label>
+        <div class="fh" style="margin-left:24px;margin-top:3px">Exposes a curated, read-only Model Context Protocol endpoint at <code>/api/mcp</code> so AI agents can query device status, alerts, incidents, and metrics. Requires a token with the <b>mcp</b> scope (generate one above). Off by default — no MCP surface until you switch it on.</div>
+      </div>
       <div id="apiTokenList"><div class="alrt-loading">Loading…</div></div>
     </div>`;
 }
@@ -308,7 +315,7 @@ function _apiTokFmtTs(ts) {
 }
 
 function _apiTokScopePill(s) {
-  const cls = s === 'full' ? 'warn' : 'up';
+  const cls = s === 'full' ? 'warn' : (s === 'mcp' ? 'accent' : 'up');
   return `<span class="pill ${cls}" style="font-size:10px;padding:2px 7px">${esc(s)}</span>`;
 }
 
@@ -337,6 +344,12 @@ function _renderApiTokenTable(tokens) {
 async function loadApiTokens() {
   const el = document.getElementById('apiTokenList');
   if (!el) return;
+  // Reflect the current MCP enable state on the toggle.
+  try {
+    const s = await api('GET', '/api/settings');
+    const tog = document.getElementById('mcp-enabled-tog');
+    if (tog) tog.checked = !!(s && Number(s.mcp_enabled));
+  } catch (e) { /* leave toggle as-is */ }
   try {
     const r = await api('GET', '/api/tokens');
     if (r && r.error) {
@@ -346,6 +359,18 @@ async function loadApiTokens() {
     el.innerHTML = _renderApiTokenTable(r.tokens || []);
   } catch (e) {
     el.innerHTML = '<div class="alrt-empty" style="color:var(--down)">Failed to load tokens.</div>';
+  }
+}
+
+// Persist the MCP enable toggle immediately (admin-only). Reverts on failure.
+async function _mcpToggleSave(el) {
+  try {
+    const r = await api('PATCH', '/api/settings', { mcp_enabled: el.checked });
+    if (!r || !r.ok) { throw new Error('save failed'); }
+    if (typeof toast === 'function') toast(el.checked ? 'MCP enabled' : 'MCP disabled', 'ok');
+  } catch (e) {
+    el.checked = !el.checked;
+    if (typeof toast === 'function') toast('Could not change MCP setting', 'err');
   }
 }
 
@@ -369,8 +394,9 @@ function openCreateApiToken() {
           <select id="apiTok-scope">
             <option value="read">read — GET / HEAD only</option>
             <option value="full">full — any HTTP method, capped by owner's role</option>
+            <option value="mcp">mcp — AI agents (read-only), /api/mcp only</option>
           </select>
-          <div class="fh">Cookie sessions always run with full scope. Read tokens cannot create devices, ack alerts, or change settings.</div>
+          <div class="fh">Cookie sessions always run with full scope. Read tokens cannot create devices, ack alerts, or change settings. <b>mcp</b> tokens reach only the read-only MCP endpoint (<code>/api/mcp</code>) — nothing else — and require MCP to be enabled in General settings.</div>
         </div>
         <div class="fr"><label class="fl">Expires</label>
           <select id="apiTok-exp">

@@ -58,10 +58,10 @@ getting `401` on the next request.
 
 Two parallel mechanisms — both go through the same auth pipeline:
 
-| Mechanism      | Header / Cookie               | Scope           | Where used        |
-|----------------|-------------------------------|-----------------|-------------------|
-| Cookie session | `Cookie: session=<id>`        | implicit `full` | Browser SPA       |
-| Bearer token   | `Authorization: Bearer pw_…`  | `read` or `full` | Scripts / CI / TF |
+| Mechanism      | Header / Cookie               | Scope                | Where used        |
+|----------------|-------------------------------|----------------------|-------------------|
+| Cookie session | `Cookie: session=<id>`        | implicit `full`      | Browser SPA       |
+| Bearer token   | `Authorization: Bearer pw_…`  | `read`, `full`, `mcp` | Scripts / CI / TF / AI agents |
 
 Cookie sessions slide their TTL forward on use; tokens use a fixed
 `expires_at` (or never).
@@ -71,6 +71,11 @@ Cookie sessions slide their TTL forward on use; tokens use a fixed
 - `read` tokens accept **GET / HEAD / OPTIONS** only. Every other method
   returns `403`.
 - `full` tokens accept any method, still subject to the owner's RBAC role.
+- `mcp` tokens are **jailed to `/api/mcp`** (the read-only MCP server) and are
+  rejected with `403` on every other path — exactly as `probe` tokens are
+  jailed to `/api/agent/*`. Conversely `/api/mcp` accepts **only** `mcp`-scope
+  tokens (cookie sessions and `read`/`full` tokens get `403`). See
+  [MCP server](#mcp-server-for-ai-agents).
 - Cookie sessions always run with implicit `full` scope.
 
 ### Roles
@@ -116,7 +121,7 @@ audited (would be too noisy); use server logs for that.
 | `POST`   | `/api/logout`                 | viewer   | Invalidate the current session                                              |
 | `GET`    | `/api/me`                     | viewer   | Own username, role, full_name, email, theme_preference                      |
 | `GET`    | `/api/tokens`                 | admin    | List API tokens (no plaintext, no hash); `?user=<name>` to filter           |
-| `POST`   | `/api/tokens`                 | admin    | Create `{name, scope:'read'\|'full', expires_at?}` → `201 {id, token:"pw_…"}` **(plaintext returned once)** |
+| `POST`   | `/api/tokens`                 | admin    | Create `{name, scope:'read'\|'full'\|'mcp', expires_at?}` → `201 {id, token:"pw_…"}` **(plaintext returned once)** |
 | `DELETE` | `/api/tokens/{id}`            | admin    | Revoke a token (sets `revoked_at`, evicts cache)                            |
 
 `POST /api/tokens` is rejected when the calling principal is itself an API
@@ -489,3 +494,61 @@ hourly loop but the boot sanity pass still runs.
 | `GET` | `/api/audit` | admin | Paginated audit log — actor, IP, action, target, detail |
 | `GET` | `/api/logs/{name}` | admin | Tail rotating log files (`main`, `sensors`) |
 | `GET` | `/api/log-badge` | viewer | Recent error / warning counts for the topbar badge |
+
+---
+
+## MCP server (for AI agents)
+
+PingWatch exposes a **read-only [Model Context Protocol](https://modelcontextprotocol.io) server** so AI agents (Claude, etc.) can connect and query live monitoring data. It is **opt-in** (off by default) and reachable only with a dedicated `mcp`-scope token.
+
+### Enabling it
+
+1. **Settings → API Tokens** → tick **"Enable MCP server for AI agents"** (admin). While off, `POST /api/mcp` returns `503 {"error":"MCP is disabled"}`.
+2. **Generate Token** with scope **`mcp`**. Copy the one-time `pw_…` value. The token can reach **only** `/api/mcp` — nothing else in the REST API — and is read-only.
+
+### Transport
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| `POST` | `/api/mcp` | `mcp` token | MCP Streamable HTTP, **stateless JSON-only**. One JSON-RPC 2.0 request → one JSON response. |
+| `GET`  | `/api/mcp` | — | `405` (no SSE / session stream in the JSON-only profile). |
+
+- Protocol revision: **`2025-06-18`**. JSON-RPC methods: `initialize`, `tools/list`, `tools/call`, plus the `notifications/initialized` no-op (`202`, empty body).
+- JSON-RPC **batching is not supported** (removed in the spec revision) — send one request object per POST.
+- Send `Authorization: Bearer pw_…` and `Content-Type: application/json` on every POST.
+
+### Connecting a client
+
+Point any MCP client that speaks Streamable HTTP at the endpoint, e.g.:
+
+```json
+{
+  "mcpServers": {
+    "pingwatch": {
+      "url": "https://pingwatch.example.com/api/mcp",
+      "headers": { "Authorization": "Bearer pw_your_mcp_token" }
+    }
+  }
+}
+```
+
+### Tools (all read-only, all capped + paginated)
+
+| Tool | Arguments | Returns |
+|------|-----------|---------|
+| `list_devices` | `status?`, `site?`, `group?`, `q?`, `limit?`, `cursor?` | Devices + live status |
+| `get_device` | `device_id` | One device with per-sensor live status |
+| `get_active_alerts` | `severity?`, `limit?`, `cursor?` | Currently active/acknowledged alert events |
+| `get_incidents` | — | Root-cause-correlated live outages (RCA) |
+| `get_metric_history` | `device_id`, `sensor_id`, `minutes?`, `limit?` | Time-series samples for one sensor |
+| `get_noc_summary` | — | One-call situational overview (rollups, top problems, recent alerts) |
+| `list_sites` | `limit?`, `cursor?` | Per-site up/warn/down rollups |
+| `get_topology` | `device_id?`, `limit?`, `cursor?` | Live parent/child dependency graph |
+| `search` | `query`, `limit?` | Cross-entity substring search (devices + sites) |
+| `get_alert_history` | `since?`, `limit?`, `cursor?` | Newest-first alert event history |
+| `list_maintenance_windows` | — | Configured maintenance windows |
+| `get_flaps` | `limit?`, `cursor?` | Recent sensor state transitions |
+
+**Caps:** list/history tools default to 50 rows (hard max 200); `get_metric_history` defaults to 200 points (max 1000) over a window capped at 30 days. Truncated responses carry `"truncated": true` and a `"next_cursor"` — pass it back as `cursor` to page. Tool-input errors return an MCP tool error (`isError: true`), not a JSON-RPC error.
+
+**Audit:** every `tools/call` writes an `mcp_tool_call` audit row (token owner, IP, tool name, short argument summary).

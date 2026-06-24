@@ -199,6 +199,8 @@ def handle(h, method, path, body):
             # Group F3 — root-cause analysis (dependency correlation)
             "rca_suppress_downstream":   int(_settings.get("rca_suppress_downstream", 1)),
             "rca_correlation_window_s":  int(_settings.get("rca_correlation_window_s", 120)),
+            # Group H — MCP server (read-only AI-agent tooling; opt-in, default off)
+            "mcp_enabled":               int(_settings.get("mcp_enabled", 0) or 0),
             # Group D — branding
             "org_name":          _settings.get("org_name", ""),
             # Group E — latency colour thresholds
@@ -377,6 +379,12 @@ def handle(h, method, path, body):
                 h._json(400, {"error": f"Invalid scan_ports: {_e}"}); return True
             _settings.load({"scan_ports": _sp_raw})
             _db_enqueue(lambda _v=_sp_raw: db_save_settings({"scan_ports": _v}))
+        # MCP server toggle (read-only AI-agent tooling). Default off; when off,
+        # /api/mcp returns 503 regardless of any minted mcp-scope tokens.
+        if "mcp_enabled" in body:
+            _me = "1" if body["mcp_enabled"] else "0"
+            _settings.load({"mcp_enabled": _me})
+            _db_enqueue(lambda _v=_me: db_save_settings({"mcp_enabled": _v}))
         # Backup scheduler settings
         if "syslog_app_logs" in body:
             _sal = "1" if body["syslog_app_logs"] else "0"
