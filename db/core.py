@@ -197,14 +197,15 @@ def db_init():
         # token_hash is SHA-256 of the plaintext token (plaintext never
         # stored). scope gates access: 'read' = GET/HEAD/OPTIONS only,
         # 'full' = any, 'probe' = /api/agent/* endpoints only (distributed
-        # probes, v1.3). probe_id links a probe-scoped token to its probe.
+        # probes, v1.3), 'mcp' = /api/mcp read-only AI-agent tooling (v1.5).
+        # probe_id links a probe-scoped token to its probe.
         con.execute("""
             CREATE TABLE IF NOT EXISTS api_tokens (
                 id           INTEGER PRIMARY KEY AUTOINCREMENT,
                 token_hash   TEXT NOT NULL UNIQUE,
                 name         TEXT NOT NULL,
                 username     TEXT NOT NULL,
-                scope        TEXT NOT NULL CHECK(scope IN ('read','full','probe')),
+                scope        TEXT NOT NULL CHECK(scope IN ('read','full','probe','mcp')),
                 created_at   REAL NOT NULL,
                 expires_at   REAL,
                 last_used_at REAL,
@@ -1296,14 +1297,20 @@ def db_init():
                 con.commit()
             except Exception:
                 pass  # column already exists
-        # api_tokens 'probe' scope — the original CHECK(scope IN
-        # ('read','full')) must be widened and probe_id added. SQLite cannot
-        # alter a CHECK constraint → one-time table rebuild, gated on the
-        # probe_id column's absence. The pre-migration file backup at the
-        # top of db_init() already covers this DB.
-        _api_cols = [r[1] for r in con.execute("PRAGMA table_info(api_tokens)").fetchall()]
-        if "probe_id" not in _api_cols:
+        # api_tokens scope widening + probe_id. The original CHECK was
+        # ('read','full'); v1.3 added 'probe' (+ the probe_id column), v1.5
+        # adds 'mcp'. SQLite cannot ALTER a CHECK constraint → one-time table
+        # rebuild, fired whenever the stored table SQL is missing 'mcp' (which
+        # covers every older shape, with or without probe_id). The pre-migration
+        # file backup at the top of db_init() already covers this DB.
+        _tbl_sql_row = con.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='api_tokens'"
+        ).fetchone()
+        _tbl_sql = (_tbl_sql_row[0] if _tbl_sql_row else "") or ""
+        if _tbl_sql and "'mcp'" not in _tbl_sql:
             try:
+                _api_cols = [r[1] for r in con.execute("PRAGMA table_info(api_tokens)").fetchall()]
+                _has_probe = "probe_id" in _api_cols
                 con.execute("ALTER TABLE api_tokens RENAME TO api_tokens_old")
                 con.execute("""
                     CREATE TABLE api_tokens (
@@ -1311,28 +1318,35 @@ def db_init():
                         token_hash   TEXT NOT NULL UNIQUE,
                         name         TEXT NOT NULL,
                         username     TEXT NOT NULL,
-                        scope        TEXT NOT NULL CHECK(scope IN ('read','full','probe')),
+                        scope        TEXT NOT NULL CHECK(scope IN ('read','full','probe','mcp')),
                         created_at   REAL NOT NULL,
                         expires_at   REAL,
                         last_used_at REAL,
                         revoked_at   REAL,
                         probe_id     TEXT DEFAULT NULL
                     )""")
-                con.execute(
-                    "INSERT INTO api_tokens (id, token_hash, name, username, scope,"
-                    " created_at, expires_at, last_used_at, revoked_at)"
-                    " SELECT id, token_hash, name, username, scope, created_at,"
-                    " expires_at, last_used_at, revoked_at FROM api_tokens_old")
+                if _has_probe:
+                    con.execute(
+                        "INSERT INTO api_tokens (id, token_hash, name, username, scope,"
+                        " created_at, expires_at, last_used_at, revoked_at, probe_id)"
+                        " SELECT id, token_hash, name, username, scope, created_at,"
+                        " expires_at, last_used_at, revoked_at, probe_id FROM api_tokens_old")
+                else:
+                    con.execute(
+                        "INSERT INTO api_tokens (id, token_hash, name, username, scope,"
+                        " created_at, expires_at, last_used_at, revoked_at)"
+                        " SELECT id, token_hash, name, username, scope, created_at,"
+                        " expires_at, last_used_at, revoked_at FROM api_tokens_old")
                 con.execute("DROP TABLE api_tokens_old")
                 con.execute("CREATE INDEX IF NOT EXISTS idx_api_tokens_user "
                             "ON api_tokens(username)")
                 con.execute("CREATE INDEX IF NOT EXISTS idx_api_tokens_hash "
                             "ON api_tokens(token_hash)")
                 con.commit()
-                log.info("api_tokens migrated: 'probe' scope + probe_id column")
+                log.info("api_tokens migrated: scope CHECK widened to include 'mcp'")
             except Exception as _ae:
                 con.rollback()
-                log.error(f"api_tokens probe-scope migration failed: {_ae}")
+                log.error(f"api_tokens mcp-scope migration failed: {_ae}")
         con.commit()
     finally:
         con.close()

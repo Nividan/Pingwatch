@@ -23,7 +23,7 @@ def db_create_api_token(token_hash: str, name: str, username: str,
     v1.3): username is the synthetic 'probe:<probe_id>' principal — no
     users row exists for it — and probe_id links back to the probe record.
     """
-    if scope not in ("read", "full", "probe"):
+    if scope not in ("read", "full", "probe", "mcp"):
         return None
     now = time.time()
     try:

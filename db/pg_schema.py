@@ -113,14 +113,15 @@ def pg_create_main_schema(cur):
     # Bearer-token auth for scripts / CI / Terraform / remote probes.
     # token_hash is SHA-256 of the plaintext token (plaintext never stored).
     # scope gates access: 'read' = GET/HEAD/OPTIONS only, 'full' = any,
-    # 'probe' = /api/agent/* only (distributed probes, v1.3).
+    # 'probe' = /api/agent/* only (distributed probes, v1.3),
+    # 'mcp' = /api/mcp read-only AI-agent tooling (v1.5).
     cur.execute("""
         CREATE TABLE IF NOT EXISTS api_tokens (
             id           SERIAL PRIMARY KEY,
             token_hash   TEXT NOT NULL UNIQUE,
             name         TEXT NOT NULL,
             username     TEXT NOT NULL,
-            scope        TEXT NOT NULL CHECK (scope IN ('read','full','probe')),
+            scope        TEXT NOT NULL CHECK (scope IN ('read','full','probe','mcp')),
             created_at   DOUBLE PRECISION NOT NULL,
             expires_at   DOUBLE PRECISION,
             last_used_at DOUBLE PRECISION,
@@ -131,9 +132,12 @@ def pg_create_main_schema(cur):
                 "ON api_tokens(username)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_api_tokens_hash "
                 "ON api_tokens(token_hash)")
-    # Widen the scope CHECK on pre-v1.3 installs. The constraint was
+    # Widen the scope CHECK on pre-v1.5 installs. The constraint was
     # auto-named at table creation — discover it by definition, drop, and
-    # re-add with 'probe' included. Savepoint-guarded like other migrations.
+    # re-add with the full scope set ('probe' added v1.3, 'mcp' added v1.5).
+    # Fires whenever the existing definition is missing 'mcp', which covers
+    # both the original ('read','full') and the v1.3 ('…','probe') shapes.
+    # Savepoint-guarded like other migrations.
     try:
         cur.execute("SAVEPOINT _api_scope")
         cur.execute("""
@@ -147,11 +151,11 @@ def pg_create_main_schema(cur):
         for _ck in (cur.fetchall() or []):
             _nm  = _ck["conname"] if isinstance(_ck, dict) else _ck[0]
             _def = (_ck["defn"] if isinstance(_ck, dict) else _ck[1]) or ""
-            if "scope" in _def and "'probe'" not in _def:
+            if "scope" in _def and "'mcp'" not in _def:
                 cur.execute(f'ALTER TABLE api_tokens DROP CONSTRAINT "{_nm}"')
                 cur.execute(
                     "ALTER TABLE api_tokens ADD CONSTRAINT api_tokens_scope_check "
-                    "CHECK (scope IN ('read','full','probe'))")
+                    "CHECK (scope IN ('read','full','probe','mcp'))")
         cur.execute("RELEASE SAVEPOINT _api_scope")
     except Exception:
         cur.execute("ROLLBACK TO SAVEPOINT _api_scope")
