@@ -88,7 +88,7 @@ class StatusWindow:
         self._log_source = "app"   # "app" | "sensors" | "audit" | "backup"
         self._log_paths  = {
             "sensors": os.path.join(_logdir, "pingwatchsensors.log"),
-            "audit":   os.path.join(_logdir, "pingwatchaudit.log"),
+            "audit":   os.path.join(_logdir, "audit", "pingwatchaudit.log"),
             "backup":  os.path.join(_logdir, "pingwatchbackup.log"),
         }
         self._file_pos   = {}   # path -> byte offset (for tailing)

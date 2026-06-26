@@ -22,8 +22,11 @@ Never use log.debug() in per-probe tight loops — use log_sensors for
 sensor-specific events.
 """
 
+import gzip
 import logging
 import os
+import re
+import shutil
 import sys
 from logging.handlers import RotatingFileHandler, TimedRotatingFileHandler
 
@@ -66,18 +69,96 @@ _sh = RotatingFileHandler(
 _sh.setFormatter(_fmt)
 log_sensors.addHandler(_sh)
 
-# ── Audit logger → logs/pingwatchaudit.log ────────────────────────────────
+# ── Audit logger → logs/audit/pingwatchaudit.log ──────────────────────────
 # Compliance-oriented retention: daily rotation, 365 days kept. Audit is
 # low-volume enough that size-based rotation would give unpredictable
 # coverage; time-based rotation guarantees ~1 year of history.
+#
+# The daily rollovers live in their own logs/audit/ subfolder (so they don't
+# bury the handful of active logs in logs/) and are gzip-compressed on
+# rotation (a year of audit is ~1 MB raw, far less compressed). The active
+# file stays plain text so the log viewer / support bundle can tail it.
+_AUDIT_DIR = os.path.join(_LOG_DIR, "audit")
+os.makedirs(_AUDIT_DIR, exist_ok=True)
+_AUDIT_PATH = os.path.join(_AUDIT_DIR, "pingwatchaudit.log")
+
+# backupCount pruning must still recognise the gzipped rollovers. We pin the
+# un-anchored, lookaround form of the date matcher (the modern stdlib default):
+#   - Python 3.9+ calls ``extMatch.search(full_filename)`` in the namer branch,
+#     which an ``^…$``-anchored pattern would never satisfy (the name starts
+#     with "pingwatchaudit.log."), so the .gz backups would leak forever.
+#   - Python 3.8 calls ``extMatch.match(suffix)`` on the already-stripped
+#     suffix ("2026-06-26.gz"); ``match`` only anchors at the start, so the
+#     trailing ".gz" is fine and the file is still pruned.
+# One pattern, correct on every supported version.
+_AUDIT_EXTMATCH = re.compile(r"(?<!\d)\d{4}-\d{2}-\d{2}(?!\d)", re.ASCII)
+
+
+def _gz_namer(name):
+    """Rolled audit file gets a .gz suffix (the rotator does the compressing)."""
+    return name + ".gz"
+
+
+def _gz_rotator(source, dest):
+    """Compress the just-closed daily file into dest, then drop the original."""
+    with open(source, "rb") as f_in, gzip.open(dest, "wb") as f_out:
+        shutil.copyfileobj(f_in, f_out)
+    os.remove(source)
+
+
+def _apply_gz_rotation(handler):
+    handler.namer = _gz_namer
+    handler.rotator = _gz_rotator
+    handler.extMatch = _AUDIT_EXTMATCH
+    return handler
+
+
+def _migrate_audit_logs():
+    """One-time: relocate legacy logs/pingwatchaudit.log* into logs/audit/.
+
+    Runs before the handler opens its file so the active log keeps its history.
+    Dated backups are gzipped on the way in; the active file is moved as-is so
+    the new handler appends to it. Idempotent and best-effort — a partially
+    converted folder (already-moved or already-gzipped files) is left alone.
+    """
+    try:
+        names = os.listdir(_LOG_DIR)
+    except OSError:
+        return
+    for fn in names:
+        if not fn.startswith("pingwatchaudit.log"):
+            continue
+        src = os.path.join(_LOG_DIR, fn)
+        if not os.path.isfile(src):
+            continue
+        try:
+            if fn == "pingwatchaudit.log":
+                if not os.path.exists(_AUDIT_PATH):
+                    shutil.move(src, _AUDIT_PATH)
+            elif fn.endswith(".gz"):
+                dst = os.path.join(_AUDIT_DIR, fn)
+                if not os.path.exists(dst):
+                    shutil.move(src, dst)
+            else:
+                dst = os.path.join(_AUDIT_DIR, fn + ".gz")
+                if not os.path.exists(dst):
+                    with open(src, "rb") as f_in, gzip.open(dst, "wb") as f_out:
+                        shutil.copyfileobj(f_in, f_out)
+                os.remove(src)
+        except OSError:
+            pass
+
+
+_migrate_audit_logs()
+
 log_audit = logging.getLogger("pingwatch.audit")
 log_audit.setLevel(logging.INFO)
 log_audit.propagate = False     # don't bubble up to the main pingwatch logger
 _ah = TimedRotatingFileHandler(
-    os.path.join(_LOG_DIR, "pingwatchaudit.log"),
-    when="midnight", interval=1, backupCount=365, encoding="utf-8"
+    _AUDIT_PATH, when="midnight", interval=1, backupCount=365, encoding="utf-8"
 )
 _ah.setFormatter(_fmt)
+_apply_gz_rotation(_ah)
 log_audit.addHandler(_ah)
 
 # ── Backup logger → logs/pingwatchbackup.log ──────────────────────────────
@@ -210,6 +291,7 @@ def reconfigure_from_settings():
         )
         new_h.setFormatter(_fmt)
         new_h.setLevel(old_handler.level)
+        _apply_gz_rotation(new_h)   # keep subfolder gzip behaviour after a swap
         logger_obj.addHandler(new_h)
         try:
             logger_obj.removeHandler(old_handler)
@@ -236,9 +318,7 @@ def reconfigure_from_settings():
                          os.path.join(_LOG_DIR, "pingwatchsensors.log"),
                          sens_mb, sens_bk)
     if _ah.backupCount != audit_dy:
-        _ah = _swap_time(log_audit, _ah,
-                         os.path.join(_LOG_DIR, "pingwatchaudit.log"),
-                         audit_dy)
+        _ah = _swap_time(log_audit, _ah, _AUDIT_PATH, audit_dy)
     if _bkh.maxBytes != bkup_mb * 1_000_000 or _bkh.backupCount != bkup_bk:
         _bkh = _swap_size(log_backup, _bkh,
                           os.path.join(_LOG_DIR, "pingwatchbackup.log"),
@@ -253,7 +333,7 @@ def reconfigure_from_settings():
 LOG_FILES = {
     'app':     _LOG_PATH,
     'sensors': os.path.join(_LOG_DIR, 'pingwatchsensors.log'),
-    'audit':   os.path.join(_LOG_DIR, 'pingwatchaudit.log'),
+    'audit':   _AUDIT_PATH,
     'backup':  os.path.join(_LOG_DIR, 'pingwatchbackup.log'),
     'probes':  os.path.join(_LOG_DIR, 'pingwatchprobes.log'),
 }
