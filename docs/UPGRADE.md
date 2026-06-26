@@ -29,11 +29,28 @@ watches `server_health.json`. The server reads `PW_DATA_DIR=<base>/data` so a co
 swap never touches persistent state. In a flat checkout `bootstrap.py` is a
 transparent pass-through to `./server.py`.
 
-## Release signing keys
+## Release signing keys (hybrid trust)
 
-Images are signed with **Ed25519**. The server verifies against the public key
-baked into `core/upgrade.py` (`RELEASE_PUBKEY_HEX`); the private key signs images
-on the build machine and **must never be in the repo**.
+Images are signed with **Ed25519**. A server accepts an image if its signature
+matches **any trusted key**:
+
+- the **vendor key** baked into `core/upgrade.py` (`VENDOR_PUBKEY_HEX`) — the
+  project's own key; its private half signs official releases and is never in
+  the repo; and
+- any **operator keys** a self-hoster registers on their own box with
+  `tools/trust_key.py` (stored in `data/trusted_upgrade_keys.json`).
+
+So a cloned/self-hosted server trusts official releases out of the box **and**
+can build + install its own images after registering its own public key:
+
+```bash
+# on the server (shell access required — deliberately not a web action):
+python tools/trust_key.py --add <your-64-hex-pubkey> --label "my build box"
+python tools/trust_key.py --list
+```
+
+Adding a trusted key requires filesystem access on purpose: a compromised
+web-admin session cannot widen who may push code.
 
 Generate a keypair once:
 

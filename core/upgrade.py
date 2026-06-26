@@ -31,12 +31,49 @@ import time
 from core.config import DATA_ROOT
 from core.logger import log
 
-# ── Release signing public key ────────────────────────────────────────────────
-# Ed25519 public key (raw, hex). The private half signs release images on the
-# build machine and is NEVER in the repo. Rotating this key is a two-release
-# migration: ship an image (signed by the OLD key) whose code bakes in the NEW
-# key, deploy it, then start signing with the NEW key.
-RELEASE_PUBKEY_HEX = "26916ba4fe0d998d8365d5c86a08f9e8cc165d463d9edd2529d5848933cc58c8"
+# ── Release signing trust (hybrid: vendor key + operator-registered keys) ─────
+# VENDOR_PUBKEY_HEX is the baked-in default authority — the project's own Ed25519
+# public key. Its private half signs official releases on the build machine and
+# is NEVER in the repo. Rotating it is a two-release migration: ship an image
+# (signed by the OLD key) whose code bakes in the NEW key, deploy, then sign with
+# the NEW key.
+VENDOR_PUBKEY_HEX = "c6defa2275f809cc95856e90a346a9c3bcb1da317e169f53841ba927067041a4"
+RELEASE_PUBKEY_HEX = VENDOR_PUBKEY_HEX   # back-compat alias
+
+# An operator who self-hosts can ADD their own trusted public key(s) so they can
+# build and install their own images alongside (or instead of) the vendor's.
+# These live in the instance's data dir and are managed by tools/trust_key.py —
+# adding a key requires FILESYSTEM access on the box, deliberately NOT a web
+# action, so a compromised web-admin session cannot widen who may push code.
+TRUSTED_KEYS_FILE = os.path.join(DATA_ROOT, "trusted_upgrade_keys.json")
+
+
+def trusted_pubkeys():
+    """Every public key whose signature this server will accept on an image: the
+    baked vendor key plus any operator keys registered in TRUSTED_KEYS_FILE.
+    De-duplicated, lower-cased; malformed entries are ignored."""
+    keys = []
+    if VENDOR_PUBKEY_HEX:
+        keys.append(VENDOR_PUBKEY_HEX.strip().lower())
+    try:
+        with open(TRUSTED_KEYS_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        entries = data if isinstance(data, list) else (data.get("keys") or [])
+        for e in entries:
+            hx = (e.get("pubkey") if isinstance(e, dict) else e) or ""
+            hx = str(hx).strip().lower()
+            if len(hx) == 64:
+                keys.append(hx)
+    except FileNotFoundError:
+        pass
+    except Exception as e:
+        log.warning("trusted_upgrade_keys.json unreadable: %s", type(e).__name__)
+    seen, out = set(), []
+    for k in keys:
+        if k not in seen:
+            seen.add(k)
+            out.append(k)
+    return out
 
 # Oldest app_version this build will accept an upgrade *from*. Guards against
 # skipping a required intermediate migration. Bump when a release drops support
@@ -103,15 +140,26 @@ def sign_manifest(manifest_bytes, private_key_hex):
 
 
 def _verify_signature(manifest_bytes, sig_hex):
+    """Accept the image if its signature verifies against ANY trusted key
+    (vendor or operator-registered). Reject if none match."""
     from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
     from cryptography.exceptions import InvalidSignature
     try:
-        pub = Ed25519PublicKey.from_public_bytes(bytes.fromhex(RELEASE_PUBKEY_HEX))
-        pub.verify(bytes.fromhex(sig_hex.strip()), manifest_bytes)
-    except InvalidSignature:
-        raise ImageError("signature verification failed")
-    except Exception as e:
-        raise ImageError("signature check error: %s" % type(e).__name__)
+        sig = bytes.fromhex(sig_hex.strip())
+    except ValueError:
+        raise ImageError("malformed signature")
+    candidates = trusted_pubkeys()
+    if not candidates:
+        raise ImageError("no trusted signing keys configured")
+    for hexk in candidates:
+        try:
+            Ed25519PublicKey.from_public_bytes(bytes.fromhex(hexk)).verify(sig, manifest_bytes)
+            return   # a trusted key verified it
+        except InvalidSignature:
+            continue
+        except Exception:
+            continue   # malformed trusted entry — try the next
+    raise ImageError("signature is not from any trusted key")
 
 
 # ── Version compatibility ─────────────────────────────────────────────────────
