@@ -340,8 +340,10 @@ def _commit(st):
     prev = st.get("previous")
     st["phase"] = "idle"
     _save_json(STATE_PATH, st)
-    # Keep the active + previous releases (and the snapshot); prune older ones.
+    # Keep the active + previous releases; keep ONLY this upgrade's DB snapshot
+    # (the crash-loop rollback target). Prune everything older.
     _prune_releases({target, prev})
+    _prune_snapshots({st.get("db_snapshot")})
     _log("commit: %s healthy (%d good beacons) — committed" % (target, GOOD_CHECKINS))
 
 
@@ -369,6 +371,23 @@ def _prune_releases(keep):
             if name not in keep and os.path.isdir(release_dir(name)):
                 shutil.rmtree(release_dir(name), ignore_errors=True)
                 _log("pruned old release %s" % name)
+    except Exception:
+        pass
+
+
+def _prune_snapshots(keep):
+    """Delete DB snapshots except the ones in `keep` (the committed upgrade's
+    snapshot is retained as the crash-loop rollback target). PG logs snapshots
+    can be hundreds of MB, so leaving them around leaks disk fast."""
+    keep = {k for k in keep if k}
+    try:
+        for name in os.listdir(SNAPSHOTS_DIR):
+            path = os.path.join(SNAPSHOTS_DIR, name)
+            if name not in keep and os.path.isdir(path):
+                shutil.rmtree(path, ignore_errors=True)
+                _log("pruned old DB snapshot %s" % name)
+    except FileNotFoundError:
+        pass
     except Exception:
         pass
 

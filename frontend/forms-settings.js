@@ -4602,7 +4602,7 @@ function _diagRenderOverview(d) {
     : '<span class="diag-muted">psutil not installed — hardware stats unavailable</span>';
   return `
     <div class="diag-stat-row"><span class="diag-stat-k">Version</span>
-      <span class="diag-stat-v">PingWatch ${esc(d.version||'?')} "${esc(d.version_name||'')}"</span></div>
+      <span class="diag-stat-v">PingWatch ${esc(d.version||'?')} "${esc(d.version_name||'')}"${d.build ? ' · build ' + esc(d.build) : ''}</span></div>
     <div class="diag-stat-row"><span class="diag-stat-k">Uptime</span>
       <span class="diag-stat-v">${upt}</span></div>
     <div class="diag-stat-row"><span class="diag-stat-k">Runtime</span>

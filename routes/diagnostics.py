@@ -258,6 +258,9 @@ def _get_snapshot() -> dict:
     return {
         "version":      app_state.APP_VERSION,
         "version_name": app_state.APP_VERSION_NAME,
+        # Managed-upgrade release id (version + payload hash, e.g. 1.5+424f955a55);
+        # empty on a flat install. Set by bootstrap.py via PW_RELEASE.
+        "build":        os.environ.get("PW_RELEASE", ""),
         "uptime_s":     int(time.time() - app_state.SERVER_START),
         "started_at":   int(app_state.SERVER_START),
         "python_version": f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}",
@@ -916,6 +919,7 @@ def _send_bundle(h) -> None:
             "hostname":     hostname,
             "version":      app_state.APP_VERSION,
             "version_name": app_state.APP_VERSION_NAME,
+            "build":        os.environ.get("PW_RELEASE", ""),
             "platform":     SYS,
             "files": [
                 "logs/pingwatch.log (or .tail if >10MB)",

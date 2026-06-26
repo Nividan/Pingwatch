@@ -114,7 +114,7 @@ def _zip_dir(zf, root, arc_prefix):
                 zf.writestr(zi, f.read())
 
 
-def build(out_dir, key_hex, created_at):
+def build(out_dir, key_hex, created_at, min_from=None):
     staging = tempfile.mkdtemp(prefix="pwimg_")
     try:
         payload = os.path.join(staging, up.PAYLOAD_DIR)
@@ -129,7 +129,7 @@ def build(out_dir, key_hex, created_at):
             "version": version,
             "app_version": app_ver,
             "payload_sha256": digest,
-            "min_upgrade_from": up.MIN_UPGRADE_FROM,
+            "min_upgrade_from": (min_from or up.MIN_UPGRADE_FROM),
             "created_at": created_at,
             "files": count,
         }
@@ -158,14 +158,18 @@ def main(argv):
     ap.add_argument("--key", help="path to the Ed25519 private key file (hex)")
     ap.add_argument("--created-at", default=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
                     help="manifest timestamp (default: now, UTC)")
+    ap.add_argument("--min-from", default=up.MIN_UPGRADE_FROM,
+                    help="minimum app_version a server may upgrade FROM to install this image "
+                         "(the upgrade-path floor; default: %s)" % up.MIN_UPGRADE_FROM)
     args = ap.parse_args(argv)
 
     key_hex = _load_key(args)
-    out_zip, version, digest, count = build(args.out, key_hex, args.created_at)
-    print("[build-image] version : %s" % version)
-    print("[build-image] files   : %d" % count)
-    print("[build-image] sha256  : %s" % digest)
-    print("[build-image] written : %s" % out_zip)
+    out_zip, version, digest, count = build(args.out, key_hex, args.created_at, min_from=args.min_from)
+    print("[build-image] version      : %s" % version)
+    print("[build-image] upgrade from : >= %s" % args.min_from)
+    print("[build-image] files        : %d" % count)
+    print("[build-image] sha256       : %s" % digest)
+    print("[build-image] written      : %s" % out_zip)
     return 0
 
 

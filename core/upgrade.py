@@ -291,27 +291,39 @@ def _sqlite_snapshot(src_path, dest_path):
     return os.path.getsize(dest_path)
 
 
+def _snapshot_logs_enabled():
+    """The logs schema (sensor_samples, traps, …) is high-volume and its
+    migrations are additive, so rollback treats a logs restore as best-effort.
+    By default we therefore do NOT snapshot it — a PG logs dump can be hundreds
+    of MB and add tens of seconds to EVERY upgrade. Set PW_UPGRADE_SNAPSHOT_LOGS=1
+    to include it (e.g. before a release with a breaking logs-schema change)."""
+    return os.environ.get("PW_UPGRADE_SNAPSHOT_LOGS", "").strip().lower() in ("1", "true", "yes")
+
+
 def create_snapshot(upgrade_id):
     """Snapshot the DB(s) into db_snapshots/<upgrade_id>/ so a rollback can undo
     the new release's forward migration. Returns (snapshot_id, backend). PG reuses
-    the pg_dump helper from backup/db_backup.py (a subprocess, no lock issue)."""
+    the pg_dump helper from backup/db_backup.py (a subprocess, no lock issue).
+    The main schema is always snapshotted; logs only when explicitly enabled."""
     snap = os.path.join(SNAPSHOTS_DIR, upgrade_id)
     os.makedirs(snap, exist_ok=True)
+    want_logs = _snapshot_logs_enabled()
     from db.backend import is_pg
     if is_pg():
         from db.backend import load_config
         from backup.db_backup import _backup_pg_schema
         cfg = load_config()
         _backup_pg_schema(cfg, "main", os.path.join(snap, "main.sql"), "snapshot main", log)
-        try:
-            _backup_pg_schema(cfg, "logs", os.path.join(snap, "logs.sql"), "snapshot logs", log)
-        except Exception as e:
-            log.warning("upgrade snapshot: logs schema skipped (%s)", type(e).__name__)
+        if want_logs:
+            try:
+                _backup_pg_schema(cfg, "logs", os.path.join(snap, "logs.sql"), "snapshot logs", log)
+            except Exception as e:
+                log.warning("upgrade snapshot: logs schema skipped (%s)", type(e).__name__)
         backend = "postgresql"
     else:
         from core.config import DB_PATH, LOGS_DB_PATH
         _sqlite_snapshot(DB_PATH, os.path.join(snap, "main.sqlite"))
-        if os.path.exists(LOGS_DB_PATH):
+        if want_logs and os.path.exists(LOGS_DB_PATH):
             _sqlite_snapshot(LOGS_DB_PATH, os.path.join(snap, "logs.sqlite"))
         backend = "sqlite"
     with open(os.path.join(snap, "meta.json"), "w", encoding="utf-8") as f:
