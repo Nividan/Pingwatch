@@ -40,7 +40,10 @@ import sys
 # Persistent state — moved into <base>/data/. Prefixes catch the -wal/-shm/
 # .pending_import sidecar files SQLite/imports create alongside the DB.
 DATA_FILE_PREFIXES = ("pingwatch.db", "pingwatch_logs.db")
-DATA_FILES         = ("pingwatch.conf",)
+# ssh_known_hosts.txt is runtime state (the SSH TOFU host-key store, resolved by
+# backup/engine.py as dirname(DB_PATH)/ssh_known_hosts.txt = DATA_ROOT). It must
+# live in data/ so accumulated host keys survive a release swap.
+DATA_FILES         = ("pingwatch.conf", "ssh_known_hosts.txt")
 DATA_TOP_DIRS      = ("certs", "logs")
 # backup/ is MIXED in a flat tree: code (engine.py, db_backup.py, scheduler.py)
 # plus data (configs/, database/). These two subdirs are data; the rest is code.

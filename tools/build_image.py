@@ -46,7 +46,7 @@ _ZIP_EPOCH = (1980, 1, 1, 0, 0, 0)
 _EXCLUDE_NAMES = {
     ".git", ".github", ".claude", "venv", "__pycache__",
     "releases", "data", "db_snapshots", "current.txt", "upgrade_state.json",
-    "pingwatch.conf", "certs", "logs",
+    "pingwatch.conf", "certs", "logs", "ssh_known_hosts.txt",
     "CLAUDE.md", "MIGRATION_NOTES.md", ".gitignore",
 }
 _EXCLUDE_DB_PREFIXES = ("pingwatch.db", "pingwatch_logs.db")
