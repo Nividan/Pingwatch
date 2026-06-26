@@ -27,6 +27,7 @@ import io
 import json
 import os
 import shutil
+import subprocess
 import sys
 import tempfile
 import time
@@ -91,6 +92,42 @@ def _stage_payload(dst_payload):
     return n
 
 
+def _git(args):
+    """Run a git command in the repo root; return stripped stdout or None."""
+    try:
+        out = subprocess.run(["git", "-C", _REPO_ROOT] + args,
+                             capture_output=True, text=True, timeout=10)
+        if out.returncode != 0:
+            return None
+        return out.stdout.strip()
+    except Exception:
+        return None
+
+
+def _build_identity(app_ver, digest):
+    """Human build version string + git metadata for the manifest.
+
+    Convention: ``<app>.<build>`` where the build number is the git commit count
+    (monotonic, unique per commit), e.g. ``1.5.930``. The exact commit hash is
+    kept in the manifest (``git_commit``) for traceability, not in the name. An
+    uncommitted (dirty) tree appends ``.dev<hash6>`` — a content tiebreaker so
+    repeated dirty builds don't collide, and a visible "not from a clean commit"
+    flag. Falls back to the payload-hash id when git isn't available.
+
+    Returns (version, meta) where meta carries build/git_commit/git_dirty.
+    """
+    gitcount = _git(["rev-list", "--count", "HEAD"])
+    short    = _git(["rev-parse", "--short=7", "HEAD"])
+    if not gitcount:
+        return "%s+%s" % (app_ver, digest[:12]), \
+               {"build": None, "git_commit": short, "git_dirty": None}
+    dirty = bool(_git(["status", "--porcelain"]))
+    version = "%s.%s" % (app_ver, gitcount)
+    if dirty:
+        version += ".dev%s" % digest[:6]
+    return version, {"build": int(gitcount), "git_commit": short, "git_dirty": dirty}
+
+
 def _load_key(args):
     if args.key:
         with open(args.key, "r", encoding="utf-8") as f:
@@ -122,7 +159,7 @@ def build(out_dir, key_hex, created_at, min_from=None):
         count = _stage_payload(payload)
         digest = up.payload_digest(payload)
         app_ver = app_state.APP_VERSION
-        version = "%s+%s" % (app_ver, digest[:12])
+        version, gitmeta = _build_identity(app_ver, digest)
 
         manifest = {
             "schema": 1,
@@ -132,6 +169,9 @@ def build(out_dir, key_hex, created_at, min_from=None):
             "min_upgrade_from": (min_from or up.MIN_UPGRADE_FROM),
             "created_at": created_at,
             "files": count,
+            "build": gitmeta["build"],
+            "git_commit": gitmeta["git_commit"],
+            "git_dirty": gitmeta["git_dirty"],
         }
         # Canonical bytes: sort_keys so the signed bytes are reproducible.
         manifest_bytes = json.dumps(manifest, sort_keys=True, indent=2).encode("utf-8")
@@ -146,7 +186,7 @@ def build(out_dir, key_hex, created_at, min_from=None):
             _zip_dir(zf, payload, up.PAYLOAD_DIR)
         with open(out_zip, "wb") as f:
             f.write(buf.getvalue())
-        return out_zip, version, digest, count
+        return out_zip, version, digest, count, gitmeta
     finally:
         shutil.rmtree(staging, ignore_errors=True)
 
@@ -164,8 +204,16 @@ def main(argv):
     args = ap.parse_args(argv)
 
     key_hex = _load_key(args)
-    out_zip, version, digest, count = build(args.out, key_hex, args.created_at, min_from=args.min_from)
+    out_zip, version, digest, count, gitmeta = build(
+        args.out, key_hex, args.created_at, min_from=args.min_from)
     print("[build-image] version      : %s" % version)
+    if gitmeta.get("build") is not None:
+        _commit = ("g" + gitmeta["git_commit"]) if gitmeta.get("git_commit") else "(no commit)"
+        print("[build-image] build / commit: %s / %s%s" % (
+            gitmeta["build"], _commit,
+            "  (DIRTY — uncommitted changes)" if gitmeta["git_dirty"] else ""))
+    else:
+        print("[build-image] build / commit: (git unavailable — using payload-hash id)")
     print("[build-image] upgrade from : >= %s" % args.min_from)
     print("[build-image] files        : %d" % count)
     print("[build-image] sha256       : %s" % digest)
