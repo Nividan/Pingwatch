@@ -694,9 +694,12 @@ def _pg_load(state):
     log.info(f"DB load: restored {len(state.devices)} device(s), {snr_total} sensor(s) into state")
 
     # ── Restore runtime state from sensor_samples ────────────────────
-    # History: per-sensor indexed seeks — each query uses the (did,sid,ts) composite
-    # index and stops at LIMIT 80.  A single window-function query over the full table
-    # is dramatically slower because it cannot exploit that index.
+    # History: per-sensor indexed seeks — each (did,sid) seek uses the
+    # (did,sid,ts) composite index and stops at LIMIT 80.  We batch the seeks
+    # with unnest(...) CROSS JOIN LATERAL so a chunk of sensors is fetched in a
+    # single round trip while STILL doing a per-pair index scan (a full-table
+    # window function would scan every monthly partition — dramatically slower).
+    # At 30k sensors this turns ~30k round trips into ~15.
     # Stats: one batched GROUP BY — genuinely benefits from a single round trip.
     _count_window = min(int(_settings.get("retention_days", 30)), 30)
     _cutoff = time.time() - _count_window * 86400
@@ -704,16 +707,48 @@ def _pg_load(state):
         with pg_conn("logs") as con:
             cur = con.cursor()
             _hist_by_key = {}  # (did, sid) → list of (ok, ms, value), newest-first
-            for _dev in state.devices.values():
-                for _s in _dev.sensors.values():
+            _pairs = [(_s.device_id, _s.sensor_id)
+                      for _dev in state.devices.values()
+                      for _s in _dev.sensors.values()]
+            try:
+                _CHUNK = 2000
+                for _i in range(0, len(_pairs), _CHUNK):
+                    _batch = _pairs[_i:_i + _CHUNK]
+                    _dids = [p[0] for p in _batch]
+                    _sids = [p[1] for p in _batch]
+                    cur.execute(
+                        "SELECT v.did, v.sid, h.ok, h.ms, h.value "
+                        "FROM unnest(%s::text[], %s::text[]) AS v(did, sid) "
+                        "CROSS JOIN LATERAL ("
+                        "  SELECT ok, ms, value, ts FROM sensor_samples "
+                        "  WHERE did=v.did AND sid=v.sid ORDER BY ts DESC LIMIT 80"
+                        ") h "
+                        "ORDER BY v.did, v.sid, h.ts DESC",
+                        (_dids, _sids)
+                    )
+                    # Rows arrive grouped by (did,sid), newest-first per sensor.
+                    for _did, _sid, _ok, _ms, _val in cur.fetchall():
+                        _hist_by_key.setdefault((_did, _sid), []).append((_ok, _ms, _val))
+            except Exception as _be:
+                # Defensive: if the batched form is unsupported/errors, fall back
+                # to the original per-sensor seeks (after clearing the aborted txn).
+                log.warning(f"Batched history restore failed ({_be}); "
+                            "falling back to per-sensor seeks")
+                try:
+                    con.rollback()
+                except Exception:
+                    pass
+                _hist_by_key = {}
+                cur = con.cursor()
+                for _did, _sid in _pairs:
                     cur.execute(
                         "SELECT ok, ms, value FROM sensor_samples "
                         "WHERE did=%s AND sid=%s ORDER BY ts DESC LIMIT 80",
-                        (_s.device_id, _s.sensor_id)
+                        (_did, _sid)
                     )
                     _rows = cur.fetchall()
                     if _rows:
-                        _hist_by_key[(_s.device_id, _s.sensor_id)] = _rows
+                        _hist_by_key[(_did, _sid)] = _rows
             # One query for availability stats across all sensors
             cur.execute(
                 "SELECT did, sid, COUNT(*), COALESCE(SUM(ok),0) "

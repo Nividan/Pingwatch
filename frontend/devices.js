@@ -496,13 +496,36 @@ function toggleSite(site){
   _lsSet('pw-site-collapsed', [...set]);
 }
 
+// Absolute device totals computed from S (independent of which page is
+// currently materialised in the DOM). With page-windowing the DOM only holds
+// one page, so counts MUST come from data, not from querying '.dc' nodes.
+// Also caches a dgkey→[did] index so _updateGrpSummary() stays O(group size)
+// on the hot SSE path instead of re-walking all devices per status change.
+let _groupDidsCache=null;
+function _devTotalsFromState(){
+  const byKey={}, bySite={}, byKeyDids={};
+  for(const did in S.devices){
+    const dev=S.devices[did];
+    const group=dev.group||'Default Group';
+    const site=dev.site||'';
+    const key=_dgKey(site, group);
+    byKey[key]=(byKey[key]||0)+1;
+    (byKeyDids[key]=byKeyDids[key]||[]).push(did);
+    if(!bySite[site]) bySite[site]={devices:0,groups:new Set()};
+    bySite[site].devices++; bySite[site].groups.add(key);
+  }
+  _groupDidsCache=byKeyDids;
+  return {byKey, bySite, byKeyDids};
+}
+
 function refreshSiteCounts(){
+  const {bySite}=_devTotalsFromState();
   document.querySelectorAll('.site-wrap').forEach(sw=>{
     const cnt=sw.querySelector('.site-count');
     if(!cnt) return;
-    const n=sw.querySelectorAll('.dc:not(.dc-add)').length;
-    const groups=sw.querySelectorAll('.grp-wrap').length;
-    cnt.textContent = `${groups} group${groups===1?'':'s'} · ${n} device${n===1?'':'s'}`;
+    const info=bySite[sw.dataset.site||'']||{devices:0,groups:new Set()};
+    const groups=info.groups.size;
+    cnt.textContent = `${groups} group${groups===1?'':'s'} · ${info.devices} device${info.devices===1?'':'s'}`;
   });
 }
 
@@ -618,13 +641,11 @@ function ensureGroupSection(group, site){
 }
 
 function refreshGroupCounts(){
+  const {byKey}=_devTotalsFromState();
   document.querySelectorAll('.grp-grid').forEach(grid=>{
     const key=grid.dataset.dgkey || grid.dataset.group;
     const cnt=document.getElementById(cntId(key));
-    if(cnt){
-      const n=grid.querySelectorAll('.dc:not(.dc-add)').length;
-      cnt.textContent=`${n} total`;
-    }
+    if(cnt) cnt.textContent=`${byKey[key]||0} total`;
   });
   refreshSiteCounts();
 }
@@ -656,7 +677,9 @@ function _collapseAllGroups(){
   // Iterate by composite key (dgkey) so groups with the same name under
   // different sites collapse independently — each is its own bucket.
   const keys=[...document.querySelectorAll('.grp-grid')].map(el=>el.dataset.dgkey).filter(Boolean);
-  const set=new Set(keys);
+  // Union with already-collapsed groups so collapsing the visible page doesn't
+  // erase the collapse state of off-page groups (page-windowing).
+  const set=new Set([..._lsGet('pw-grp-collapsed', []), ...keys]);
   keys.forEach(key=>{
     const grid=document.getElementById(gridId(key));
     const arr=document.querySelector('#'+grpId(key)+' .grp-arr');
@@ -694,14 +717,18 @@ function _updateGrpSummary(group, site){
   const gid=gridId(key).replace('gg-','');
   const el=document.getElementById('gsum-'+gid);
   if(!el) return;
-  const grid=document.getElementById(gridId(key));
-  if(!grid){ el.innerHTML=''; return; }
-  // Count devices by status in this group (always show, regardless of collapsed state)
+  // Count devices by status in this group from S (whole group, not just the
+  // rendered page). Only runs for on-page groups (el exists ⇒ section rendered).
+  // Uses the cached dgkey→[did] index so this stays O(group size) on the hot
+  // SSE status path; falls back to a full build if the cache is cold.
   const counts={up:0,down:0,warn:0,pause:0};
-  grid.querySelectorAll('.dc:not(.dc-add)').forEach(card=>{
-    const did=card.id.replace('dp-','');
+  let dids=_groupDidsCache && _groupDidsCache[key];
+  if(!dids){ dids=_devTotalsFromState().byKeyDids[key]||[]; }
+  dids.forEach(did=>{
     const dev=S.devices[did];
-    if(dev){const st=dev.status||'unknown';if(counts[st]!==undefined)counts[st]++;}
+    if(!dev) return;
+    const st=dev.status||'unknown';
+    if(counts[st]!==undefined) counts[st]++;
   });
   const parts=[];
   if(counts.up)   parts.push(`<span class="grp-sum-pill up"><span class="grp-sum-dot"></span>${counts.up}</span>`);
@@ -865,6 +892,15 @@ async function _toggleMuteDevice(did){
 function renderDp(dev){
   document.getElementById('emptyMain').style.display='none';
   if(activeMainTab==='devices') document.getElementById('dpanels').style.display='';
+  // Keep S.sensors in sync whether or not this card is on the current page.
+  dev.sensors.forEach(s=>{ S.sensors[dev.device_id+'/'+s.sensor_id]=s; });
+  // Page window: only materialise cards for devices on the current page. Off-page
+  // devices live in S and render when paged/filtered to. During a page rebuild
+  // (_inPageRender) the slice IS the page set, so this passes through.
+  if(_renderedPageSet && !_renderedPageSet.has(dev.device_id)){
+    if(!_inPageRender) _scheduleDevViewRefresh();
+    return;
+  }
   const old=document.getElementById('dp-'+dev.device_id);
   const oldLr=document.getElementById('dpl-'+dev.device_id);
   const group=dev.group||'Default Group';
@@ -888,12 +924,14 @@ function renderDp(dev){
   const row=lr.firstElementChild;
   if(sameGroup && oldLr && oldLr.parentNode === grid) oldLr.replaceWith(row);
   else { if(oldLr) oldLr.remove(); grid.insertBefore(row,addBtn); }
-  dev.sensors.forEach(s=>{ S.sensors[dev.device_id+'/'+s.sensor_id]=s; });
-  refreshGroupCounts();
-  applyRbac();
-  // Re-apply search filter so new/updated cards are filtered correctly
-  const _srch=document.getElementById('devSearch');
-  if(_srch&&_srch.value) _applyDevFilter(_srch.value);
+  // During a page rebuild these run once in _renderPage(); only do per-card work
+  // (and a debounced view refresh to pick up membership/order changes) when an
+  // incremental caller (device add/edit/group move) invoked us directly.
+  if(!_inPageRender){
+    refreshGroupCounts();
+    applyRbac();
+    _scheduleDevViewRefresh();
+  }
 }
 
 function sSnrPreview(did){
@@ -1379,7 +1417,12 @@ function saveGroupOrder(){
     const g=w.querySelector('.grp-grid');
     return g?(g.dataset.dgkey || g.dataset.group):null;
   }).filter(Boolean);
-  _lsSet('pw-grp-order', order);
+  // Page-windowing: only the current page's groups are in the DOM. Preserve the
+  // saved positions of off-page groups by appending them after the (re)ordered
+  // page groups, instead of clobbering the list down to the visible subset.
+  const domSet=new Set(order);
+  const rest=_lsGet('pw-grp-order', []).filter(k=>!domSet.has(k));
+  _lsSet('pw-grp-order', [...order, ...rest]);
 }
 
 function restoreGroupOrder(){
@@ -1808,6 +1851,22 @@ let _activeStatusFilter='all';
 let _devPage=0;
 let _devPageSize=parseInt(localStorage.getItem('pw_page_size')||'50');
 let _filteredDids=[];
+// Page-windowing: only the current page of device cards is materialised in the
+// DOM. `_renderedPageSet` holds the dids currently rendered so renderDp() can
+// skip off-page devices; `_inPageRender` guards against re-entrant refreshes
+// while _renderPage() is rebuilding the slice.
+let _renderedPageSet=null;
+let _inPageRender=false;
+let _devViewRefreshT=null;
+
+function _curDevSearch(){ return document.getElementById('devSearch')?.value||''; }
+
+// Debounced "the device set/order may have changed, re-render the current page
+// keeping the user on their page" — coalesces bursts (e.g. bulk group moves).
+function _scheduleDevViewRefresh(){
+  clearTimeout(_devViewRefreshT);
+  _devViewRefreshT=setTimeout(()=>_rebuildAndRenderPage(false,null),30);
+}
 
 // ── Status filter pills ───────────────────────────────────────────
 function _setStatusFilter(st){
@@ -1840,66 +1899,113 @@ function _updateStatusPills(){
 }
 
 // ── Device search / filter ────────────────────────────────────────
-function _applyDevFilter(query){
+// Build the ordered list of matching device IDs from S data (NOT the DOM), in
+// the same site → group → device order the grid renders, honouring the saved
+// group order (pw-grp-order). This is the data-driven replacement for the old
+// querySelectorAll('.dc') walk and is what makes page-windowing possible at
+// tens of thousands of devices.
+function _buildFilteredDids(query){
   const q=(query||'').trim().toLowerCase();
   const sf=_activeStatusFilter;
-  // Build ordered list of matching device IDs (preserving DOM order)
-  _filteredDids=[];
-  document.querySelectorAll('.dc:not(.dc-add)').forEach(card=>{
-    const did=card.id.replace('dp-','');
-    if(!S.devices[did]) return;
-    const dev=S.devices[did];
+  const _match=(dev)=>{
     const stMatch=sf==='all'||(dev.status||'unknown').toLowerCase()===sf;
-    if(!stMatch) return;
+    if(!stMatch) return false;
     if(q){
-      const nameMatch=dev.name.toLowerCase().includes(q);
+      const did=dev.device_id;
+      const nameMatch=(dev.name||'').toLowerCase().includes(q);
       const hostMatch=(dev.host||'').toLowerCase().includes(q);
-      const secIpMatch=(dev.secondary_ips||[]).some(ip=>ip.toLowerCase().includes(q));
+      const secIpMatch=(dev.secondary_ips||[]).some(ip=>(ip||'').toLowerCase().includes(q));
       const sensorMatch=S._devSensors[did]&&[...S._devSensors[did]]
-        .some(k=>S.sensors[k]&&S.sensors[k].name.toLowerCase().includes(q));
-      if(!nameMatch&&!hostMatch&&!secIpMatch&&!sensorMatch) return;
+        .some(k=>S.sensors[k]&&(S.sensors[k].name||'').toLowerCase().includes(q));
+      if(!nameMatch&&!hostMatch&&!secIpMatch&&!sensorMatch) return false;
     }
-    _filteredDids.push(did);
+    return true;
+  };
+  // Bucket matching devices by (site,group), preserving device (API) order and
+  // tracking site / group first-appearance order.
+  const buckets={};        // dgkey -> [did,...]
+  const siteOrder=[];      // sites in first-appearance order
+  const siteGroups={};     // site -> [dgkey,...] in first-appearance order
+  const seenSite=new Set(), seenKey=new Set();
+  for(const did in S.devices){
+    const dev=S.devices[did];
+    if(!_match(dev)) continue;
+    const group=dev.group||'Default Group';
+    const site=dev.site||'';
+    const key=_dgKey(site, group);
+    if(!seenSite.has(site)){ seenSite.add(site); siteOrder.push(site); siteGroups[site]=[]; }
+    if(!seenKey.has(key)){ seenKey.add(key); siteGroups[site].push(key); buckets[key]=[]; }
+    buckets[key].push(did);
+  }
+  // Apply the saved group order within each site (stable sort keeps newcomers
+  // and ties in first-appearance order — matches restoreGroupOrder()).
+  const saved=_lsGet('pw-grp-order', []);
+  const rank=new Map(saved.map((k,i)=>[k,i]));
+  siteOrder.forEach(site=>{
+    siteGroups[site].sort((a,b)=>{
+      const ra=rank.has(a)?rank.get(a):Infinity;
+      const rb=rank.has(b)?rank.get(b):Infinity;
+      return ra-rb;
+    });
   });
-  _devPage=0;
-  _renderPage();
-  // Bulk-bar "hidden by filter" counter depends on card visibility.
-  if (_selectMode) _updateBulkBar();
+  _filteredDids=[];
+  siteOrder.forEach(site=>{
+    siteGroups[site].forEach(key=>{
+      buckets[key].forEach(did=>_filteredDids.push(did));
+    });
+  });
 }
 
+// Recompute the filtered set and render the current page. resetPage=true for
+// user-initiated filter/search/view changes; false to keep the user on their
+// page after an incremental data change.
+function _rebuildAndRenderPage(resetPage, query){
+  _buildFilteredDids(query!=null?query:_curDevSearch());
+  const pages=Math.ceil(_filteredDids.length/_devPageSize)||1;
+  if(resetPage) _devPage=0;
+  _devPage=Math.max(0,Math.min(_devPage,pages-1));
+  _renderPage();
+}
+
+function _applyDevFilter(query){
+  _rebuildAndRenderPage(true, query);
+  // Bulk-bar "hidden by filter" counter depends on the rendered set.
+  if (_selectMode && typeof _updateBulkBar==='function') _updateBulkBar();
+}
+
+// Render ONLY the current page of device cards. Both grid and list views are
+// windowed: the DOM holds at most _devPageSize cards regardless of how many
+// thousands of devices exist. Sections are torn down and rebuilt for the page
+// slice (cheap at 50–100 cards) so state always reflects S.
 function _renderPage(){
-  // Pagination only applies to list view — grid view shows every filtered
-  // device. Without this guard, switching from a paginated list view back
-  // to grid silently caps the grid at the list's per-page size, because
-  // the slice below runs regardless of which view is visible. The
-  // pagination CONTROLS were already gated by view in _renderPagination(),
-  // but the underlying slice was not — that asymmetry was the bug.
-  const isList = _devView === 'list';
-  const start  = isList ? _devPage * _devPageSize : 0;
-  const slice  = isList ? _filteredDids.slice(start, start + _devPageSize) : _filteredDids;
-  const visible=new Set(slice);
-  const allDids=new Set(_filteredDids);
-  // Show/hide individual cards and list rows
-  document.querySelectorAll('.dc:not(.dc-add)').forEach(card=>{
-    const did=card.id.replace('dp-','');
-    card.style.display=visible.has(did)?'':'none';
-  });
-  document.querySelectorAll('.dc-list-row').forEach(row=>{
-    const did=row.id.replace('dpl-','');
-    row.style.display=visible.has(did)?'':'none';
-  });
-  // Hide groups with no visible devices on this page
-  document.querySelectorAll('.grp-wrap').forEach(wrap=>{
-    const grid=wrap.querySelector('.grp-grid');
-    if(!grid){wrap.style.display='';return;}
-    const hasVisible=[...grid.querySelectorAll('.dc:not(.dc-add)')]
-      .some(c=>visible.has(c.id.replace('dp-','')));
-    wrap.style.display=hasVisible?'':'none';
-  });
+  const total=_filteredDids.length;
+  const pages=Math.ceil(total/_devPageSize)||1;
+  _devPage=Math.max(0,Math.min(_devPage,pages-1));
+  const start=_devPage*_devPageSize;
+  const slice=_filteredDids.slice(start, start+_devPageSize);
+  _renderedPageSet=new Set(slice);
+
+  const dpanels=document.getElementById('dpanels');
+  _inPageRender=true;
+  try{
+    // Clear the previous page's sections, then rebuild the slice in order.
+    if(dpanels) dpanels.querySelectorAll('.site-wrap').forEach(w=>w.remove());
+    slice.forEach(did=>{ const dev=S.devices[did]; if(dev) renderDp(dev); });
+    // Re-surface known empty sites (added via Live Map, no devices yet).
+    (window._pwKnownSites||[]).forEach(name=>{ try{ ensureSiteSection(name); }catch(_){} });
+    restoreGroupOrder();
+    // Group status summaries are data-driven (whole group, not just this page).
+    document.querySelectorAll('.grp-grid').forEach(g=>{
+      if(g.dataset.group) _updateGrpSummary(g.dataset.group, g.dataset.site||'');
+    });
+  } finally { _inPageRender=false; }
+
+  refreshGroupCounts();           // data-driven; also refreshes site counts
+  applyRbac();
+
   // No-results message
   let noRes=document.getElementById('devNoResults');
-  const anyVisible=visible.size>0;
-  if(!anyVisible){
+  if(slice.length===0){
     if(!noRes){
       noRes=document.createElement('div');
       noRes.id='devNoResults';
@@ -1907,8 +2013,8 @@ function _renderPage(){
       const dp=document.getElementById('dpanels');
       if(dp) dp.parentNode.insertBefore(noRes,dp.nextSibling);
     }
-    const q=document.getElementById('devSearch')?.value||'';
-    noRes.textContent=q||_activeStatusFilter!=='all'
+    const q=_curDevSearch();
+    noRes.textContent=(q||_activeStatusFilter!=='all')
       ?'No devices match the current filter.'
       :'No devices yet.';
     noRes.style.display='';
@@ -1916,12 +2022,14 @@ function _renderPage(){
     noRes.style.display='none';
   }
   _renderPagination();
+  if(_selectMode && typeof _updateBulkBar==='function') _updateBulkBar();
 }
 
 function _renderPagination(){
   const pg=document.getElementById('devPagination');
   if(!pg) return;
-  if(_devView!=='list'||activeMainTab!=='devices'){pg.style.display='none';return;}
+  // Pagination now applies to BOTH views — the grid is page-windowed too.
+  if(activeMainTab!=='devices'){pg.style.display='none';return;}
   const total=_filteredDids.length;
   const pages=Math.ceil(total/_devPageSize)||1;
   if(total<=_devPageSize){pg.style.display='none';return;}

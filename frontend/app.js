@@ -2039,20 +2039,19 @@ async function _refreshDevices(){
         if(!S._devSensors[dev.device_id]) S._devSensors[dev.device_id]=new Set();
         S._devSensors[dev.device_id].add(_k);
       });
-      renderDp(dev);
     });
     // Surface known sites that have no devices yet (sites added via Live Map
-    // but not yet assigned). They render as empty collapsible sections so the
-    // user can see at a glance which sites exist before assigning devices.
+    // but not yet assigned). _renderPage() re-creates these empty sections each
+    // page from window._pwKnownSites so they show even when no device matches.
     let hasSiteSections = false;
     try {
       const sd = await (await fetch('/api/sites')).json();
-      (sd.sites||[]).forEach(name=>{
-        if (typeof ensureSiteSection==='function') ensureSiteSection(name);
-      });
-      hasSiteSections = (sd.sites||[]).length > 0;
-      if (typeof refreshSiteCounts==='function') refreshSiteCounts();
-    } catch(_) {}
+      window._pwKnownSites = sd.sites||[];
+      hasSiteSections = window._pwKnownSites.length > 0;
+    } catch(_) { window._pwKnownSites = window._pwKnownSites||[]; }
+    // Page-windowed render — only the current page of cards enters the DOM.
+    if (typeof _applyDevFilter==='function')
+      _applyDevFilter(document.getElementById('devSearch')?.value||'');
     // The initial splash/dpanels toggle in switchMainTab() only looked at
     // devices, so a fresh install that has sites but no devices stayed on
     // the radar splash even though we just appended empty site sections.
@@ -2203,7 +2202,8 @@ async function loadAll(){
       if(!S._devSensors[dev.device_id]) S._devSensors[dev.device_id]=new Set();
       S._devSensors[dev.device_id].add(_k);
     });
-    renderDp(dev);
+    // Cards are rendered page-windowed below via _restoreViewToggle() →
+    // _applyViewMode() → _applyDevFilter(); no eager per-device render here.
   });
   if(activeMainTab==='devices'){
     document.getElementById('devActBar').style.display='';
@@ -2217,13 +2217,10 @@ async function loadAll(){
   renderFlaps(); // re-render events now that S.devices (groups) is populated
   updatePills();
   restoreGroupOrder();
-  _restoreViewToggle();
+  _restoreViewToggle();   // → _applyViewMode() → _applyDevFilter() renders the page
   // Clear dashboard loading shimmer now that device/sensor data is ready
   if (typeof _dwClearLoading === 'function') _dwClearLoading();
-  // Update status-pill summaries for every group (always visible now)
-  document.querySelectorAll('.grp-grid').forEach(g=>{
-    if(g.dataset.group) _updateGrpSummary(g.dataset.group);
-  });
+  // (Group status summaries are populated inside _renderPage() now.)
   // Backfill per-device trap log from historical FLAPS (devices now loaded)
   FLAPS.filter(f=>f._direction==='trap').forEach(t=>{
     const dev=Object.values(S.devices).find(v=>v.host===t.src_ip);
