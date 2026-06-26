@@ -472,6 +472,27 @@ _TOOLS_BY_NAME = {t["name"]: t for t in _TOOLS}
 # ─────────────────────────────────────────────────────────────────────
 # JSON-RPC plumbing
 # ─────────────────────────────────────────────────────────────────────
+def _unauthorized(h):
+    """401 carrying the RFC 9728 resource-metadata pointer so MCP OAuth
+    clients (claude.ai connector) can discover the authorization server.
+    Static-token clients simply ignore the header."""
+    try:
+        from routes.mcp_oauth import _base_url
+        meta = f'{_base_url(h)}/.well-known/oauth-protected-resource'
+    except Exception:
+        meta = "/.well-known/oauth-protected-resource"
+    body = json.dumps({"error": "unauthorized"}).encode()
+    h.send_response(401)
+    h.send_header("Content-Type", "application/json")
+    h.send_header("Content-Length", str(len(body)))
+    h.send_header("Cache-Control", "no-store")
+    h.send_header("WWW-Authenticate",
+                  f'Bearer resource_metadata="{meta}"')
+    h._sec_headers()
+    h.end_headers()
+    h.wfile.write(body)
+
+
 def _rpc_result(rid, result) -> dict:
     return {"jsonrpc": "2.0", "id": rid, "result": result}
 
@@ -589,7 +610,7 @@ def handle(h, method, path, body):
     # ── Auth: mcp-scope API token ONLY ───────────────────────────────
     user, role, scope, kind = h._auth_principal()
     if not user:
-        h._json(401, {"error": "unauthorized"})
+        _unauthorized(h)   # 401 + WWW-Authenticate → triggers OAuth discovery
         return True
     if kind != "api_token" or scope != "mcp":
         h._json(403, {"error": "MCP requires an mcp-scope API token"})

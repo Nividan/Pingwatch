@@ -216,6 +216,47 @@ def db_init():
                     "ON api_tokens(username)")
         con.execute("CREATE INDEX IF NOT EXISTS idx_api_tokens_hash "
                     "ON api_tokens(token_hash)")
+        # ── MCP OAuth 2.1 (v1.5) — authorization server backing the claude.ai
+        # remote-connector flow. Clients are admin-pre-registered; access
+        # tokens are minted as mcp-scope api_tokens (above), so only the
+        # short-lived authorization codes and rotating refresh tokens need
+        # their own storage. Secrets/codes/refresh are stored as SHA-256
+        # hashes, never plaintext. ────────────────────────────────────────
+        con.execute("""
+            CREATE TABLE IF NOT EXISTS mcp_oauth_clients (
+                client_id          TEXT PRIMARY KEY,
+                client_secret_hash TEXT NOT NULL,
+                name               TEXT NOT NULL,
+                redirect_uris      TEXT NOT NULL DEFAULT '[]',
+                created_at         REAL NOT NULL,
+                created_by         TEXT NOT NULL DEFAULT ''
+            )""")
+        con.execute("""
+            CREATE TABLE IF NOT EXISTS mcp_oauth_codes (
+                code_hash      TEXT PRIMARY KEY,
+                client_id      TEXT NOT NULL,
+                redirect_uri   TEXT NOT NULL,
+                code_challenge TEXT NOT NULL,
+                username       TEXT NOT NULL,
+                scope          TEXT NOT NULL DEFAULT 'mcp',
+                resource       TEXT DEFAULT '',
+                expires_at     REAL NOT NULL,
+                created_at     REAL NOT NULL
+            )""")
+        con.execute("""
+            CREATE TABLE IF NOT EXISTS mcp_oauth_refresh (
+                token_hash TEXT PRIMARY KEY,
+                client_id  TEXT NOT NULL,
+                username   TEXT NOT NULL,
+                scope      TEXT NOT NULL DEFAULT 'mcp',
+                expires_at REAL,
+                created_at REAL NOT NULL,
+                revoked_at REAL
+            )""")
+        con.execute("CREATE INDEX IF NOT EXISTS idx_mcp_oauth_codes_exp "
+                    "ON mcp_oauth_codes(expires_at)")
+        con.execute("CREATE INDEX IF NOT EXISTS idx_mcp_oauth_refresh_client "
+                    "ON mcp_oauth_refresh(client_id)")
         con.execute("""
             CREATE TABLE IF NOT EXISTS devices (
                 did TEXT PRIMARY KEY, name TEXT, host TEXT,

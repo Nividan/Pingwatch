@@ -552,3 +552,29 @@ Point any MCP client that speaks Streamable HTTP at the endpoint, e.g.:
 **Caps:** list/history tools default to 50 rows (hard max 200); `get_metric_history` defaults to 200 points (max 1000) over a window capped at 30 days. Truncated responses carry `"truncated": true` and a `"next_cursor"` — pass it back as `cursor` to page. Tool-input errors return an MCP tool error (`isError: true`), not a JSON-RPC error.
 
 **Audit:** every `tools/call` writes an `mcp_tool_call` audit row (token owner, IP, tool name, short argument summary).
+
+### OAuth 2.1 (claude.ai / mobile connector)
+
+The claude.ai web/mobile **"Add custom connector"** dialog authenticates via **OAuth**, not a static header. PingWatch ships a minimal OAuth 2.1 Authorization Server for exactly this. (For header-capable clients — Claude Code, `mcp-remote` — keep using a static `mcp`-scope token; it's simpler.)
+
+**Setup (admin):**
+1. **Settings → API Tokens → MCP OAuth connectors → Register Connector.** Give it a name and the **redirect URI(s)** your AI client requires (shown by the connector). Copy the **client_id** and **client_secret** (secret shown once).
+2. In the AI client, add the connector with URL `https://<host>/api/mcp` and paste the client_id/secret into the OAuth fields.
+3. When you connect, Claude sends you to a PingWatch **consent screen** — you must be signed in as an **admin** to approve.
+
+**Flow & endpoints** (all gated by `mcp_enabled`; `.well-known` docs 404 when MCP is off):
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET`  | `/.well-known/oauth-protected-resource` | RFC 9728 — names the resource + authorization server |
+| `GET`  | `/.well-known/oauth-authorization-server` | RFC 8414 — endpoints, `S256` PKCE, grant types |
+| `GET`  | `/api/mcp/oauth/authorize` | Admin consent screen |
+| `POST` | `/api/mcp/oauth/authorize` | Consent submit → authorization code (redirect) |
+| `POST` | `/api/mcp/oauth/token` | `authorization_code` / `refresh_token` → access (+refresh) token |
+| `GET/POST` | `/api/mcp/oauth/clients` | admin — list / register connectors |
+| `DELETE` | `/api/mcp/oauth/clients/{id}` | admin — delete a connector |
+
+- An unauthenticated `POST /api/mcp` returns `401` with `WWW-Authenticate: Bearer resource_metadata="…/.well-known/oauth-protected-resource"` so clients can discover the AS.
+- **PKCE `S256` is mandatory**; `redirect_uri` is exact-matched; authorization codes are single-use (≤60 s).
+- **Access tokens** are short-lived (1 h) and issued as `mcp`-scope tokens under the hood, so they validate through the same path as static tokens. **Refresh tokens** rotate (old one revoked on use, 30-day lifetime).
+- Clients are **admin-pre-registered** — there is no Dynamic Client Registration endpoint. Consent grants and client create/delete are audited (`mcp_oauth_consent`, `mcp_oauth_client_create`, `mcp_oauth_client_delete`).

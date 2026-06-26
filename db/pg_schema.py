@@ -160,6 +160,46 @@ def pg_create_main_schema(cur):
     except Exception:
         cur.execute("ROLLBACK TO SAVEPOINT _api_scope")
 
+    # ── MCP OAuth 2.1 (v1.5) — authorization server backing the claude.ai
+    # remote-connector flow. Access tokens are minted as mcp-scope api_tokens;
+    # only authorization codes and rotating refresh tokens need own storage.
+    # Secrets/codes/refresh stored as SHA-256 hashes, never plaintext.
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS mcp_oauth_clients (
+            client_id          TEXT PRIMARY KEY,
+            client_secret_hash TEXT NOT NULL,
+            name               TEXT NOT NULL,
+            redirect_uris      TEXT NOT NULL DEFAULT '[]',
+            created_at         DOUBLE PRECISION NOT NULL,
+            created_by         TEXT NOT NULL DEFAULT ''
+        )""")
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS mcp_oauth_codes (
+            code_hash      TEXT PRIMARY KEY,
+            client_id      TEXT NOT NULL,
+            redirect_uri   TEXT NOT NULL,
+            code_challenge TEXT NOT NULL,
+            username       TEXT NOT NULL,
+            scope          TEXT NOT NULL DEFAULT 'mcp',
+            resource       TEXT DEFAULT '',
+            expires_at     DOUBLE PRECISION NOT NULL,
+            created_at     DOUBLE PRECISION NOT NULL
+        )""")
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS mcp_oauth_refresh (
+            token_hash TEXT PRIMARY KEY,
+            client_id  TEXT NOT NULL,
+            username   TEXT NOT NULL,
+            scope      TEXT NOT NULL DEFAULT 'mcp',
+            expires_at DOUBLE PRECISION,
+            created_at DOUBLE PRECISION NOT NULL,
+            revoked_at DOUBLE PRECISION
+        )""")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_mcp_oauth_codes_exp "
+                "ON mcp_oauth_codes(expires_at)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_mcp_oauth_refresh_client "
+                "ON mcp_oauth_refresh(client_id)")
+
     cur.execute("""
         CREATE TABLE IF NOT EXISTS devices (
             did                      TEXT PRIMARY KEY,

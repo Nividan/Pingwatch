@@ -136,6 +136,20 @@ from db.api_tokens  import (
     db_touch_api_token_last_used,
 )
 
+# mcp_oauth — OAuth 2.1 authorization server for the MCP endpoint
+from db.mcp_oauth   import (
+    db_create_oauth_client,
+    db_list_oauth_clients,
+    db_get_oauth_client,
+    db_delete_oauth_client,
+    db_create_oauth_code,
+    db_consume_oauth_code,
+    db_create_oauth_refresh,
+    db_rotate_oauth_refresh,
+    mint_mcp_access_token,
+    db_cleanup_oauth_expired,
+)
+
 # ipam
 from db.ipam        import (
     db_list_subnets,
@@ -293,6 +307,11 @@ __all__ = [
     # api_tokens
     "db_create_api_token", "db_get_api_token_by_hash", "db_get_api_token",
     "db_list_api_tokens", "db_revoke_api_token", "db_touch_api_token_last_used",
+    # mcp_oauth
+    "db_create_oauth_client", "db_list_oauth_clients", "db_get_oauth_client",
+    "db_delete_oauth_client", "db_create_oauth_code", "db_consume_oauth_code",
+    "db_create_oauth_refresh", "db_rotate_oauth_refresh", "mint_mcp_access_token",
+    "db_cleanup_oauth_expired",
     # ipam
     "db_list_subnets", "db_get_subnet", "db_add_subnet", "db_rename_subnet", "db_delete_subnet",
     "db_update_subnet", "db_set_auto_discover", "db_approve_first_scan", "db_set_subnet_last_scan",

@@ -305,6 +305,16 @@ function _buildSettingsTab_apitokens() {
         <div class="fh" style="margin-left:24px;margin-top:3px">Exposes a curated, read-only Model Context Protocol endpoint at <code>/api/mcp</code> so AI agents can query device status, alerts, incidents, and metrics. Requires a token with the <b>mcp</b> scope (generate one above). Off by default — no MCP surface until you switch it on.</div>
       </div>
       <div id="apiTokenList"><div class="alrt-loading">Loading…</div></div>
+
+      <div style="margin-top:22px;padding-top:18px;border-top:1px solid var(--border)">
+        <div class="alrt-panel-hdr" style="margin-bottom:10px">
+          <span style="color:var(--text3);font-size:12px">
+            <b style="color:var(--text)">MCP OAuth connectors</b> — register an AI client (e.g. the claude.ai web/mobile connector) that authenticates via OAuth instead of a static token. The client secret is shown <b>once</b>. Only an admin can approve the connection. See <a href="https://github.com/Nividan/Pingwatch/blob/main/API.md" target="_blank" rel="noopener" style="color:var(--accent)">API.md</a>.
+          </span>
+          <button class="btn-p rbac-admin" style="font-size:12px;padding:5px 12px" onclick="openCreateOauthClient()">＋ Register Connector</button>
+        </div>
+        <div id="oauthClientList"><div class="alrt-loading">Loading…</div></div>
+      </div>
     </div>`;
 }
 
@@ -371,6 +381,122 @@ async function _mcpToggleSave(el) {
   } catch (e) {
     el.checked = !el.checked;
     if (typeof toast === 'function') toast('Could not change MCP setting', 'err');
+  }
+}
+
+// ── MCP OAuth connector clients ───────────────────────────────────
+async function loadOauthClients() {
+  const el = document.getElementById('oauthClientList');
+  if (!el) return;
+  try {
+    const r = await api('GET', '/api/mcp/oauth/clients');
+    if (r && r.error) {
+      el.innerHTML = `<div class="alrt-empty" style="color:var(--down)">${esc(r.error)}</div>`;
+      return;
+    }
+    el.innerHTML = _renderOauthClients(r.clients || []);
+  } catch (e) {
+    el.innerHTML = '<div class="alrt-empty" style="color:var(--down)">Failed to load connectors.</div>';
+  }
+}
+
+function _renderOauthClients(clients) {
+  if (!clients.length) {
+    return '<div class="alrt-empty" style="padding:18px;text-align:center;color:var(--text3)">No OAuth connectors yet. Register one to connect the claude.ai web/mobile connector.</div>';
+  }
+  const rows = clients.map(c => `
+    <tr>
+      <td>${esc(c.name)}</td>
+      <td style="font-family:monospace;font-size:11px;color:var(--text3)">${esc(c.client_id)}</td>
+      <td style="font-size:11px;color:var(--text3);word-break:break-all">${(c.redirect_uris||[]).map(esc).join('<br>')}</td>
+      <td style="text-align:right"><button class="btn-s" style="font-size:11px;padding:4px 10px;color:var(--down)" onclick="deleteOauthClient(${esc(JSON.stringify(c.client_id))}, ${esc(JSON.stringify(c.name||''))})">Delete</button></td>
+    </tr>`).join('');
+  return `<table class="tbl" style="width:100%;font-size:12px">
+      <thead><tr><th>Name</th><th>Client ID</th><th>Redirect URIs</th><th></th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>`;
+}
+
+function openCreateOauthClient() {
+  closeM('mOauthCli');
+  const o = document.createElement('div');
+  o.className = 'mo'; o.id = 'mOauthCli';
+  _overlayClose(o, () => closeM('mOauthCli'));
+  o.innerHTML = `
+    <div class="mbox" style="width:520px;max-width:95vw">
+      <div class="mhd">
+        <div class="mttl">Register MCP OAuth Connector</div>
+        <button class="mclose" onclick="closeM('mOauthCli')">✕</button>
+      </div>
+      <div class="mbdy">
+        <div class="fr"><label class="fl">Name</label>
+          <input type="text" id="oauthCli-name" placeholder="e.g. Claude (web)" maxlength="100"/>
+          <div class="fh">A label so you can tell connectors apart.</div>
+        </div>
+        <div class="fr"><label class="fl">Redirect URIs</label>
+          <textarea id="oauthCli-uris" rows="3" style="width:100%" placeholder="https://claude.ai/api/mcp/auth_callback"></textarea>
+          <div class="fh">One per line. Use the exact callback URL your AI client requires (shown by the connector). Must match exactly at sign-in.</div>
+        </div>
+        <div id="oauthCli-err" style="color:var(--down);font-size:12px;margin-top:8px"></div>
+      </div>
+      <div class="mft">
+        <button class="btn-s" onclick="closeM('mOauthCli')">Cancel</button>
+        <button class="btn-p" onclick="_oauthClientCreate()">Register</button>
+      </div>
+    </div>`;
+  document.body.appendChild(o);
+  setTimeout(() => { const n = document.getElementById('oauthCli-name'); if (n) n.focus(); }, 30);
+}
+
+async function _oauthClientCreate() {
+  const errEl = document.getElementById('oauthCli-err');
+  if (errEl) errEl.textContent = '';
+  const name = (document.getElementById('oauthCli-name')?.value || '').trim();
+  const uris = (document.getElementById('oauthCli-uris')?.value || '')
+    .split('\n').map(s => s.trim()).filter(Boolean);
+  if (!name) { if (errEl) errEl.textContent = 'Name is required.'; return; }
+  if (!uris.length) { if (errEl) errEl.textContent = 'At least one redirect URI is required.'; return; }
+  try {
+    const r = await api('POST', '/api/mcp/oauth/clients', { name, redirect_uris: uris });
+    if (r && r.error) { if (errEl) errEl.textContent = r.error; return; }
+    closeM('mOauthCli');
+    _oauthClientReveal(r);
+    loadOauthClients();
+  } catch (e) {
+    if (errEl) errEl.textContent = 'Could not register connector.';
+  }
+}
+
+function _oauthClientReveal(r) {
+  closeM('mOauthRev');
+  const o = document.createElement('div');
+  o.className = 'mo'; o.id = 'mOauthRev';
+  _overlayClose(o, () => closeM('mOauthRev'));
+  o.innerHTML = `
+    <div class="mbox" style="width:560px;max-width:95vw">
+      <div class="mhd"><div class="mttl">Connector credentials</div>
+        <button class="mclose" onclick="closeM('mOauthRev')">✕</button></div>
+      <div class="mbdy">
+        <div class="fh" style="margin-bottom:10px;color:var(--warn)">Copy the client secret now — it is shown only once.</div>
+        <div class="fr"><label class="fl">Client ID</label>
+          <input type="text" readonly value="${esc(r.client_id||'')}" onclick="this.select()" style="font-family:monospace;width:100%"/></div>
+        <div class="fr"><label class="fl">Client Secret</label>
+          <input type="text" readonly value="${esc(r.client_secret||'')}" onclick="this.select()" style="font-family:monospace;width:100%"/></div>
+        <div class="fh" style="margin-top:10px">Paste these into your AI client's connector dialog (OAuth Client ID / Secret). The connector URL is <code>${esc(location.origin)}/api/mcp</code>. Make sure MCP is enabled above.</div>
+      </div>
+      <div class="mft"><button class="btn-p" onclick="closeM('mOauthRev')">Done</button></div>
+    </div>`;
+  document.body.appendChild(o);
+}
+
+async function deleteOauthClient(id, name) {
+  if (!confirm(`Delete connector "${name||id}"? Any agent using it will stop working.`)) return;
+  try {
+    const r = await api('DELETE', '/api/mcp/oauth/clients/' + encodeURIComponent(id));
+    if (r && r.error) { if (typeof toast === 'function') toast(r.error, 'err'); return; }
+    loadOauthClients();
+  } catch (e) {
+    if (typeof toast === 'function') toast('Could not delete connector', 'err');
   }
 }
 
@@ -1900,7 +2026,7 @@ function switchSettingsTab(tab){
             if (tab === 'backup')         _loadBackupScheduleSettings();
             if (tab === 'database')       _loadDbBackupSettings();
             if (tab === 'groups')         _groupsLoad();
-            if (tab === 'apitokens')      loadApiTokens();
+            if (tab === 'apitokens')      { loadApiTokens(); loadOauthClients(); }
             if (tab === 'integrations')   _loadIntegrationsStatus();
             if (tab === 'certificates')   _loadTrustedCAs();
             if (tab === 'auto-discovery') _loadAutoDiscoveryStatus();
@@ -1917,7 +2043,7 @@ function switchSettingsTab(tab){
     if (tab === 'backup')        _loadBackupScheduleSettings();
     if (tab === 'database')      _loadDbBackupSettings();
     if (tab === 'groups')        _groupsLoad();
-    if (tab === 'apitokens')     loadApiTokens();
+    if (tab === 'apitokens')     { loadApiTokens(); loadOauthClients(); }
     if (tab === 'integrations')  _loadIntegrationsStatus();
     if (tab === 'certificates')  _loadTrustedCAs();
     if (tab === 'auto-discovery') _loadAutoDiscoveryStatus();
