@@ -46,6 +46,31 @@ if os.name == "nt" and not _is_admin():
     sys.exit(0)
 
 
+# ── Resolve the active code release (managed-upgrade layout) ────────────────
+# Windows analogue of linux bootstrap.py's role: pick the code root to import
+# the server from. Flat checkout → code_root is _ROOT, no data override (a
+# no-op). releases/<version>/ layout → imports come from the active release and
+# persistent state lives in <base>/data. Must run BEFORE the first server-module
+# import below, since under the managed layout db/, core/, server.py live in the
+# release dir, not next to this launcher.
+if _ROOT not in sys.path:
+    sys.path.insert(0, _ROOT)
+try:
+    import bootstrap as _bootstrap
+    _code_root, _data_dir = _bootstrap.resolve_code_root()
+except Exception as _e:
+    _code_root, _data_dir = _ROOT, None
+if not _code_root:
+    sys.stderr.write("launcher: managed layout but no runnable release\n")
+    sys.exit(1)
+if _data_dir:
+    os.environ["PW_DATA_DIR"] = _data_dir
+    os.environ["PW_BASE_DIR"] = _ROOT
+if _code_root != _ROOT:
+    os.chdir(_code_root)
+    sys.path.insert(0, _code_root)
+
+
 # ── First-run detection ─────────────────────────────────────────────────────
 from db.backend import needs_setup
 

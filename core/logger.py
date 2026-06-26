@@ -27,8 +27,9 @@ import os
 import sys
 from logging.handlers import RotatingFileHandler, TimedRotatingFileHandler
 
-_ROOT    = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-_LOG_DIR = os.path.join(_ROOT, "logs")
+from core.config import DATA_ROOT
+
+_LOG_DIR = os.path.join(DATA_ROOT, "logs")
 os.makedirs(_LOG_DIR, exist_ok=True)
 _LOG_PATH = os.path.join(_LOG_DIR, "pingwatch.log")
 

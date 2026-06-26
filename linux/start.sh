@@ -114,6 +114,18 @@ if [ "${1:-}" = "--uninstall-service" ]; then
     exit 0
 fi
 
+# ── Convert a flat install into the managed releases/ layout ─
+#   bash start.sh --convert-managed          (dry run — shows the plan)
+#   bash start.sh --convert-managed --apply  (perform the move)
+# Stop the service and back up the DB first. Safe to skip entirely: a flat
+# install keeps working; bootstrap.py passes through to ./server.py until a
+# managed layout exists.
+if [ "${1:-}" = "--convert-managed" ]; then
+    APPLY=""
+    [ "${2:-}" = "--apply" ] && APPLY="--apply"
+    exec "$PYTHON" "$PROJECT_ROOT/tools/convert_to_managed.py" "$PROJECT_ROOT" $APPLY
+fi
+
 # ── Python version check ───────────────────────────────────
 if ! "$PYTHON" -c "import sys; assert sys.version_info >= (3,8)" 2>/dev/null; then
     echo "[ERROR] Python 3.8 or newer is required."
@@ -219,5 +231,7 @@ except Exception:
 fi
 
 # ── Launch server ───────────────────────────────────────────
+# Via bootstrap.py: a no-op pass-through to server.py on a flat install, or the
+# active releases/<version>/ launcher under the managed-upgrade layout.
 cd "$PROJECT_ROOT"
-exec "$PYTHON" "$PROJECT_ROOT/server.py"
+exec "$PYTHON" "$PROJECT_ROOT/bootstrap.py"

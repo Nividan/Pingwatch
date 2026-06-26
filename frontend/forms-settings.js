@@ -1211,6 +1211,125 @@ function _buildSettingsTab_integrations(sr) {
     </div>`;
 }
 
+// ── Upgrade tab (managed server self-upgrade) ────────────────────────────────
+function _buildSettingsTab_upgrade() {
+  return `<div class="mbdy stab-fade" id="stab-upgrade" style="display:none;overflow-y:auto;flex:1">
+
+      <div style="border:1px solid var(--border);border-radius:8px;padding:14px 16px;margin-bottom:12px">
+        <div style="font-size:12px;font-weight:600;color:var(--text2);margin-bottom:10px">Server Version</div>
+        <div id="upg-status" style="font-size:12px;color:var(--text3)">Loading…</div>
+      </div>
+
+      <div id="upg-upload-box" style="border:1px solid var(--border);border-radius:8px;padding:14px 16px;margin-bottom:12px;display:none">
+        <div style="font-size:12px;font-weight:600;color:var(--text2);margin-bottom:10px">Upload Update Image</div>
+        <div style="font-size:12px;color:var(--text3);margin-bottom:10px">
+          Upload a signed PingWatch image (<code>.zip</code>) built with <code>tools/build_image.py</code>.
+          The server verifies its signature, snapshots the database, installs the new release, and restarts.
+          If the new version does not report healthy within its trial window it is rolled back automatically.
+        </div>
+        <div style="font-size:11px;color:var(--warn);margin-bottom:10px">⚠ The server restarts during the update; a rollback discards any data written during the trial window.</div>
+        <button class="btn-p" style="font-size:12px;padding:6px 14px" onclick="uploadUpgradeImage()">⭱ Upload &amp; Install Image</button>
+        <span id="upg-upload-status" style="font-size:11px;margin-left:8px;color:var(--text3)"></span>
+      </div>
+
+      <div id="upg-rollback-box" style="border:1px solid var(--border);border-radius:8px;padding:14px 16px;margin-bottom:12px;display:none">
+        <div style="font-size:12px;font-weight:600;color:var(--text2);margin-bottom:10px">Rollback</div>
+        <div id="upg-rollback-info" style="font-size:12px;color:var(--text3);margin-bottom:10px"></div>
+        <button class="btn-s" style="font-size:12px;padding:6px 14px" onclick="rollbackUpgrade()">↩ Roll Back to Previous Release</button>
+      </div>
+
+      <div id="upg-unmanaged" style="border:1px solid var(--warn-border);background:var(--warn-bg);border-radius:8px;padding:14px 16px;margin-bottom:12px;display:none">
+        <div style="font-size:12px;color:var(--text2)">
+          This server runs in a <b>flat</b> layout, so UI upgrades are disabled. Convert it to the managed layout
+          first: stop the service, then run <code>python tools/convert_to_managed.py --apply</code>
+          (or <code>bash start.sh --convert-managed --apply</code> on Linux).
+        </div>
+      </div>
+  </div>`;
+}
+
+async function _loadUpgradeStatus(){
+  const el = document.getElementById('upg-status');
+  if (el) el.textContent = 'Loading…';
+  let r;
+  try { r = await api('GET', '/api/upgrade/status'); }
+  catch(e){ if (el) el.textContent = 'Failed to load upgrade status.'; return; }
+  if (!r || !r.ok){ if (el) el.textContent = 'Failed to load upgrade status.'; return; }
+
+  const managed = !!r.managed;
+  const st = r.state || {};
+  const out = r.last_outcome || {};
+  let html = `Current release: <b>${esc(r.current || '(flat install)')}</b>`;
+  const phase = st.phase || 'idle';
+  if (phase && phase !== 'idle')
+    html += `<br>Update state: <b>${esc(phase)}</b>` + (st.target ? ` → ${esc(st.target)}` : '');
+  if (out && out.outcome) {
+    const col = out.outcome === 'committed' ? 'var(--up)' : 'var(--down)';
+    html += `<br>Last update: <span style="color:${col}">${esc(out.outcome)}</span>`
+          + (out.reason ? ` — ${esc(out.reason)}` : '');
+  }
+  if (el) el.innerHTML = html;
+
+  const upBox = document.getElementById('upg-upload-box');
+  const unEl  = document.getElementById('upg-unmanaged');
+  const rb    = document.getElementById('upg-rollback-box');
+  if (upBox) upBox.style.display = managed ? '' : 'none';
+  if (unEl)  unEl.style.display  = managed ? 'none' : '';
+  if (rb) {
+    if (managed && st.previous && st.db_snapshot) {
+      rb.style.display = '';
+      document.getElementById('upg-rollback-info').innerHTML =
+        `Revert to <b>${esc(st.previous)}</b> and restore the pre-update database snapshot.`;
+    } else {
+      rb.style.display = 'none';
+    }
+  }
+}
+
+function uploadUpgradeImage(){
+  const inp = document.createElement('input');
+  inp.type = 'file'; inp.accept = '.zip';
+  inp.onchange = () => {
+    const file = inp.files[0];
+    if (!file) return;
+    if (!confirm(`Install image "${file.name}"?\n\nThe server will verify it, snapshot the database, and restart. `
+               + `A bad image is rolled back automatically.`)) return;
+    const stEl = document.getElementById('upg-upload-status');
+    if (stEl){ stEl.style.color = 'var(--text3)'; stEl.textContent = 'Uploading & verifying…'; }
+    fetch('/api/upgrade/image', {
+      method: 'POST', headers: {'Content-Type': 'application/octet-stream'}, body: file,
+    }).then(async resp => {
+      const r = (resp.ok || resp.status === 200)
+        ? await resp.json().catch(() => ({ok:true}))
+        : await resp.json().catch(() => null);
+      if (r && r.ok) {
+        if (stEl){ stEl.style.color = 'var(--up)'; stEl.textContent = 'Installing ' + (r.version||'') + ' — restarting…'; }
+        toast('Image accepted — server restarting to install ' + (r.version || ''), 'ok');
+        setTimeout(() => location.reload(), 8000);
+      } else {
+        const err = (r && r.error) || ('HTTP ' + resp.status);
+        if (stEl){ stEl.style.color = 'var(--down)'; stEl.textContent = err; }
+        toast('Upgrade rejected: ' + err, 'err');
+      }
+    }).catch(() => {
+      // A dropped connection here usually means the server already restarted.
+      if (stEl){ stEl.style.color = 'var(--up)'; stEl.textContent = 'Server restarting…'; }
+      toast('Server restarting…', 'ok');
+      setTimeout(() => location.reload(), 8000);
+    });
+  };
+  inp.click();
+}
+
+function rollbackUpgrade(){
+  if (!confirm('Roll back to the previous release?\n\nThis restores the pre-update database snapshot and '
+             + 'DISCARDS any data written since the update. The server will restart.')) return;
+  api('POST', '/api/upgrade/rollback', {}).then(r => {
+    if (r && r.ok){ toast('Rolling back — server restarting…', 'ok'); setTimeout(() => location.reload(), 8000); }
+    else toast('Rollback failed: ' + ((r && r.error) || 'error'), 'err');
+  }).catch(() => { toast('Server restarting…', 'ok'); setTimeout(() => location.reload(), 8000); });
+}
+
 function _buildSettingsTab_database(sr) {
   const _dbkFreq = sr.db_backup_freq || 'daily';
   const _dbkDaysActive = (_dbkFreq === 'weekly') ? '' : 'none';
@@ -1893,6 +2012,7 @@ async function openSettings(initialTab){
       <button class="stab-nav" id="stab-btn-networking" onclick="switchSettingsTab('networking')">${icon('map',13)} Networking</button>
       <button class="stab-nav" id="stab-btn-certificates" onclick="switchSettingsTab('certificates')">${icon('shield',13)} Certificates</button>
       <button class="stab-nav" id="stab-btn-diagnostics" onclick="switchSettingsTab('diagnostics')">${icon('cpu',13)} Diagnostics</button>
+      <button class="stab-nav rbac-admin" id="stab-btn-upgrade" onclick="switchSettingsTab('upgrade')">${icon('download',13)} Upgrade</button>
       <div class="stab-section">Identity</div>
       <button class="stab-nav" id="stab-btn-users" onclick="switchSettingsTab('users')">${icon('user',13)} Users</button>
       <button class="stab-nav" id="stab-btn-groups" onclick="switchSettingsTab('groups')">${icon('devices',13)} Groups</button>
@@ -1920,6 +2040,7 @@ async function openSettings(initialTab){
     ${_buildSettingsTab_backup(sr)}
     ${_buildSettingsTab_autoDiscovery(sr)}
     ${_buildSettingsTab_diagnostics(sr)}
+    ${_buildSettingsTab_upgrade()}
     <div class="mft" id="stab-footer-general">
       <button class="btn-s" onclick="closeM('mset')">Close</button>
       <button class="btn-p" onclick="saveSettings()">Save Settings</button>
@@ -1975,6 +2096,9 @@ async function openSettings(initialTab){
     <div class="mft" id="stab-footer-diagnostics" style="display:none">
       <button class="btn-s" onclick="closeM('mset')">Close</button>
     </div>
+    <div class="mft" id="stab-footer-upgrade" style="display:none">
+      <button class="btn-s" onclick="closeM('mset')">Close</button>
+    </div>
     </div><!-- /stab-content -->
     </div><!-- /stab-layout -->
   </div>`;
@@ -1988,7 +2112,7 @@ async function openSettings(initialTab){
 let _stabSwitching = false;
 function switchSettingsTab(tab){
   if (_stabSwitching) return;
-  const tabs = ['general','retention','users','groups','apitokens','integrations','database','reports','sensors','networking','certificates','backup','auto-discovery','diagnostics'];
+  const tabs = ['general','retention','users','groups','apitokens','integrations','database','reports','sensors','networking','certificates','backup','auto-discovery','diagnostics','upgrade'];
 
   // Find currently visible tab
   let cur = null;
@@ -2031,6 +2155,7 @@ function switchSettingsTab(tab){
             if (tab === 'certificates')   _loadTrustedCAs();
             if (tab === 'auto-discovery') _loadAutoDiscoveryStatus();
             if (tab === 'diagnostics')    _diagOnTabShown();
+            if (tab === 'upgrade')        _loadUpgradeStatus();
           }, 220);
         });
       });
@@ -2048,6 +2173,7 @@ function switchSettingsTab(tab){
     if (tab === 'certificates')  _loadTrustedCAs();
     if (tab === 'auto-discovery') _loadAutoDiscoveryStatus();
     if (tab === 'diagnostics')    _diagOnTabShown();
+    if (tab === 'upgrade')        _loadUpgradeStatus();
   }
 }
 

@@ -8,13 +8,39 @@ import platform
 
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
+
+def _default_data_root() -> str:
+    """Runtime-state root: DB, pingwatch.conf, certs, logs, backups.
+
+    Kept separate from the *code* root (``_ROOT``) so a managed upgrade can swap
+    the code directory (``releases/<version>/``) without touching persistent
+    data. Resolution order:
+
+      1. ``PW_DATA_DIR`` env var — set by the bootstrap/launcher under the
+         release layout; an explicit ops override otherwise.
+      2. Release-layout autodetect: when the code root is ``<base>/releases/<ver>``
+         the data lives at ``<base>/data``.
+      3. Flat checkout / dev — the same directory as the code (legacy behavior,
+         so existing installs and the dev tree are unaffected).
+    """
+    env = os.environ.get("PW_DATA_DIR")
+    if env:
+        return env
+    parent = os.path.dirname(_ROOT)
+    if os.path.basename(parent).lower() == "releases":
+        return os.path.join(os.path.dirname(parent), "data")
+    return _ROOT
+
+
+DATA_ROOT = _default_data_root()
+
 PORT           = 7070
 BIND           = "0.0.0.0"
 SNMP_TRAP_PORT = 162
 SYS            = platform.system()
 
-DB_PATH      = os.path.join(_ROOT, "pingwatch.db")
-LOGS_DB_PATH = os.path.join(_ROOT, "pingwatch_logs.db")
+DB_PATH      = os.path.join(DATA_ROOT, "pingwatch.db")
+LOGS_DB_PATH = os.path.join(DATA_ROOT, "pingwatch_logs.db")
 SESSION_TTL  = 86400   # 24 hours
 
 # ── PostgreSQL backend (overridden at runtime by pingwatch.conf / env vars) ──
@@ -27,10 +53,10 @@ PG_PASSWORD  = os.environ.get("PW_PG_PASSWORD", "")
 PG_POOL_MIN  = int(os.environ.get("PW_PG_POOL_MIN", "2"))
 PG_POOL_MAX  = int(os.environ.get("PW_PG_POOL_MAX", "20"))
 
-FRONTEND_DIR     = os.path.join(_ROOT, "frontend")
-CONFIGS_DIR      = os.path.join(_ROOT, "backup", "configs")
-DB_BACKUP_DIR    = os.path.join(_ROOT, "backup", "database")
-CERTS_DIR        = os.path.join(_ROOT, "certs")
+FRONTEND_DIR     = os.path.join(_ROOT, "frontend")          # code — ships in the image
+CONFIGS_DIR      = os.path.join(DATA_ROOT, "backup", "configs")
+DB_BACKUP_DIR    = os.path.join(DATA_ROOT, "backup", "database")
+CERTS_DIR        = os.path.join(DATA_ROOT, "certs")
 
 
 def _default_reports_dir() -> str:
@@ -107,6 +133,9 @@ _RE_DB_EXPORT_LOGS   = re.compile(r'^/api/db/export/logs$')
 _RE_DB_EXPORT_BUNDLE = re.compile(r'^/api/db/export/bundle$')
 _RE_DB_IMPORT        = re.compile(r'^/api/db/import$')
 _RE_DB_STATS         = re.compile(r'^/api/db/stats$')
+# Managed server self-upgrade: the image upload reads its own oversized body, so
+# server.py dispatches it before _body() (same as the DB import above).
+_RE_UPGRADE_IMAGE    = re.compile(r'^/api/upgrade/image$')
 _RE_AUDIT           = re.compile(r'^/api/audit$')
 _RE_AVAILABILITY    = re.compile(r'^/api/availability$')
 _RE_BACKUPS         = re.compile(r'^/api/backups$')

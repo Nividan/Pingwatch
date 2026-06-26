@@ -10,10 +10,10 @@ import json
 import os
 import tempfile
 
-from core.config import _ROOT
+from core.config import DATA_ROOT
 from core.logger import log
 
-_CONF_PATH = os.path.join(_ROOT, "pingwatch.conf")
+_CONF_PATH = os.path.join(DATA_ROOT, "pingwatch.conf")
 
 # ── In-memory cache (populated by load_config) ──────────────────────
 _cfg: dict = {}

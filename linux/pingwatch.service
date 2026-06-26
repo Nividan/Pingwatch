@@ -14,9 +14,14 @@ Type=simple
 WorkingDirectory=/opt/pingwatch
 # Refuse to start if any source file has a syntax error. compileall is purely
 # syntactic (no imports, no side effects), so a broken deploy fails fast here
-# and counts toward StartLimitBurst instead of half-starting. venv is excluded.
-ExecStartPre=/usr/bin/python3 -m compileall -q -x venv /opt/pingwatch
-ExecStart=/usr/bin/python3 /opt/pingwatch/server.py
+# and counts toward StartLimitBurst instead of half-starting. venv is excluded;
+# releases/ is excluded too — a stale managed-upgrade release must not block
+# boot, and bootstrap.py applies the same syntax gate to the *active* release.
+ExecStartPre=/usr/bin/python3 -m compileall -q -x 'venv|releases' /opt/pingwatch
+# bootstrap.py is the immutable outer launcher: in a flat install it passes
+# through to ./server.py; under the releases/<version>/ layout it resolves the
+# active release via current.txt and launches it. Changed only by re-install.
+ExecStart=/usr/bin/python3 /opt/pingwatch/bootstrap.py
 Restart=on-failure
 RestartSec=5
 
