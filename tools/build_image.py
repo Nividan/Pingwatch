@@ -23,6 +23,7 @@ signature use core/upgrade.py helpers so the builder and verifier never diverge.
 """
 
 import argparse
+import ast
 import io
 import json
 import os
@@ -151,12 +152,67 @@ def _zip_dir(zf, root, arc_prefix):
                 zf.writestr(zi, f.read())
 
 
+def _check_py39_annotations(payload_root):
+    """Refuse to ship code that crashes on the supported Python floor (3.8/3.9).
+
+    PEP 604 'X | Y' annotations are evaluated at import on <3.10 UNLESS the
+    module has `from __future__ import annotations`. Such a module imports fine
+    on the 3.12 build/prod box but hard-crashes a 3.9 server at startup — a
+    class of break that has shipped twice. Scan the staged payload with the AST
+    (compileall can't catch it — it's import-time, not syntax) and abort the
+    build if any module uses a union annotation without the future-import."""
+    offenders = []
+    for dirpath, _dirs, files in os.walk(payload_root):
+        for fn in files:
+            if not fn.endswith(".py"):
+                continue
+            full = os.path.join(dirpath, fn)
+            rel = os.path.relpath(full, payload_root)
+            try:
+                tree = ast.parse(open(full, encoding="utf-8").read())
+            except Exception:
+                continue  # syntax errors are caught by the server's compileall gate
+            has_future = any(
+                isinstance(n, ast.ImportFrom) and n.module == "__future__"
+                and any(a.name == "annotations" for a in n.names)
+                for n in ast.walk(tree))
+            if has_future:
+                continue
+
+            def _ann_union(node):
+                return any(isinstance(s, ast.BinOp) and isinstance(s.op, ast.BitOr)
+                           for s in ast.walk(node))
+            lines = set()
+            for n in ast.walk(tree):
+                if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    anns = [a.annotation for a in
+                            (n.args.posonlyargs + n.args.args + n.args.kwonlyargs)
+                            if a.annotation]
+                    for extra in (n.args.vararg, n.args.kwarg):
+                        if extra and extra.annotation:
+                            anns.append(extra.annotation)
+                    if n.returns:
+                        anns.append(n.returns)
+                    for a in anns:
+                        if _ann_union(a):
+                            lines.add(a.lineno)
+                elif isinstance(n, ast.AnnAssign) and n.annotation and _ann_union(n.annotation):
+                    lines.add(n.annotation.lineno)
+            if lines:
+                offenders.append("%s (lines %s)" % (rel, ",".join(map(str, sorted(lines)))))
+    if offenders:
+        sys.exit("[build-image] ABORT — PEP 604 'X | Y' annotations without "
+                 "`from __future__ import annotations` (crashes on Python 3.8/3.9):\n  "
+                 + "\n  ".join(offenders))
+
+
 def build(out_dir, key_hex, created_at, min_from=None):
     staging = tempfile.mkdtemp(prefix="pwimg_")
     try:
         payload = os.path.join(staging, up.PAYLOAD_DIR)
         os.makedirs(payload)
         count = _stage_payload(payload)
+        _check_py39_annotations(payload)   # fail the build before signing if 3.9-incompatible
         digest = up.payload_digest(payload)
         app_ver = app_state.APP_VERSION
         version, gitmeta = _build_identity(app_ver, digest)
