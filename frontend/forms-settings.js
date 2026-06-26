@@ -256,6 +256,9 @@ function _buildSettingsTab_users(sr, ur) {
           <div class="fr"><label class="fl">2FA remember duration (h)</label>
             <input type="number" id="st-totp-remember" value="${sr.totp_remember_hours??9}" min="0" max="720" style="max-width:100px"/>
             <div class="fh">Hours to skip TOTP on trusted devices (0 = disabled, max 720 h / 30 days)</div></div>
+          <div class="fr"><label class="fl">Login challenge timeout (s)</label>
+            <input type="number" id="st-login-chal" value="${sr.login_challenge_ttl??300}" min="30" max="1800" style="max-width:100px"/>
+            <div class="fh">Time to complete the 2FA / MFA step after the password (current: ${sr.login_challenge_ttl??300}s; 30–1800). Raise it for slow factors like an emailed code.</div></div>
         </div>
       </div>
     </div>`;
@@ -3069,11 +3072,14 @@ async function saveSecuritySettings(){
   const failMax     = parseInt(document.getElementById('st-fail-max')?.value);
   const failWin     = parseInt(document.getElementById('st-fail-win')?.value);
   const totpRemem   = parseInt(document.getElementById('st-totp-remember')?.value);
+  const loginChal   = parseInt(document.getElementById('st-login-chal')?.value);
   const body = {};
   if(failMax >= 1)         body.login_fail_max        = failMax;
   if(failWin >= 10)        body.login_fail_window     = failWin;
   if(!isNaN(totpRemem) && totpRemem >= 0 && totpRemem <= 720)
                            body.totp_remember_hours   = totpRemem;
+  if(!isNaN(loginChal) && loginChal >= 30 && loginChal <= 1800)
+                           body.login_challenge_ttl   = loginChal;
   const r = await api('PATCH', '/api/settings', body);
   if(!r.ok){ toast('Failed to save security settings','err'); return; }
   toast('Security settings saved','ok');

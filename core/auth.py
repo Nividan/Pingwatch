@@ -403,14 +403,25 @@ def auth_login(username: str, password: str, ip: str = '', user_agent: str = '',
 
 _RADIUS_LOGIN_CTX: dict = {}     # challenge_id → {"username", "created_ts"}
 _RADIUS_CTX_LOCK = threading.Lock()
-_RADIUS_CTX_TTL = 120
+
+
+def _login_challenge_ttl() -> int:
+    """Seconds a pending second-factor login (TOTP or RADIUS challenge) stays
+    valid after the password step. Configurable via the `login_challenge_ttl`
+    setting so a slow factor — an MFA app, an emailed code — does not expire
+    mid-login. Bounded 30s..30m; default 300s (5 min)."""
+    try:
+        return max(30, min(1800, int(_settings.get("login_challenge_ttl", 300))))
+    except (TypeError, ValueError):
+        return 300
 
 
 def _prune_radius_ctx_locked() -> None:
     import time as _t
     now = _t.time()
+    ttl = _login_challenge_ttl()
     for k in [k for k, v in _RADIUS_LOGIN_CTX.items()
-              if now - v.get("created_ts", 0) > _RADIUS_CTX_TTL]:
+              if now - v.get("created_ts", 0) > ttl]:
         _RADIUS_LOGIN_CTX.pop(k, None)
 
 
@@ -1028,10 +1039,10 @@ def auth_evict_api_token_hash(token_hash: str):
 # ── TOTP (RFC 6238 — Google Authenticator compatible) ────────────
 
 # Pending TOTP challenges keyed by short-lived id. Issued on POST /api/login when
-# the user has TOTP enabled; consumed by POST /api/login/totp.
+# the user has TOTP enabled; consumed by POST /api/login/totp. The validity window
+# is the configurable login_challenge_ttl (see _login_challenge_ttl()).
 _TOTP_CHALLENGES: dict = {}        # cid -> {username, role, expires}
 _TOTP_CHALLENGE_LOCK         = threading.Lock()
-_TOTP_CHALLENGE_TTL_SEC      = 300   # 5 minutes
 
 
 def totp_available() -> bool:
@@ -1126,7 +1137,7 @@ def totp_create_challenge(username: str, role: str) -> str:
         _TOTP_CHALLENGES[cid] = {
             "username": username,
             "role":     role,
-            "expires":  now + _TOTP_CHALLENGE_TTL_SEC,
+            "expires":  now + _login_challenge_ttl(),
         }
     return cid
 

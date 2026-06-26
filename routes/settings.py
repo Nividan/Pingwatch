@@ -191,6 +191,7 @@ def handle(h, method, path, body):
             "login_fail_max":        int(_settings.get("login_fail_max",        5)),
             "login_fail_window":     int(_settings.get("login_fail_window",     60)),
             "totp_remember_hours":   int(_settings.get("totp_remember_hours",   9)),
+            "login_challenge_ttl":   int(_settings.get("login_challenge_ttl",   300)),
             # Group F — anomaly detection (system-wide)
             "anomaly_global_enabled":        int(_settings.get("anomaly_global_enabled", 1)),
             "anomaly_cold_start_hours":      int(_settings.get("anomaly_cold_start_hours", 24)),
@@ -539,6 +540,14 @@ def handle(h, method, path, body):
             _pw_enc = _enc_smtp_pw(_pw)
             _settings.load({"smtp_pass": _pw_enc})
             _db_enqueue(lambda _p=_pw_enc: db_save_settings({"smtp_pass": _p}))
+        # Login challenge window (TOTP / RADIUS second-factor) — bounded 30s..30m.
+        if "login_challenge_ttl" in body:
+            try:
+                _v = max(30, min(1800, int(body["login_challenge_ttl"])))
+            except (ValueError, TypeError):
+                h._json(400, {"error": "login_challenge_ttl must be an integer"}); return True
+            _settings.load({"login_challenge_ttl": _v})
+            _db_enqueue(lambda _v=_v: db_save_settings({"login_challenge_ttl": str(_v)}))
         # Data rollup retention tiers (v0.8.0)
         for _k, _min, _max in [
             ("retention_raw_days", 1, 365),
