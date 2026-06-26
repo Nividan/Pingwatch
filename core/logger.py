@@ -70,11 +70,13 @@ _sh.setFormatter(_fmt)
 log_sensors.addHandler(_sh)
 
 # ── Audit logger → logs/audit/pingwatchaudit.log ──────────────────────────
-# Compliance-oriented retention: daily rotation, 365 days kept. Audit is
+# Compliance-oriented retention: weekly rotation, ~1 year of history. Audit is
 # low-volume enough that size-based rotation would give unpredictable
-# coverage; time-based rotation guarantees ~1 year of history.
+# coverage; time-based rotation guarantees calendar coverage. Weekly (rather
+# than daily) rotation keeps the rollover count low — ~52 files/year instead
+# of ~365 — which is why retention is expressed in days but applied as weeks.
 #
-# The daily rollovers live in their own logs/audit/ subfolder (so they don't
+# The weekly rollovers live in their own logs/audit/ subfolder (so they don't
 # bury the handful of active logs in logs/) and are gzip-compressed on
 # rotation (a year of audit is ~1 MB raw, far less compressed). The active
 # file stays plain text so the log viewer / support bundle can tail it.
@@ -111,6 +113,19 @@ def _apply_gz_rotation(handler):
     handler.rotator = _gz_rotator
     handler.extMatch = _AUDIT_EXTMATCH
     return handler
+
+
+def _audit_weeks(days):
+    """Convert a 'days of history' retention into a weekly backup count.
+
+    The audit log rotates weekly, so a configured retention of N days keeps
+    ~N/7 rollovers. 365 → 52 (~1 year). Always at least one backup.
+    """
+    try:
+        d = int(days)
+    except (TypeError, ValueError):
+        d = 365
+    return max(1, round(d / 7))
 
 
 def _migrate_audit_logs():
@@ -155,7 +170,8 @@ log_audit = logging.getLogger("pingwatch.audit")
 log_audit.setLevel(logging.INFO)
 log_audit.propagate = False     # don't bubble up to the main pingwatch logger
 _ah = TimedRotatingFileHandler(
-    _AUDIT_PATH, when="midnight", interval=1, backupCount=365, encoding="utf-8"
+    _AUDIT_PATH, when="W0", interval=1,
+    backupCount=_audit_weeks(365), encoding="utf-8"
 )
 _ah.setFormatter(_fmt)
 _apply_gz_rotation(_ah)
@@ -286,8 +302,8 @@ def reconfigure_from_settings():
 
     def _swap_time(logger_obj, old_handler, path, days):
         new_h = TimedRotatingFileHandler(
-            path, when="midnight", interval=1,
-            backupCount=days, encoding="utf-8"
+            path, when="W0", interval=1,
+            backupCount=_audit_weeks(days), encoding="utf-8"
         )
         new_h.setFormatter(_fmt)
         new_h.setLevel(old_handler.level)
@@ -317,7 +333,7 @@ def reconfigure_from_settings():
         _sh = _swap_size(log_sensors, _sh,
                          os.path.join(_LOG_DIR, "pingwatchsensors.log"),
                          sens_mb, sens_bk)
-    if _ah.backupCount != audit_dy:
+    if _ah.backupCount != _audit_weeks(audit_dy):
         _ah = _swap_time(log_audit, _ah, _AUDIT_PATH, audit_dy)
     if _bkh.maxBytes != bkup_mb * 1_000_000 or _bkh.backupCount != bkup_bk:
         _bkh = _swap_size(log_backup, _bkh,

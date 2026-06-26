@@ -186,7 +186,7 @@ function _buildSettingsTab_retention(sr) {
             <div class="fh">Rotated copies kept (default: 5)</div></div>
           <div class="fr"><label class="fl">pingwatchaudit.log — days kept</label>
             <input type="number" id="st-log-audit-days" value="${sr.log_audit_days||365}" min="7" max="3650" style="max-width:120px"/>
-            <div class="fh">Daily rotation; keep this many days of history (default: 365)</div></div>
+            <div class="fh">Weekly rotation; keeps ~this many days of history (default: 365)</div></div>
           <div class="fr"><label class="fl">pingwatchbackup.log — size (MB)</label>
             <input type="number" id="st-log-bkup-mb" value="${sr.log_backup_max_mb||5}" min="1" max="500" style="max-width:100px"/>
             <div class="fh">Rotate device-backup log at this size (default: 5 MB)</div></div>
