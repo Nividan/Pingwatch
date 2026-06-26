@@ -6,6 +6,7 @@ Table: alert_events  (rotational, capped retention)
 Used by the PRTG-style alert profile engine. Each row is one fire (or repeat)
 of a profile stage. The Events view in the UI reads from this table.
 """
+from __future__ import annotations  # PEP 604 'list | None' must stay lazy on py3.8/3.9
 
 import sqlite3
 import time
