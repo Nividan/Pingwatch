@@ -168,11 +168,99 @@ def convert(base, apply=False):
     return 0
 
 
+def revert(base, apply=False):
+    """Undo a managed conversion: move the active release's code and all of
+    data/ back to the base, returning a flat install. The systemd unit can keep
+    pointing at bootstrap.py — it passes through to ./server.py in a flat layout
+    — so no unit change is needed. Refuses if not managed; dry-run by default."""
+    base = os.path.abspath(base)
+    if not is_managed(base):
+        print("[revert] not a managed install (no current.txt / releases/) — nothing to do.")
+        return 0
+    try:
+        with open(os.path.join(base, "current.txt"), "r", encoding="utf-8") as f:
+            current = f.read().strip()
+    except Exception:
+        current = ""
+    rel_dir  = os.path.join(base, "releases", current)
+    data_dir = os.path.join(base, "data")
+    if not current or not os.path.isdir(rel_dir):
+        print("[revert] ERROR: current.txt does not name a present release — aborting.",
+              file=sys.stderr)
+        return 1
+
+    moves = []
+    # Code: the active release's top-level entries go back to the base. (Code
+    # entries move BEFORE data files so a directory like backup/ is recreated by
+    # the code move, then its data subdirs merge back into it.)
+    for name in sorted(os.listdir(rel_dir)):
+        moves.append((os.path.join(rel_dir, name), os.path.join(base, name), "code"))
+    # Data: file-granular so dirs (e.g. backup/) merge into the restored code.
+    for dirpath, _dn, files in os.walk(data_dir):
+        for fn in sorted(files):
+            src = os.path.join(dirpath, fn)
+            rel = os.path.relpath(src, data_dir)
+            moves.append((src, os.path.join(base, rel), "data"))
+
+    print(f"[revert] base    = {base}")
+    print(f"[revert] release = {rel_dir}")
+    print(f"[revert] {len(moves)} move(s) back to a flat layout:")
+    for src, dst, kind in moves:
+        print(f"    [{kind:4}] {os.path.relpath(src, base)}  ->  {os.path.relpath(dst, base)}")
+
+    conflicts = [dst for _, dst, _ in moves if os.path.exists(dst)]
+    if conflicts:
+        print("[revert] ERROR: destination(s) already exist — aborting:", file=sys.stderr)
+        for c in conflicts:
+            print("    " + c, file=sys.stderr)
+        return 1
+
+    if not apply:
+        print("\n[revert] DRY RUN — no files moved. Re-run with --apply to perform the revert.")
+        print("[revert] IMPORTANT: stop the PingWatch service first.")
+        return 0
+
+    for src, dst, _kind in moves:
+        _move(src, dst)
+    # Remove managed-layout artifacts (keep bootstrap.py / linux/ / windows/).
+    for name in ("current.txt", "upgrade_state.json", "server_health.json", "update_report.json"):
+        try:
+            os.remove(os.path.join(base, name))
+        except OSError:
+            pass
+    for d in ("releases", "data", "db_snapshots"):
+        shutil.rmtree(os.path.join(base, d), ignore_errors=True)
+    print("\n[revert] OK — reverted to a flat layout. Restart the service "
+          "(bootstrap.py passes through to ./server.py).")
+    return 0
+
+
+def _find_base(explicit):
+    """Resolve the install base. Explicit arg wins. Otherwise walk up from this
+    script looking for bootstrap.py / current.txt — so the tool works whether it
+    lives at <base>/tools/ (flat) or <base>/releases/<ver>/tools/ (managed)."""
+    if explicit:
+        return explicit
+    d = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    probe = d
+    for _ in range(4):
+        if (os.path.exists(os.path.join(probe, "bootstrap.py"))
+                or os.path.exists(os.path.join(probe, "current.txt"))):
+            return probe
+        parent = os.path.dirname(probe)
+        if parent == probe:
+            break
+        probe = parent
+    return d
+
+
 def main(argv):
-    args = [a for a in argv if a != "--apply"]
+    flags = {"--apply", "--revert-managed"}
+    args = [a for a in argv if a not in flags]
     apply = "--apply" in argv
-    base = args[0] if args else os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    return convert(base, apply=apply)
+    do_revert = "--revert-managed" in argv
+    base = _find_base(args[0] if args else None)
+    return revert(base, apply=apply) if do_revert else convert(base, apply=apply)
 
 
 if __name__ == "__main__":

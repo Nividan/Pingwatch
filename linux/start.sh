@@ -114,16 +114,28 @@ if [ "${1:-}" = "--uninstall-service" ]; then
     exit 0
 fi
 
-# ── Convert a flat install into the managed releases/ layout ─
-#   bash start.sh --convert-managed          (dry run — shows the plan)
-#   bash start.sh --convert-managed --apply  (perform the move)
-# Stop the service and back up the DB first. Safe to skip entirely: a flat
-# install keeps working; bootstrap.py passes through to ./server.py until a
-# managed layout exists.
-if [ "${1:-}" = "--convert-managed" ]; then
+# ── Convert to / revert from the managed releases/ layout ────
+#   bash start.sh --convert-managed [--apply]   flat   -> managed
+#   bash start.sh --revert-managed  [--apply]   managed -> flat
+# Without --apply each is a dry run. Stop the service and back up the DB first.
+# Safe to skip conversion entirely: a flat install keeps working (bootstrap.py
+# passes through to ./server.py).
+if [ "${1:-}" = "--convert-managed" ] || [ "${1:-}" = "--revert-managed" ]; then
     APPLY=""
     [ "${2:-}" = "--apply" ] && APPLY="--apply"
-    exec "$PYTHON" "$PROJECT_ROOT/tools/convert_to_managed.py" "$PROJECT_ROOT" $APPLY
+    REVERT=""
+    [ "${1:-}" = "--revert-managed" ] && REVERT="--revert-managed"
+    # Post-conversion the tool lives in the active release, not the base.
+    TOOL="$PROJECT_ROOT/tools/convert_to_managed.py"
+    if [ ! -f "$TOOL" ] && [ -f "$PROJECT_ROOT/current.txt" ]; then
+        CUR="$(tr -d '[:space:]' < "$PROJECT_ROOT/current.txt" 2>/dev/null)"
+        TOOL="$PROJECT_ROOT/releases/$CUR/tools/convert_to_managed.py"
+    fi
+    if [ ! -f "$TOOL" ]; then
+        echo "[ERROR] convert tool not found in tools/ or releases/<current>/tools/"
+        exit 1
+    fi
+    exec "$PYTHON" "$TOOL" "$PROJECT_ROOT" $REVERT $APPLY
 fi
 
 # ── Python version check ───────────────────────────────────
