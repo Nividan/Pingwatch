@@ -13,6 +13,7 @@ import time
 from core.config import DB_PATH
 from core.logger import log
 from db.backend  import is_pg
+from db.helpers  import db_query, db_query_one
 
 # Column list for alert_events — keep in sync with CREATE TABLE in
 # db/core.py and db/pg_schema.py. Decouples query code from schema order.
@@ -600,3 +601,122 @@ def db_clean_alert_events(retain_days: int = 90) -> int:
     except Exception as e:
         log.error(f"db_clean_alert_events error: {e}")
         return 0
+
+
+# ── Aggregated stats (server-side; backs the MCP get_alert_stats tool) ──
+# Group-by dimension → real alert_events column. site/group are NOT columns
+# (only `did` is) and are resolved by the caller via live STATE.
+_STAT_DIM_COL = {
+    "device":         "did",
+    "sensor":         "sid",
+    "severity":       "severity",
+    "state":          "state",
+    "event_type":     "event_type",
+    "suppress_reason": "suppress_reason",
+}
+_MTTR_SAMPLE_CAP = 20000   # bound the percentile fetch
+
+
+def _percentiles(durations: list) -> dict:
+    """avg / p50 / p95 over a list of numeric durations (seconds)."""
+    n = len(durations)
+    if not n:
+        return {"avg": None, "p50": None, "p95": None, "n_resolved": 0}
+    s = sorted(durations)
+    def _pct(p):
+        idx = min(n - 1, max(0, int(round((p / 100.0) * (n - 1)))))
+        return round(s[idx], 1)
+    return {"avg": round(sum(s) / n, 1), "p50": _pct(50), "p95": _pct(95),
+            "n_resolved": n}
+
+
+def db_alert_stats(since: float, until: float, *, device_id: str = None,
+                   severity: str = None, state: str = None,
+                   include_suppressed: bool = True,
+                   group_by: list | None = None) -> dict:
+    """Aggregate alert_events over [since, until). All counting happens in
+    SQL (GROUP BY) — no event rows cross the wire except a capped sample of
+    resolved-event durations for the MTTR percentiles (computed in Python so
+    SQLite, which lacks percentile_cont, behaves identically to PG).
+
+    `group_by` accepts keys from _STAT_DIM_COL; unknown keys are ignored.
+    site/group are handled by the caller (not columns here).
+    """
+    where  = ["triggered_at >= ?", "triggered_at < ?"]
+    params = [since, until]
+    if device_id:
+        where.append("did = ?");      params.append(device_id)
+    if severity:
+        where.append("severity = ?"); params.append(severity)
+    if state:
+        where.append("state = ?");    params.append(state)
+    if not include_suppressed:
+        where.append("state != 'suppressed'")
+    W = " AND ".join(where)
+    P = tuple(params)
+
+    def _count_by(col):
+        rows = db_query("main",
+            f"SELECT {col} AS k, COUNT(*) AS c FROM alert_events "
+            f"WHERE {W} GROUP BY {col}", P)
+        return {(r["k"] if r["k"] not in (None, "") else "(none)"): int(r["c"])
+                for r in rows}
+
+    total_row = db_query_one("main",
+        f"SELECT COUNT(*) AS c FROM alert_events WHERE {W}", P)
+    total = int(total_row["c"]) if total_row else 0
+
+    by_state    = _count_by("state")
+    by_severity = _count_by("severity")
+
+    supp_rows = db_query("main",
+        f"SELECT suppress_reason AS k, COUNT(*) AS c FROM alert_events "
+        f"WHERE {W} AND state='suppressed' GROUP BY suppress_reason", P)
+    suppressed_by_reason = {(r["k"] or "(none)"): int(r["c"]) for r in supp_rows}
+
+    # MTTR over resolved, non-suppressed events. Fetch only the duration
+    # column, capped, and compute percentiles in Python.
+    dur_rows = db_query("main",
+        f"SELECT (resolved_at - triggered_at) AS d FROM alert_events "
+        f"WHERE {W} AND state='resolved' AND resolved_at > 0 "
+        f"AND triggered_at > 0 ORDER BY triggered_at DESC LIMIT ?",
+        P + (_MTTR_SAMPLE_CAP,))
+    durations = [float(r["d"]) for r in dur_rows
+                 if r["d"] is not None and float(r["d"]) >= 0]
+    mttr = _percentiles(durations)
+    mttr["capped"] = len(dur_rows) >= _MTTR_SAMPLE_CAP
+
+    # Buckets shaped by group_by (table-backed dims only).
+    buckets = []
+    dims = [d for d in (group_by or []) if d in _STAT_DIM_COL]
+    if dims:
+        cols = [_STAT_DIM_COL[d] for d in dims]
+        sel_extra = ""
+        if dims == ["device"]:
+            sel_extra = ", MAX(dname) AS dname"
+        elif dims == ["sensor"]:
+            sel_extra = ", MAX(sname) AS sname"
+        col_list = ", ".join(cols)
+        rows = db_query("main",
+            f"SELECT {col_list}{sel_extra}, COUNT(*) AS c FROM alert_events "
+            f"WHERE {W} GROUP BY {col_list} ORDER BY COUNT(*) DESC LIMIT 200", P)
+        for r in rows:
+            r = dict(r)
+            key = "|".join(str(r.get(_STAT_DIM_COL[d]) or "") for d in dims)
+            b = {"key": key, "count": int(r["c"])}
+            if "did" in cols:
+                b["did"] = r.get("did")
+            if r.get("dname"):
+                b["name"] = r["dname"]
+            if r.get("sname"):
+                b["sname"] = r["sname"]
+            buckets.append(b)
+
+    return {
+        "total":                total,
+        "by_state":             by_state,
+        "by_severity":          by_severity,
+        "suppressed_by_reason": suppressed_by_reason,
+        "mttr_seconds":         mttr,
+        "buckets":              buckets,
+    }

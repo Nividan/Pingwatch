@@ -29,6 +29,7 @@ Design (see the design discussion / CHANGELOG for the full rationale):
 from __future__ import annotations
 
 import json
+import time
 
 import core.app_state as app_state
 import core.settings as _settings
@@ -51,6 +52,8 @@ _MAX_LIMIT     = 200
 # History window guard rail (minutes). 30 days.
 _MAX_HISTORY_MINUTES = 43_200
 _DEFAULT_HISTORY_MINUTES = 1_440  # 24h
+# Aggregation/uptime window guard rail (seconds). 366 days.
+_MAX_WINDOW_S = 366 * 86_400
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -177,17 +180,27 @@ def _tool_get_device(args: dict) -> dict:
     return {"device": _slim_device(dev.to_dict(), with_sensors=True)}
 
 
+_ALERT_STATES = ("active", "acknowledged", "suppressed", "resolved", "all")
+
+
 def _tool_get_active_alerts(args: dict) -> dict:
     from db import db_list_events
     severity = (args.get("severity") or "").strip().lower() or None
+    state    = (args.get("state") or "active").strip().lower()
+    if state not in _ALERT_STATES:
+        raise ValueError(f"state must be one of {', '.join(_ALERT_STATES)}")
     limit    = _clamp_limit(args.get("limit"))
     offset   = _cursor_offset(args.get("cursor"))
-    events = db_list_events(state="active", limit=_MAX_LIMIT, offset=0) or []
+    # db_list_events treats 'all' as no state filter. For point-in-time states
+    # (active/acknowledged/suppressed) the result set is small; for resolved/all
+    # use get_alert_history instead — this tool caps at one page of _MAX_LIMIT.
+    db_state = None if state == "all" else state
+    events = db_list_events(state=db_state, limit=_MAX_LIMIT, offset=0) or []
     if severity:
         events = [e for e in events
                   if str(e.get("severity", "")).lower() == severity]
     pg = _page(events, limit, offset)
-    return {"alerts": pg.pop("items"), **pg}
+    return {"state": state, "alerts": pg.pop("items"), **pg}
 
 
 def _tool_get_incidents(args: dict) -> dict:
@@ -358,6 +371,151 @@ def _tool_get_flaps(args: dict) -> dict:
     return {"flaps": pg.pop("items"), **pg}
 
 
+def _window(args: dict, default_span_s: int) -> tuple:
+    """Resolve (since, until) epoch seconds from args, clamped to _MAX_WINDOW_S."""
+    now = time.time()
+    try:
+        until = float(args.get("until")) if args.get("until") not in (None, "") else now
+    except (TypeError, ValueError):
+        until = now
+    try:
+        since = float(args.get("since")) if args.get("since") not in (None, "") else until - default_span_s
+    except (TypeError, ValueError):
+        since = until - default_span_s
+    if since >= until:
+        raise ValueError("since must be earlier than until")
+    if until - since > _MAX_WINDOW_S:
+        since = until - _MAX_WINDOW_S   # clamp rather than reject
+    return since, until
+
+
+def _tool_get_alert_stats(args: dict) -> dict:
+    from db import db_alert_stats
+    STATE = app_state.STATE
+    since, until = _window(args, 86_400)
+    device_id = (args.get("device_id") or "").strip() or None
+    severity  = (args.get("severity") or "").strip().lower() or None
+    state     = (args.get("state") or "").strip().lower() or None
+    include_suppressed = args.get("include_suppressed")
+    include_suppressed = True if include_suppressed is None else bool(include_suppressed)
+    group_by = args.get("group_by") or []
+    if isinstance(group_by, str):
+        group_by = [group_by]
+    geo = [d for d in group_by if d in ("site", "group")]
+
+    if geo:
+        if len(group_by) > 1:
+            raise ValueError("group_by 'site'/'group' must be the only dimension")
+        # Aggregate by device in SQL, then roll up did→site/group from live STATE.
+        stats = db_alert_stats(since, until, device_id=device_id, severity=severity,
+                               state=state, include_suppressed=include_suppressed,
+                               group_by=["device"])
+        dim = geo[0]
+        roll: dict = {}
+        for b in stats["buckets"]:
+            dev = STATE.get_device(b.get("did")) if b.get("did") else None
+            if dim == "site":
+                key = (getattr(dev, "site", "") or "(unsited)") if dev else "(unknown)"
+            else:
+                key = (getattr(dev, "group", "") or "(ungrouped)") if dev else "(unknown)"
+            roll[key] = roll.get(key, 0) + b["count"]
+        stats["buckets"] = [{"key": k, "count": v}
+                            for k, v in sorted(roll.items(), key=lambda x: -x[1])]
+        stats["bucket_note"] = "site/group rolled up from the top-200 devices by alert count"
+    else:
+        stats = db_alert_stats(since, until, device_id=device_id, severity=severity,
+                               state=state, include_suppressed=include_suppressed,
+                               group_by=group_by)
+
+    return {
+        "window": {"since": int(since), "until": int(until),
+                   "days": round((until - since) / 86_400, 2)},
+        **stats,
+    }
+
+
+def _scope_dids(scope: str):
+    """Resolve an uptime scope to (label, dids|None). None = whole fleet."""
+    STATE = app_state.STATE
+    scope = (scope or "all").strip()
+    if scope == "all":
+        return "all", None
+    if ":" not in scope:
+        raise ValueError("scope must be 'all' or '<kind>:<value>' (device/site/group)")
+    kind, val = scope.split(":", 1)
+    kind = kind.strip().lower(); val = val.strip()
+    if kind == "device":
+        if not STATE.get_device(val):
+            raise ValueError(f"device not found: {val}")
+        return scope, [val]
+    if kind in ("site", "group"):
+        dids = [d["device_id"] for d in STATE.all_devices()
+                if str(d.get(kind, "")) == val]
+        if not dids:
+            raise ValueError(f"no devices in {kind} '{val}'")
+        return scope, dids
+    raise ValueError(f"unknown scope kind: {kind}")
+
+
+def _tool_get_uptime(args: dict) -> dict:
+    from db import db_uptime_overall, db_uptime_by_device, db_uptime_series
+    STATE = app_state.STATE
+    scope_label, dids = _scope_dids(args.get("scope") or "all")
+    since, until = _window(args, 2_592_000)  # default 30d
+    gran = (args.get("granularity") or "").strip().lower() or None
+    if gran and gran not in ("day", "week"):
+        raise ValueError("granularity must be 'day' or 'week'")
+
+    overall = db_uptime_overall(since, until, dids)
+    pct = overall["pct"]
+    out = {
+        "scope":         scope_label,
+        "window":        {"since": int(since), "until": int(until),
+                          "days": round((until - since) / 86_400, 2)},
+        "method":        "sample_based",
+        "availability_pct":     pct,
+        "ok_samples":           overall["up"],
+        "total_samples":        overall["total"],
+        "downtime_seconds_est": round((1 - pct / 100.0) * (until - since)) if pct is not None else None,
+        "note": "Availability = OK samples / total samples. Outage-duration "
+                "metrics (MTTR/MTBF/outage count) are not yet exposed.",
+    }
+    # worst devices when the scope spans more than one device
+    if dids is None or len(dids) > 1:
+        worst = db_uptime_by_device(since, until, dids, limit=10)
+        for w in worst:
+            dev = STATE.get_device(w["did"])
+            w["name"] = getattr(dev, "name", "") if dev else ""
+        out["worst_devices"] = worst
+    if gran:
+        out["series"] = db_uptime_series(since, until, dids, bucket=gran)
+    return out
+
+
+def _tool_get_audit_log(args: dict) -> dict:
+    from db import db_query_audit
+    limit  = _clamp_limit(args.get("limit"))
+    offset = _cursor_offset(args.get("cursor"))
+    since  = args.get("since")
+    until  = args.get("until")
+    actor  = (args.get("actor") or "").strip() or None
+    action = (args.get("action_prefix") or "").strip() or None
+    try:
+        since = float(since) if since not in (None, "") else None
+        until = float(until) if until not in (None, "") else None
+    except (TypeError, ValueError):
+        since = until = None
+    rows = db_query_audit(since=since, until=until, actor=actor,
+                          action_prefix=action, limit=limit, offset=offset) or []
+    more = len(rows) >= limit
+    return {
+        "entries":     rows,
+        "returned":    len(rows),
+        "truncated":   more,
+        "next_cursor": str(offset + len(rows)) if more else None,
+    }
+
+
 # ─────────────────────────────────────────────────────────────────────
 # Tool registry — name → (description, inputSchema, handler)
 # ─────────────────────────────────────────────────────────────────────
@@ -391,9 +549,10 @@ _TOOLS = [
     },
     {
         "name": "get_active_alerts",
-        "description": "List currently active (unresolved/acknowledged) alert events, optionally filtered by severity. Use this to answer 'what is alarming right now'.",
+        "description": "List alert events by state. Default state='active' (firing/unacked). Use state='acknowledged' or 'suppressed' to see those (which do NOT appear under 'active'); use get_alert_history for resolved/all history. Optionally filter by severity.",
         "inputSchema": _obj({
-            "severity": {"type": "string", "description": "Optional severity filter (e.g. crit/warn)."},
+            "state":    {"type": "string", "description": "active | acknowledged | suppressed | resolved | all (default active)."},
+            "severity": {"type": "string", "description": "Optional severity filter (e.g. critical/warning)."},
             "limit": _LIMIT_PROP, "cursor": _CURSOR_PROP,
         }),
         "handler": _tool_get_active_alerts,
@@ -463,6 +622,44 @@ _TOOLS = [
         "description": "Recent flaps (sensor state transitions / up-down events), newest first. Paginated.",
         "inputSchema": _obj({"limit": _LIMIT_PROP, "cursor": _CURSOR_PROP}),
         "handler": _tool_get_flaps,
+    },
+    {
+        "name": "get_alert_stats",
+        "description": "Server-side AGGREGATED alert metrics over a window (default last 24h, max 366d) — total, by_state, by_severity, suppressed_by_reason, and MTTR (avg/p50/p95 over resolved events). Use this instead of pulling raw events for reporting/trends. group_by produces buckets by device/sensor/severity/state/event_type/suppress_reason (SQL) or site/group (rolled up from the top-200 devices).",
+        "inputSchema": _obj({
+            "since":    {"type": "number", "description": "Window start, epoch seconds (default now-24h)."},
+            "until":    {"type": "number", "description": "Window end, epoch seconds (default now)."},
+            "group_by": {"type": "array", "items": {"type": "string"},
+                         "description": "Bucket dimensions: device, sensor, severity, state, event_type, suppress_reason, site, group. site/group must be the only dimension."},
+            "device_id": {"type": "string", "description": "Restrict to one device."},
+            "severity":  {"type": "string"},
+            "state":     {"type": "string", "description": "active | acknowledged | suppressed | resolved."},
+            "include_suppressed": {"type": "boolean", "description": "Include suppressed events (default true)."},
+        }),
+        "handler": _tool_get_alert_stats,
+    },
+    {
+        "name": "get_uptime",
+        "description": "Historical availability % over a window (default last 30d, max 366d) for the whole fleet or a scope. Availability is sample-based (OK samples / total samples). Optional day/week time-series and worst-device ranking. Scope: 'all' | 'device:<id>' | 'site:<name>' | 'group:<name>'.",
+        "inputSchema": _obj({
+            "scope":       {"type": "string", "description": "'all' (default), 'device:<id>', 'site:<name>', or 'group:<name>'."},
+            "since":       {"type": "number", "description": "Window start, epoch seconds (default now-30d)."},
+            "until":       {"type": "number", "description": "Window end, epoch seconds (default now)."},
+            "granularity": {"type": "string", "description": "Optional 'day' or 'week' for a time series."},
+        }),
+        "handler": _tool_get_uptime,
+    },
+    {
+        "name": "get_audit_log",
+        "description": "Read the audit trail (config changes, ack/mute, logins, MCP/OAuth actions), newest first. Filter by time window, exact actor, and/or an action prefix (e.g. 'mcp_', 'alert_event_'). Paginated.",
+        "inputSchema": _obj({
+            "since":         {"type": "number", "description": "Only entries at/after this epoch-seconds timestamp."},
+            "until":         {"type": "number", "description": "Only entries before this epoch-seconds timestamp."},
+            "actor":         {"type": "string", "description": "Exact username filter."},
+            "action_prefix": {"type": "string", "description": "Match actions starting with this prefix."},
+            "limit": _LIMIT_PROP, "cursor": _CURSOR_PROP,
+        }),
+        "handler": _tool_get_audit_log,
     },
 ]
 

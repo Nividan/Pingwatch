@@ -15,6 +15,7 @@ from core.config import LOGS_DB_PATH
 from core.logger import log
 from db.backend  import is_pg
 from db.core   import _logs_enqueue
+from db.helpers import db_query, db_query_one, db_cursor
 
 # ── Sample write buffer (batches per-probe inserts) ───────────────
 _SAMPLE_BUF: list    = []
@@ -1698,3 +1699,102 @@ def _summary_from_5m(did, sid, cutoff):
         return []
     finally:
         if con: con.close()
+
+
+# ── Scoped availability (backs the MCP get_uptime tool) ───────────────
+# Sample-based availability = OK-samples / total-samples over a window, for
+# the whole fleet or a subset of device ids. Picks raw / 5m / 1h rollup by
+# window size (same rule as db_load_availability). NOTE: this is distinct
+# from outage-duration availability (start/stop from flap_log) — see the
+# get_outages work for that. Different definition; don't conflate.
+def _uptime_cols(table: str):
+    """(ok_expr, total_expr) for the chosen sample table."""
+    if table == "sensor_samples":
+        return "SUM(ok)", "COUNT(*)"
+    return "SUM(ok_count)", "SUM(ok_count + fail_count)"
+
+
+def _uptime_table(start_ts, end_ts):
+    minutes = max(1, int((float(end_ts) - float(start_ts)) // 60))
+    table, _ = _pick_table(minutes)
+    return table
+
+
+def _uptime_where(start_ts, end_ts, dids):
+    """Build a portable WHERE (?-placeholders) + params. db_query rewrites
+    ? → %s for PostgreSQL."""
+    where = ["ts >= ?", "ts < ?"]
+    params = [start_ts, end_ts]
+    if dids:
+        where.append("did IN (" + ",".join(["?"] * len(dids)) + ")")
+        params += list(dids)
+    return " AND ".join(where), tuple(params)
+
+
+def db_uptime_overall(start_ts, end_ts, dids=None) -> dict:
+    """Fleet (or scoped) availability % over [start_ts, end_ts)."""
+    table = _uptime_table(start_ts, end_ts)
+    okc, totc = _uptime_cols(table)
+    where, params = _uptime_where(start_ts, end_ts, dids)
+    r = db_query_one("logs",
+        f"SELECT {okc} AS up, {totc} AS total FROM {table} WHERE {where}", params)
+    up    = int(r["up"] or 0) if r and r["up"] is not None else 0
+    total = int(r["total"] or 0) if r and r["total"] is not None else 0
+    return {"up": up, "total": total,
+            "pct": round(up / total * 100, 3) if total else None,
+            "table": table}
+
+
+def db_uptime_by_device(start_ts, end_ts, dids=None, limit=20) -> list:
+    """Per-device availability, ascending (worst first). Devices with no
+    samples in the window are omitted."""
+    table = _uptime_table(start_ts, end_ts)
+    okc, totc = _uptime_cols(table)
+    where, params = _uptime_where(start_ts, end_ts, dids)
+    rows = db_query("logs",
+        f"SELECT did, {okc} AS up, {totc} AS total FROM {table} "
+        f"WHERE {where} GROUP BY did", params)
+    out = []
+    for r in rows:
+        total = int(r["total"] or 0) if r["total"] is not None else 0
+        if not total:
+            continue
+        up = int(r["up"] or 0) if r["up"] is not None else 0
+        out.append({"did": r["did"], "up": up, "total": total,
+                    "pct": round(up / total * 100, 3)})
+    out.sort(key=lambda o: o["pct"])
+    return out[:limit] if limit else out
+
+
+def db_uptime_series(start_ts, end_ts, dids=None, bucket="day") -> list:
+    """Availability % per day/week bucket. Uses is_pg branching for the
+    floor expression (SQLite lacks FLOOR; PG's CAST AS INTEGER rounds)."""
+    bucket_s = 604800 if bucket == "week" else 86400
+    table = _uptime_table(start_ts, end_ts)
+    okc, totc = _uptime_cols(table)
+    pg = is_pg()
+    ph = "%s" if pg else "?"
+    floor_expr = (f"FLOOR(ts/{bucket_s})*{bucket_s}" if pg
+                  else f"CAST(ts/{bucket_s} AS INTEGER)*{bucket_s}")
+    where = [f"ts >= {ph}", f"ts < {ph}"]
+    params = [start_ts, end_ts]
+    if dids:
+        where.append("did IN (" + ",".join([ph] * len(dids)) + ")")
+        params += list(dids)
+    W = " AND ".join(where)
+    sql = (f"SELECT {floor_expr} AS b, {okc} AS up, {totc} AS total "
+           f"FROM {table} WHERE {W} GROUP BY b ORDER BY b ASC")
+    try:
+        with db_cursor("logs") as cur:
+            cur.execute(sql, tuple(params))
+            rows = cur.fetchall()
+    except Exception as e:
+        log.error(f"db_uptime_series error: {e}")
+        return []
+    out = []
+    for r in rows:
+        total = int(r["total"] or 0) if r["total"] is not None else 0
+        up = int(r["up"] or 0) if r["up"] is not None else 0
+        out.append({"bucket_ts": int(r["b"]),
+                    "pct": round(up / total * 100, 3) if total else None})
+    return out

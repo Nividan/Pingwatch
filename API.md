@@ -548,6 +548,15 @@ Point any MCP client that speaks Streamable HTTP at the endpoint, e.g.:
 | `get_alert_history` | `since?`, `limit?`, `cursor?` | Newest-first alert event history |
 | `list_maintenance_windows` | — | Configured maintenance windows |
 | `get_flaps` | `limit?`, `cursor?` | Recent sensor state transitions |
+| `get_alert_stats` | `since?`, `until?`, `group_by?`, `device_id?`, `severity?`, `state?`, `include_suppressed?` | **Server-side aggregated** alert metrics (total, by_state, by_severity, suppressed_by_reason, MTTR avg/p50/p95) + optional buckets |
+| `get_uptime` | `scope?`, `since?`, `until?`, `granularity?` | Historical sample-based availability % (fleet or `device:`/`site:`/`group:` scope), worst-device ranking, optional day/week series |
+| `get_audit_log` | `since?`, `until?`, `actor?`, `action_prefix?`, `limit?`, `cursor?` | Audit trail (config changes, ack/mute, logins, MCP/OAuth actions), newest first |
+
+**`get_active_alerts` now takes a `state`** (`active` *(default)* `| acknowledged | suppressed | resolved | all`). Acknowledged/suppressed alerts do **not** appear under `active` — query them explicitly.
+
+**Notes on the aggregation tools:**
+- `get_alert_stats` does all counting in SQL; only a capped sample of resolved-event durations is read to compute MTTR percentiles (in Python, so SQLite and PostgreSQL agree). Windows are capped at 366 days. `group_by` accepts `device, sensor, severity, state, event_type, suppress_reason` (SQL) or `site`/`group` (rolled up from the top-200 devices by alert count).
+- `get_uptime` availability is **sample-based** (`OK samples / total samples`), distinct from outage-duration availability. MTTR/MTBF/outage-count are intentionally **not** exposed yet (planned `get_outages`). `downtime_seconds_est` is derived from the sample ratio, not measured outages.
 
 **Caps:** list/history tools default to 50 rows (hard max 200); `get_metric_history` defaults to 200 points (max 1000) over a window capped at 30 days. Truncated responses carry `"truncated": true` and a `"next_cursor"` — pass it back as `cursor` to page. Tool-input errors return an MCP tool error (`isError: true`), not a JSON-RPC error.
 

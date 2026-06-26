@@ -26,6 +26,9 @@ from db.samples     import (
     db_load_history,
     db_load_summary,
     db_load_availability,
+    db_uptime_overall,
+    db_uptime_by_device,
+    db_uptime_series,
     db_clean_samples,
     db_rollup_backfill,
     db_cleanup_impossible_rates,
@@ -124,7 +127,7 @@ from db.sites       import (
 )
 
 # audit
-from db.audit       import db_log_audit, db_get_audit
+from db.audit       import db_log_audit, db_get_audit, db_query_audit
 
 # api_tokens — Bearer-token auth (scripts / CI / Terraform)
 from db.api_tokens  import (
@@ -207,6 +210,7 @@ from db.alert_events import (
     db_resolve_events_by_sensor,
     db_has_acked_event,
     db_has_active_event,
+    db_alert_stats,
 )
 
 # licenses
@@ -273,7 +277,8 @@ __all__ = [
     "db_reset_anomaly_baseline",
     # samples
     "db_buffer_sample", "db_flush_samples",
-    "db_load_history", "db_load_summary", "db_load_availability", "db_clean_samples",
+    "db_load_history", "db_load_summary", "db_load_availability",
+    "db_uptime_overall", "db_uptime_by_device", "db_uptime_series", "db_clean_samples",
     "db_rollup_backfill", "db_cleanup_impossible_rates", "db_sample_buffer_stats",
     # events
     "db_log_flap", "db_load_flaps", "db_load_unresolved_flap_state", "db_auto_resolve_flap", "db_ack_flap", "db_ack_flaps_by_sensor", "db_resolve_flap", "db_resolve_flaps_by_sensor", "db_resolve_all_flaps", "db_has_open_flap", "db_count_active_flaps", "db_count_active_flaps_by_severity",
@@ -303,7 +308,7 @@ __all__ = [
     "db_find_group_by_radius", "db_get_radius_mapped_groups",
     "db_get_saml_mapped_groups", "db_get_oidc_mapped_groups",
     # audit
-    "db_log_audit", "db_get_audit",
+    "db_log_audit", "db_get_audit", "db_query_audit",
     # api_tokens
     "db_create_api_token", "db_get_api_token_by_hash", "db_get_api_token",
     "db_list_api_tokens", "db_revoke_api_token", "db_touch_api_token_last_used",
@@ -333,6 +338,7 @@ __all__ = [
     "db_log_event", "db_list_events", "db_count_active", "db_get_event",
     "db_ack_event", "db_resolve_event", "db_auto_resolve_event",
     "db_resolve_all_active", "db_has_acked_event", "db_has_active_event",
+    "db_alert_stats",
     # reports
     "db_list_report_templates", "db_get_report_template",
     "db_create_report_template", "db_update_report_template", "db_delete_report_template",

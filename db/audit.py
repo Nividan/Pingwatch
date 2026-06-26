@@ -86,3 +86,30 @@ def db_get_audit(limit: int = 200, action_prefixes: list | None = None) -> list:
              "action": r["action"],
              "target": r["target"],
              "detail": r["detail"]} for r in rows]
+
+
+def db_query_audit(since: float = None, until: float = None,
+                   actor: str = None, action_prefix: str = None,
+                   limit: int = 100, offset: int = 0) -> list:
+    """Filtered, paginated audit query (backs the MCP get_audit_log tool).
+
+    Newest-first. All filters optional: time window [since, until), an exact
+    `actor`, and a prefix-anchored `action` (index-friendly LIKE on both
+    backends). Returns list of dict rows."""
+    where, params = [], []
+    if since is not None:
+        where.append("ts >= ?");          params.append(float(since))
+    if until is not None:
+        where.append("ts < ?");           params.append(float(until))
+    if actor:
+        where.append("actor = ?");        params.append(actor)
+    if action_prefix:
+        where.append("action LIKE ?");    params.append(action_prefix + "%")
+    W = (" WHERE " + " AND ".join(where)) if where else ""
+    rows = db_query("main",
+        f"SELECT ts, actor, ip, action, target, detail FROM audit_log{W} "
+        f"ORDER BY ts DESC LIMIT ? OFFSET ?",
+        tuple(params) + (int(limit), int(offset)))
+    return [{"ts": r["ts"], "actor": r["actor"], "ip": r["ip"],
+             "action": r["action"], "target": r["target"],
+             "detail": r["detail"]} for r in rows]
