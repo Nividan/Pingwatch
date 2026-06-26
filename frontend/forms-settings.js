@@ -1292,8 +1292,14 @@ async function _loadUpgradeStatus(){
 function uploadUpgradeImage(){
   const inp = document.createElement('input');
   inp.type = 'file'; inp.accept = '.zip';
+  // Attach to the DOM before clicking: a DETACHED <input type=file> does not
+  // reliably fire its 'change' event in every browser, which silently swallowed
+  // the upload (file chosen → nothing happened). Hidden off-screen, removed after.
+  inp.style.cssText = 'position:fixed;left:-9999px;opacity:0';
+  document.body.appendChild(inp);
   inp.onchange = () => {
-    const file = inp.files[0];
+    const file = inp.files && inp.files[0];
+    try { inp.remove(); } catch(_){}
     if (!file) return;
     if (!confirm(`Install image "${file.name}"?\n\nThe server will verify it, snapshot the database, and restart. `
                + `A bad image is rolled back automatically.`)) return;
