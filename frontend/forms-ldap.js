@@ -67,6 +67,9 @@ async function saveLdapSettings() {
   }
   if (r.error) { toast(r.error, 'err'); return; }
   toast('LDAP settings saved', 'ok');
+  // Re-sync the panel (incl. the bind-password "set" placeholder) without a
+  // refresh — matches the radius/oidc/saml panels' post-save behavior.
+  if (typeof _loadLdapPanel === 'function') _loadLdapPanel();
 }
 
 

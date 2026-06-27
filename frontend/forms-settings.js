@@ -1415,8 +1415,8 @@ function _buildSettingsTab_database(sr) {
         </div>
         <div class="fr" style="margin-top:6px">
           <div class="fh" style="margin:0;flex:1">Encrypts each bundle (Argon2id/Scrypt + AES-256-GCM). Required for a full restore on a new server — escrow this passphrase in your vault; it is never stored in the bundle.</div>
-          ${sr.db_backup_passphrase_set?`<label style="font-size:12px;color:var(--text3);display:flex;align-items:center;gap:6px;cursor:pointer;flex-shrink:0">
-            <input type="checkbox" id="st-dbk-passphrase-clear" onchange="_dbkEncWarn()"> Remove</label>`:''}
+          <label id="st-dbk-pp-clear-wrap" style="font-size:12px;color:var(--text3);display:${sr.db_backup_passphrase_set?'flex':'none'};align-items:center;gap:6px;cursor:pointer;flex-shrink:0">
+            <input type="checkbox" id="st-dbk-passphrase-clear" onchange="_dbkEncWarn()"> Remove</label>
         </div>
         <div id="st-dbk-enc-warn" data-stored="${sr.db_backup_passphrase_set?'1':'0'}" style="display:none;margin-top:10px;padding:9px 12px;border-radius:6px;background:var(--warn-bg);border:1px solid var(--warn-border);color:var(--warn);font-size:12px">
           &#9888; Backups will be written <b>unencrypted</b>. A bundle contains the encryption key, TLS certificates and pingwatch.conf in cleartext &mdash; anyone with the file can read every stored credential. Set a passphrase (and escrow it) to protect it.
@@ -3023,6 +3023,14 @@ async function saveSettings(){
     if(el) el.textContent=body.org_name||'Network Monitor v3';
     document.title='PingWatch \u2014 '+(body.org_name||'Network Monitor');
   }
+  // Re-sync the SMTP password sentinel without a refresh: clear the typed value
+  // and, if one was just saved, flip the placeholder to the "stored" bullets \u2014
+  // same live-update behavior as every other secret field.
+  const _smtpPw=document.getElementById('st-smtp-pass');
+  if(_smtpPw){
+    if(pw) _smtpPw.placeholder='\u25cf\u25cf\u25cf\u25cf\u25cf (set \u2014 leave blank to keep)';
+    _smtpPw.value='';
+  }
   toast('Settings saved','ok');
 }
 
@@ -3350,6 +3358,19 @@ async function _loadDbBackupSettings(){
     const cb = document.getElementById(`st-dbk-d${i}`);
     if(cb) cb.checked = days.includes(String(i));
   }
+  // Encryption passphrase — re-sync the derived UI (placeholder / Remove / warning)
+  // from the server's set/unset flag so it reflects a just-saved passphrase
+  // without a page refresh.
+  const ppEl   = document.getElementById('st-dbk-passphrase');
+  const ppWrap = document.getElementById('st-dbk-pp-clear-wrap');
+  const ppClr  = document.getElementById('st-dbk-passphrase-clear');
+  const ppWarn = document.getElementById('st-dbk-enc-warn');
+  if(ppEl){ ppEl.value=''; ppEl.placeholder = r.db_backup_passphrase_set
+      ? '•••••••• (leave blank to keep)'
+      : 'set a passphrase to encrypt bundles'; }
+  if(ppWrap) ppWrap.style.display = r.db_backup_passphrase_set ? 'flex' : 'none';
+  if(ppClr)  ppClr.checked = false;
+  if(ppWarn) ppWarn.dataset.stored = r.db_backup_passphrase_set ? '1' : '0';
   _dbkFreqChange();
   _dbkEncWarn();
   const lastInfo = document.getElementById('dbk-last-info');
