@@ -19,6 +19,7 @@ shared with the manual export route so the two never diverge.
 import datetime
 import getpass
 import os
+import subprocess
 import tempfile
 import threading
 
@@ -71,6 +72,64 @@ def _check_backup_dir_writable(path: str) -> None:
             f"Backup directory probe-write failed at {path}: {e} — "
             f"check ownership and ACLs"
         )
+
+
+def _backup_pg_schema(cfg, schema, dest_path, label, log):
+    """Run pg_dump for one schema and write to dest_path.
+
+    Retained as a stable helper: the managed-upgrade snapshotter
+    (core/upgrade.create_snapshot) calls this to dump the pre-upgrade PG state
+    to a file. Keep the (cfg, schema, dest_path, label, log) signature."""
+    import shutil as _sh, tempfile as _tmp
+    dest_str = str(dest_path)
+    dest_dir = os.path.dirname(dest_str)
+
+    try:
+        fd, tmp = _tmp.mkstemp(dir=dest_dir, suffix='.sql.tmp')
+        same_fs = True
+    except OSError:
+        fd, tmp = _tmp.mkstemp(suffix='.sql.tmp')
+        same_fs = False
+    os.close(fd)
+
+    moved = False
+    pgpass = None
+    try:
+        from db.backend import pg_env as _pg_env
+        env, pgpass = _pg_env(cfg)
+        cmd = [
+            'pg_dump',
+            '-h', cfg['pg_host'],
+            '-p', str(cfg['pg_port']),
+            '-U', cfg['pg_user'],
+            '-d', cfg['pg_database'],
+            '--schema', schema,
+            '--no-password',
+            '-f', tmp,
+        ]
+        result = subprocess.run(cmd, env=env, capture_output=True, text=True)
+        if result.returncode != 0:
+            raise RuntimeError(result.stderr.strip() or f"pg_dump exited {result.returncode}")
+        if same_fs:
+            os.replace(tmp, dest_str)
+        else:
+            _sh.copy2(tmp, dest_str)
+        moved = True
+    finally:
+        if pgpass:
+            try:
+                os.unlink(pgpass)
+            except OSError:
+                pass
+        if not moved or not same_fs:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+
+    size = os.path.getsize(dest_str)
+    log.info(f"DB backup: {label} success — {os.path.basename(dest_str)} ({size:,} bytes)")
+    return size
 
 
 def _write_atomic(dest_path: str, data: bytes) -> None:
