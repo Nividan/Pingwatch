@@ -1289,54 +1289,83 @@ async function _loadUpgradeStatus(){
   }
 }
 
+// In-app confirm modal (NOT native confirm()). The browser can suppress
+// confirm()/alert() per-tab after repeated dialogs ("Don't allow this page to
+// create more dialogs"), and a suppressed confirm() returns false — which
+// silently swallowed the upgrade (file chosen → nothing happened). A real
+// overlay can't be suppressed and is clearer for a server-restarting action.
+function _upgModalConfirm(title, bodyHtml, okLabel, onOk){
+  const ov=document.createElement('div');
+  ov.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:10001;display:flex;align-items:center;justify-content:center';
+  ov.innerHTML=`<div style="background:var(--card,#1e2533);border:1px solid var(--border,#2a3448);border-radius:10px;padding:26px 30px;max-width:460px;width:90%;box-shadow:0 8px 32px rgba(0,0,0,.5)">
+    <div style="font-size:15px;font-weight:600;margin-bottom:10px;color:var(--text,#e0e6f0)">${esc(title)}</div>
+    <div style="font-size:13px;color:var(--text2,#8899aa);margin-bottom:18px;line-height:1.5">${bodyHtml}</div>
+    <div style="display:flex;gap:10px;justify-content:flex-end">
+      <button id="_upg_cancel" style="padding:8px 20px;border-radius:6px;border:1px solid var(--border,#2a3448);background:transparent;color:var(--text2,#8899aa);cursor:pointer;font-size:13px">Cancel</button>
+      <button id="_upg_ok" style="padding:8px 20px;border-radius:6px;border:none;background:var(--accent,#2f81f7);color:#fff;cursor:pointer;font-weight:600;font-size:13px">${esc(okLabel)}</button>
+    </div>
+  </div>`;
+  document.body.appendChild(ov);
+  const close=()=>{ try{document.body.removeChild(ov);}catch(_){} };
+  ov.querySelector('#_upg_cancel').onclick=close;
+  ov.querySelector('#_upg_ok').onclick=()=>{ close(); onOk(); };
+}
+
 function uploadUpgradeImage(){
   const inp = document.createElement('input');
   inp.type = 'file'; inp.accept = '.zip';
   // Attach to the DOM before clicking: a DETACHED <input type=file> does not
-  // reliably fire its 'change' event in every browser, which silently swallowed
-  // the upload (file chosen → nothing happened). Hidden off-screen, removed after.
+  // reliably fire its 'change' event in every browser. Hidden off-screen.
   inp.style.cssText = 'position:fixed;left:-9999px;opacity:0';
   document.body.appendChild(inp);
   inp.onchange = () => {
     const file = inp.files && inp.files[0];
     try { inp.remove(); } catch(_){}
     if (!file) return;
-    if (!confirm(`Install image "${file.name}"?\n\nThe server will verify it, snapshot the database, and restart. `
-               + `A bad image is rolled back automatically.`)) return;
-    const stEl = document.getElementById('upg-upload-status');
-    if (stEl){ stEl.style.color = 'var(--text3)'; stEl.textContent = 'Uploading & verifying…'; }
-    fetch('/api/upgrade/image', {
-      method: 'POST', headers: {'Content-Type': 'application/octet-stream'}, body: file,
-    }).then(async resp => {
-      const r = (resp.ok || resp.status === 200)
-        ? await resp.json().catch(() => ({ok:true}))
-        : await resp.json().catch(() => null);
-      if (r && r.ok) {
-        if (stEl){ stEl.style.color = 'var(--up)'; stEl.textContent = 'Installing ' + (r.version||'') + ' — restarting…'; }
-        toast('Image accepted — server restarting to install ' + (r.version || ''), 'ok');
-        setTimeout(() => location.reload(), 8000);
-      } else {
-        const err = (r && r.error) || ('HTTP ' + resp.status);
-        if (stEl){ stEl.style.color = 'var(--down)'; stEl.textContent = err; }
-        toast('Upgrade rejected: ' + err, 'err');
-      }
-    }).catch(() => {
-      // A dropped connection here usually means the server already restarted.
-      if (stEl){ stEl.style.color = 'var(--up)'; stEl.textContent = 'Server restarting…'; }
-      toast('Server restarting…', 'ok');
-      setTimeout(() => location.reload(), 8000);
-    });
+    _upgModalConfirm('Install Update Image',
+      `Install <b style="color:var(--text,#e0e6f0)">${esc(file.name)}</b>?<br><br>`
+      + `The server verifies the signature, snapshots the database, and restarts. `
+      + `If the new release doesn't report healthy it is rolled back automatically.`,
+      'Install & Restart', () => _doUpgradeInstall(file));
   };
   inp.click();
 }
 
+function _doUpgradeInstall(file){
+  const stEl = document.getElementById('upg-upload-status');
+  if (stEl){ stEl.style.color = 'var(--text3)'; stEl.textContent = 'Uploading & verifying…'; }
+  fetch('/api/upgrade/image', {
+    method: 'POST', headers: {'Content-Type': 'application/octet-stream'}, body: file,
+  }).then(async resp => {
+    const r = (resp.ok || resp.status === 200)
+      ? await resp.json().catch(() => ({ok:true}))
+      : await resp.json().catch(() => null);
+    if (r && r.ok) {
+      if (stEl){ stEl.style.color = 'var(--up)'; stEl.textContent = 'Installing ' + (r.version||'') + ' — restarting…'; }
+      toast('Image accepted — server restarting to install ' + (r.version || ''), 'ok');
+      setTimeout(() => location.reload(), 8000);
+    } else {
+      const err = (r && r.error) || ('HTTP ' + resp.status);
+      if (stEl){ stEl.style.color = 'var(--down)'; stEl.textContent = err; }
+      toast('Upgrade rejected: ' + err, 'err');
+    }
+  }).catch(() => {
+    // A dropped connection here usually means the server already restarted.
+    if (stEl){ stEl.style.color = 'var(--up)'; stEl.textContent = 'Server restarting…'; }
+    toast('Server restarting…', 'ok');
+    setTimeout(() => location.reload(), 8000);
+  });
+}
+
 function rollbackUpgrade(){
-  if (!confirm('Roll back to the previous release?\n\nThis restores the pre-update database snapshot and '
-             + 'DISCARDS any data written since the update. The server will restart.')) return;
-  api('POST', '/api/upgrade/rollback', {}).then(r => {
-    if (r && r.ok){ toast('Rolling back — server restarting…', 'ok'); setTimeout(() => location.reload(), 8000); }
-    else toast('Rollback failed: ' + ((r && r.error) || 'error'), 'err');
-  }).catch(() => { toast('Server restarting…', 'ok'); setTimeout(() => location.reload(), 8000); });
+  _upgModalConfirm('Roll Back to Previous Release',
+    `This restores the pre-update database snapshot and <b style="color:var(--down,#ff4444)">discards any data written since the update</b>. The server will restart.`,
+    'Roll Back', () => {
+      api('POST', '/api/upgrade/rollback', {}).then(r => {
+        if (r && r.ok){ toast('Rolling back — server restarting…', 'ok'); setTimeout(() => location.reload(), 8000); }
+        else toast('Rollback failed: ' + ((r && r.error) || 'error'), 'err');
+      }).catch(() => { toast('Server restarting…', 'ok'); setTimeout(() => location.reload(), 8000); });
+    });
 }
 
 function _buildSettingsTab_database(sr) {
