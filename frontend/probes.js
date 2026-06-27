@@ -218,18 +218,46 @@ function _pbUpdStateChip(p){
   return `<span class="pb-chip ${m[0]}" title="${esc(tip)}">${inflight?'⟳ ':''}${esc(m[1])}</span>`;
 }
 
-// ── Campaigns list (active + recently finished) ──────────────────
+// ── Campaigns list ───────────────────────────────────────────────
+// Running campaigns stay pinned at the top (they need attention / Abort).
+// Terminal ones (done / halted / aborted) collapse into a default-collapsed
+// "Finished" section so they don't pile up above the probe list. The collapse
+// state lives in a module var so the 15s auto-refresh doesn't reset it.
+let _pbCampHistOpen=false;
 async function _pbLoadCampaigns(){
   const box=document.getElementById('pb-campaigns');
   if(!box) return;
   let camps=[];
   try{ const r=await api('GET','/api/probes/campaigns'); camps=r.campaigns||[]; }catch(_){}
-  const active=camps.filter(c=>c.state==='running'||c.state==='halted');
-  const recent=camps.filter(c=>c.state!=='running'&&c.state!=='halted').slice(0,3);
-  const show=active.concat(recent);
-  box.innerHTML = show.length
-    ? `<div class="pb-camp-h">Update campaigns</div>`+show.map(_pbCampaignCard).join('')
-    : '';
+  const running  = camps.filter(c=>c.state==='running');
+  const finished = camps.filter(c=>c.state!=='running').slice(0,20);  // newest first, capped
+  let html='';
+  if(running.length){
+    html += `<div class="pb-camp-h">Update campaigns</div>`+running.map(_pbCampaignCard).join('');
+  }
+  if(finished.length){
+    const halted=finished.filter(c=>c.state==='halted').length;
+    const open=_pbCampHistOpen;
+    html += `<div class="pb-camp-hist">`+
+      `<div class="pb-camp-hist-tog" onclick="_pbToggleCampHistory()">`+
+        `<span id="pb-camp-hist-chev" style="display:inline-block;transition:transform .15s;transform:rotate(${open?90:0}deg)">▸</span> `+
+        `Finished campaigns (${finished.length})`+
+        (halted?` <span class="pb-chip pb-chip-err" style="margin-left:4px">${halted} halted</span>`:'')+
+      `</div>`+
+      `<div id="pb-camp-hist-body" style="display:${open?'flex':'none'};flex-direction:column;gap:10px;margin-top:10px">`+
+        finished.map(_pbCampaignCard).join('')+
+      `</div>`+
+    `</div>`;
+  }
+  box.innerHTML = html;
+}
+
+function _pbToggleCampHistory(){
+  _pbCampHistOpen=!_pbCampHistOpen;
+  const body=document.getElementById('pb-camp-hist-body');
+  const chev=document.getElementById('pb-camp-hist-chev');
+  if(body) body.style.display=_pbCampHistOpen?'flex':'none';
+  if(chev) chev.style.transform=`rotate(${_pbCampHistOpen?90:0}deg)`;
 }
 
 function _pbCampaignCard(c){

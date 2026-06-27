@@ -5615,6 +5615,8 @@ label.toggle input:checked + .tsl:before{transform:translateX(18px);background:#
 /* ── Managed-update campaigns ─────────────────────────────────── */
 .pb-campaigns{display:flex;flex-direction:column;gap:10px;margin-bottom:14px;}
 .pb-camp-h{font-size:12px;font-weight:700;letter-spacing:.4px;text-transform:uppercase;color:var(--text3);}
+.pb-camp-hist-tog{display:flex;align-items:center;gap:7px;cursor:pointer;user-select:none;font-size:12px;font-weight:700;letter-spacing:.4px;text-transform:uppercase;color:var(--text3);padding:2px 0;}
+.pb-camp-hist-tog:hover{color:var(--text2);}
 .pb-camp{border:1px solid var(--border2);border-radius:10px;background:var(--panel);padding:12px 14px;}
 .pb-camp-row{display:flex;align-items:center;gap:10px;}
 .pb-camp-row b{color:var(--text);font-size:13px;}
