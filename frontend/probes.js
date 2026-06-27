@@ -236,7 +236,10 @@ async function _pbLoadCampaigns(){
     html += `<div class="pb-camp-h">Update campaigns</div>`+running.map(_pbCampaignCard).join('');
   }
   if(finished.length){
-    const halted=finished.filter(c=>c.state==='halted').length;
+    // Only flag a halted rollout that targeted the CURRENT agent build — a halt
+    // for an older, superseded build is past history, not an actionable warning,
+    // so the red badge doesn't linger forever after a successful later update.
+    const halted=finished.filter(c=>c.state==='halted' && c.target_build && c.target_build===S._agentBuild).length;
     const open=_pbCampHistOpen;
     html += `<div class="pb-camp-hist">`+
       `<div class="pb-camp-hist-tog" onclick="_pbToggleCampHistory()">`+
