@@ -5613,6 +5613,14 @@ label.toggle input:checked + .tsl:before{transform:translateX(18px);background:#
 .pb-chip-err{color:var(--down);border-color:var(--down-border);background:var(--down-bg);}
 
 /* ── Managed-update campaigns ─────────────────────────────────── */
+.pb-summary{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:14px;}
+.pb-sum-chip{cursor:pointer;display:inline-flex;align-items:center;gap:7px;border:1px solid var(--border2);border-radius:999px;padding:5px 13px;font-size:12px;background:var(--panel);color:var(--text2);transition:filter .12s,border-color .12s,box-shadow .12s;}
+.pb-sum-chip b{font-size:13px;color:var(--text);font-weight:700;}
+.pb-sum-chip:hover{filter:brightness(1.18);border-color:var(--border);}
+.pb-sum-active{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent) inset;}
+.pb-sum-dot{width:8px;height:8px;border-radius:50%;display:inline-block;flex-shrink:0;}
+.pb-sum-clear{cursor:pointer;background:transparent;border:none;color:var(--text3);font-size:12px;padding:4px 6px;}
+.pb-sum-clear:hover{color:var(--text);text-decoration:underline;}
 .pb-campaigns{display:flex;flex-direction:column;gap:10px;margin-bottom:14px;}
 .pb-camp-h{font-size:12px;font-weight:700;letter-spacing:.4px;text-transform:uppercase;color:var(--text3);}
 .pb-camp-hist-tog{display:flex;align-items:center;gap:7px;cursor:pointer;user-select:none;font-size:12px;font-weight:700;letter-spacing:.4px;text-transform:uppercase;color:var(--text3);padding:2px 0;}

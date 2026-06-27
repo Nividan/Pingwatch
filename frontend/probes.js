@@ -98,6 +98,7 @@ function _probesRender(){
         `<button class="btn" onclick="_probesLoad()">Refresh</button>`+
       `</div>`+
     `</div>`+
+    `<div id="pb-summary" class="pb-summary"></div>`+
     `<div id="pb-campaigns" class="pb-campaigns"></div>`+
     `<div id="pb-list" class="pb-list"></div>`;
 }
@@ -106,9 +107,59 @@ async function _probesLoad(){
   await _probesRefreshCache();
   try{ const b=await api('GET','/api/probes/build'); S._agentBuild=b.build_id||''; }catch(_){}
   _pbLoadCampaigns();
+  _pbRenderList();
+}
+
+// ── Fleet status summary (clickable filter chips) ────────────────
+// Each probe falls into exactly ONE bucket (priority order below) so the
+// counts sum to the fleet total. Clicking a chip filters the list to that
+// bucket; clicking it again (or "clear") shows all.
+const _PB_BUCKETS=[
+  {key:'active',  label:'Active',          color:'var(--up)'},
+  {key:'update',  label:'Need Update',     color:'var(--warn)'},
+  {key:'down',    label:'Down',            color:'var(--down)'},
+  {key:'pending', label:'Awaiting Enroll', color:'var(--accent)'},
+  {key:'updating',label:'Updating',        color:'var(--accent)'},
+  {key:'revoked', label:'Revoked',         color:'var(--text3)'},
+];
+let _pbFilter=null;
+
+function _pbBucket(p){
+  if(p.status==='revoked') return 'revoked';
+  if(p.status==='pending') return 'pending';
+  if(['queued','downloading','staged','restarting','verifying'].includes(p.update_state||'')) return 'updating';
+  if(!p.connected) return 'down';
+  if(p.supervisor && S._agentBuild && p.build_id && p.build_id!==S._agentBuild) return 'update';
+  return 'active';
+}
+
+function _pbRenderSummary(probes){
+  const box=document.getElementById('pb-summary');
+  if(!box) return;
+  const counts={};
+  probes.forEach(p=>{ const b=_pbBucket(p); counts[b]=(counts[b]||0)+1; });
+  const chips=_PB_BUCKETS.filter(b=>counts[b.key]).map(b=>{
+    const on=_pbFilter===b.key;
+    return `<button class="pb-sum-chip${on?' pb-sum-active':''}" onclick="_pbToggleFilter('${b.key}')" `+
+      `title="${on?'Showing only these — click to clear':'Show only these probes'}">`+
+      `<span class="pb-sum-dot" style="background:${b.color}"></span>`+
+      `<b>${counts[b.key]}</b> ${esc(b.label)}</button>`;
+  }).join('');
+  box.innerHTML = chips
+    ? chips + (_pbFilter?`<button class="pb-sum-clear" onclick="_pbToggleFilter(null)">✕ clear</button>`:'')
+    : '';
+}
+
+function _pbToggleFilter(b){
+  _pbFilter = (b && _pbFilter!==b) ? b : null;
+  _pbRenderList();   // render-only; no refetch
+}
+
+function _pbRenderList(){
   const list=document.getElementById('pb-list');
   if(!list) return;
   const probes=Object.values(S.probes).sort((a,b)=>(a.name||'').localeCompare(b.name||''));
+  _pbRenderSummary(probes);
   if(!probes.length){
     list.innerHTML=
       `<div class="pb-empty">`+
@@ -121,7 +172,11 @@ async function _probesLoad(){
     applyRbac();
     return;
   }
-  list.innerHTML=probes.map(p=>_pbRow(p)).join('');
+  const shown=_pbFilter ? probes.filter(p=>_pbBucket(p)===_pbFilter) : probes;
+  list.innerHTML = shown.length
+    ? shown.map(p=>_pbRow(p)).join('')
+    : `<div class="pb-empty" style="padding:28px"><p>No probes in this category. `+
+      `<a href="#" onclick="_pbToggleFilter(null);return false">Show all</a></p></div>`;
   applyRbac();
 }
 
