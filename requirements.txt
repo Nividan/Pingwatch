@@ -2,7 +2,9 @@
 pystray>=0.19.5
 Pillow>=10.0.0
 paramiko>=3.0.0
-cryptography>=41.0.0
+cryptography>=41.0.0   # Fernet creds + backup-bundle AEAD. >=44 unlocks Argon2id
+                       # for bundle encryption; older falls back to Scrypt (both
+                       # are honored on import — see core/backup_bundle.py).
 ldap3>=2.9
 psutil>=5.9.0
 pyotp>=2.9.0   # TOTP (RFC 6238) — two-factor authentication

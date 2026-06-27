@@ -4,14 +4,20 @@ routes/export.py — Database export, import, and audit log endpoints.
 SQLite mode:
   GET  /api/db/export         — download Main DB (config only)
   GET  /api/db/export/logs    — download Logs DB (sensor history)
-  GET  /api/db/export/bundle  — download ZIP bundle (both DBs + manifest)
-  POST /api/db/import         — upload Main DB, Logs DB, or ZIP bundle
+  GET  /api/db/export/bundle  — full restorable bundle: both DBs + secrets
+                                (Fernet key, TLS certs, pingwatch.conf) + manifest,
+                                AEAD-encrypted to .pwbk when a passphrase is set
+  POST /api/db/import         — upload Main DB, Logs DB, ZIP bundle, or .pwbk
 
 PostgreSQL mode:
   GET  /api/db/export         — pg_dump of main schema (.sql)
   GET  /api/db/export/logs    — pg_dump of logs schema (.sql)
-  GET  /api/db/export/bundle  — ZIP bundle of both schema dumps
-  POST /api/db/import         — not supported (returns 501 with instructions)
+  GET  /api/db/export/bundle  — full restorable bundle (.zip / .pwbk)
+  POST /api/db/import         — bundle (.zip / .pwbk) restore via psql
+
+Bundle encryption/format lives in core/backup_bundle.py (the single source of
+truth shared with the scheduled backup job). The passphrase travels in the
+X-Bundle-Passphrase request header, never the URL.
 
 Both modes:
   GET  /api/audit             — audit log entries
@@ -39,6 +45,9 @@ from core.config import (
 from db          import db_log_audit, db_get_audit
 from core.logger import log, LOG_FILES
 from core        import app_state
+from core.backup_bundle import (
+    build_bundle, is_encrypted, decrypt_container, restore_secrets_from_zip,
+)
 
 _LOG_LINE_RE = re.compile(
     r'^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\s+'
@@ -349,6 +358,15 @@ def _handle_pg_bundle_import(h, raw_bytes: bytes):
             try: os.unlink(t)
             except OSError: pass
 
+    # Restore bundled secrets (Fernet key / TLS certs / pingwatch.conf) onto a
+    # fresh box — conservative: never clobbers an existing key or conf.
+    try:
+        sec_actions = restore_secrets_from_zip(raw_bytes)
+        if sec_actions:
+            log.info("DB import (PG): secrets — " + "; ".join(sec_actions))
+    except Exception as e:
+        log.warning(f"DB import (PG): secret restore failed (non-fatal) — {e}")
+
     log.info("DB import (PG): complete — restarting…")
     h._json(200, {"ok": True, "msg": "PostgreSQL bundle imported — server is restarting…"})
     try:
@@ -357,6 +375,47 @@ def _handle_pg_bundle_import(h, raw_bytes: bytes):
         pass
     threading.Thread(target=_do_restart, args=(None, None), daemon=True).start()
     return True
+
+
+def _resolve_export_passphrase(h) -> str:
+    """Passphrase for a manual bundle export: request header wins, else the
+    stored scheduled passphrase, else '' (caller emits a cleartext warning)."""
+    pp = (h.headers.get("X-Bundle-Passphrase") or "").strip()
+    if pp:
+        return pp
+    try:
+        from core.settings import get as _cfg
+        from db.backups   import decrypt_pw
+        enc = _cfg("db_backup_passphrase_enc", "") or ""
+        if enc:
+            return decrypt_pw(enc) or ""
+    except Exception:
+        pass
+    return ""
+
+
+def _decrypt_if_needed(h, raw_bytes: bytes):
+    """Unwrap a PWBK1 container to its inner ZIP using the X-Bundle-Passphrase
+    header. Returns (inner_bytes, True) to continue, or (None, False) when a
+    response has already been sent (missing/wrong passphrase, unavailable KDF)."""
+    if not is_encrypted(raw_bytes):
+        return raw_bytes, True
+    pp = (h.headers.get("X-Bundle-Passphrase") or "").strip()
+    if not pp:
+        h._json(400, {"error": "This bundle is encrypted — a passphrase is required.",
+                      "need_passphrase": True})
+        return None, False
+    try:
+        return decrypt_container(raw_bytes, pp), True
+    except ValueError as e:
+        # Deliberately crafted, secret-free message (wrong passphrase / corrupt).
+        h._json(400, {"error": str(e), "need_passphrase": True}); return None, False
+    except RuntimeError as e:
+        # KDF unavailable on this platform — actionable ops message, no secrets.
+        h._json(400, {"error": str(e)}); return None, False
+    except Exception as e:
+        log.error(f"DB import: bundle decrypt error — {e}")
+        h._json(400, {"error": "Bundle decryption failed — check server logs"}); return None, False
 
 
 # ── Route handler ─────────────────────────────────────────────────────────────
@@ -409,84 +468,32 @@ def handle(h, method, path, body):
         _send_db(h, data, fname)
         return True
 
-    # ── GET /api/db/export/bundle — ZIP with both DBs ────────────
+    # ── GET /api/db/export/bundle — full restorable bundle ───────
+    # Both DBs + secrets (Fernet key, TLS certs, pingwatch.conf) + manifest.
+    # Encrypted to a .pwbk container when a passphrase is available; otherwise
+    # a plain .zip whose secrets are in the clear (logged loudly).
     if _RE_DB_EXPORT_BUNDLE.match(path) and method == "GET":
         user, _ = h._require("admin")
         if not user:
             return True
         db_log_audit(user, h.client_address[0], "db_export_bundle")
-        ts = time.strftime("%Y%m%d-%H%M%S")
-
-        if is_pg():
-            try:
-                main_data = _pg_dump_bytes('main')
-                logs_data = _pg_dump_bytes('logs')
-            except Exception as e:
-                log.error(f"DB export bundle (PG): {e}")
-                h._json(500, {"error": "Database export failed — check server logs"}); return True
-            manifest = {
-                "version":     1,
-                "app_version": app_state.APP_VERSION,
-                "backend":     "postgresql",
-                "created_at":  time.strftime("%Y-%m-%dT%H:%M:%S"),
-                "has_main":    True,
-                "has_logs":    bool(logs_data),
-            }
-            buf = io.BytesIO()
-            with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
-                zf.writestr("pingwatch_main.sql",  main_data)
-                if logs_data:
-                    zf.writestr("pingwatch_logs.sql", logs_data)
-                zf.writestr("manifest.json", _json_mod.dumps(manifest, indent=2).encode())
-        else:
-            main_data = _sqlite_backup_bytes(DB_PATH)
-            logs_data = _sqlite_backup_bytes(LOGS_DB_PATH) if os.path.exists(LOGS_DB_PATH) else b""
-
-            # Determine schema versions
-            try:
-                _mc = sqlite3.connect(DB_PATH)
-                sv_main = (_mc.execute(
-                    "SELECT version FROM schema_version ORDER BY version DESC LIMIT 1"
-                ).fetchone() or (1,))[0]
-                _mc.close()
-            except Exception:
-                sv_main = 1
-            sv_logs = 1
-            if logs_data:
-                try:
-                    _lc = sqlite3.connect(LOGS_DB_PATH)
-                    sv_logs = (_lc.execute(
-                        "SELECT version FROM logs_schema_version ORDER BY version DESC LIMIT 1"
-                    ).fetchone() or (1,))[0]
-                    _lc.close()
-                except Exception:
-                    sv_logs = 1
-
-            manifest = {
-                "version":     1,
-                "app_version": app_state.APP_VERSION,
-                "backend":     "sqlite",
-                "created_at":  time.strftime("%Y-%m-%dT%H:%M:%S"),
-                "schema_main": sv_main,
-                "schema_logs": sv_logs,
-                "has_main":    True,
-                "has_logs":    bool(logs_data),
-            }
-            buf = io.BytesIO()
-            with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
-                zf.writestr("pingwatch_main.db",  main_data)
-                if logs_data:
-                    zf.writestr("pingwatch_logs.db", logs_data)
-                zf.writestr("manifest.json", _json_mod.dumps(manifest, indent=2).encode())
-
-        zip_bytes = buf.getvalue()
-        fname = f"pingwatch-bundle-v{app_state.APP_VERSION}-{ts}.zip"
+        try:
+            pp = _resolve_export_passphrase(h)
+            data, fname, encrypted = build_bundle(pp or None)
+        except Exception as e:
+            log.error(f"DB export bundle: {e}")
+            h._json(500, {"error": "Database export failed — check server logs"}); return True
+        if not encrypted:
+            log.warning("DB export bundle: created WITHOUT a passphrase — it carries "
+                        "the encryption key, TLS certs and pingwatch.conf in cleartext. "
+                        "Store it securely or set a backup passphrase.")
         h.send_response(200)
-        h.send_header("Content-Type", "application/zip")
+        h.send_header("Content-Type", "application/octet-stream" if encrypted else "application/zip")
         h.send_header("Content-Disposition", f'attachment; filename="{fname}"')
-        h.send_header("Content-Length", str(len(zip_bytes)))
+        h.send_header("X-Bundle-Encrypted", "1" if encrypted else "0")
+        h.send_header("Content-Length", str(len(data)))
         h.end_headers()
-        h.wfile.write(zip_bytes)
+        h.wfile.write(data)
         return True
 
     # ── POST /api/db/import (PostgreSQL) ─────────────────────────
@@ -515,10 +522,13 @@ def handle(h, method, path, body):
                 raw_bytes = base64.b64decode(raw_b64)
             except Exception:
                 h._json(400, {"error": "Invalid base64 data"}); return True
-        if raw_bytes[:4] != b"PK\x03\x04":
-            h._json(400, {"error": "PostgreSQL import requires a bundle ZIP exported from PingWatch"}); return True
+        inner, _ok = _decrypt_if_needed(h, raw_bytes)
+        if not _ok:
+            return True
+        if inner[:4] != b"PK\x03\x04":
+            h._json(400, {"error": "PostgreSQL import requires a bundle (.zip or .pwbk) exported from PingWatch"}); return True
         db_log_audit(user, h.client_address[0], "db_import_pg")
-        return _handle_pg_bundle_import(h, raw_bytes)
+        return _handle_pg_bundle_import(h, inner)
 
     if _RE_DB_IMPORT.match(path) and method == "POST":
         user, _ = h._require("admin")
@@ -556,6 +566,12 @@ def handle(h, method, path, body):
             except Exception:
                 log.warning("DB import: rejected — base64 decode failed")
                 h._json(400, {"error": "Invalid base64 data"}); return True
+
+        # ── Encrypted bundle (.pwbk) — decrypt to the inner ZIP ───
+        inner, _ok = _decrypt_if_needed(h, raw_bytes)
+        if not _ok:
+            return True
+        raw_bytes = inner
 
         # ── ZIP bundle detection ──────────────────────────────────
         if raw_bytes[:4] == b"PK\x03\x04":
@@ -809,6 +825,15 @@ def _handle_bundle_import(h, raw_bytes: bytes):
 
     pending_main = (tmp_main, str(DB_PATH) + ".pending_import") if tmp_main else None
     pending_logs = (tmp_logs, str(LOGS_DB_PATH) + ".pending_logs_import") if tmp_logs else None
+
+    # Restore bundled secrets (Fernet key / TLS certs / pingwatch.conf) onto a
+    # fresh box — conservative: never clobbers an existing key or conf.
+    try:
+        sec_actions = restore_secrets_from_zip(raw_bytes)
+        if sec_actions:
+            log.info("DB import: secrets — " + "; ".join(sec_actions))
+    except Exception as e:
+        log.warning(f"DB import: secret restore failed (non-fatal) — {e}")
 
     log.info(f"DB import: bundle validated — main={bool(tmp_main)}, logs={bool(tmp_logs)}")
     h._json(200, {"ok": True, "msg": "Bundle imported — server is restarting…"})

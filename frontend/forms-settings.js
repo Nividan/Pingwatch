@@ -1372,7 +1372,7 @@ function _buildSettingsTab_database(sr) {
       <div style="border:1px solid var(--border);border-radius:8px;padding:14px 16px;margin-bottom:12px">
         <div style="font-size:12px;font-weight:600;color:var(--text2);margin-bottom:10px">Export / Import</div>
         <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
-          <button class="btn-s" style="font-size:12px;padding:6px 14px" onclick="exportBundle()">&#8681; Export Full Bundle (ZIP)</button>
+          <button class="btn-s" style="font-size:12px;padding:6px 14px" onclick="exportBundle()">&#8681; Export Full Bundle</button>
           <button class="btn-s" style="font-size:12px;padding:6px 14px" onclick="importDb()">&#8679; Import (Main DB / Logs DB / Bundle)</button>
           <span id="db-import-status" style="font-size:12px;color:var(--text3)"></span>
         </div>
@@ -1390,7 +1390,7 @@ function _buildSettingsTab_database(sr) {
             <div style="font-size:11px;font-weight:500;color:var(--text2);text-transform:uppercase;letter-spacing:.5px;margin-bottom:3px">Enable Scheduled Backup</div>
             <div class="fh" style="margin:0">Automatically backup the database on a schedule — saved to backup/database/</div>
           </div>
-          <label class="toggle" style="flex-shrink:0"><input type="checkbox" id="st-dbk-enabled" ${sr.db_backup_enabled?'checked':''}><span class="tsl"></span></label>
+          <label class="toggle" style="flex-shrink:0"><input type="checkbox" id="st-dbk-enabled" ${sr.db_backup_enabled?'checked':''} onchange="_dbkEncWarn()"><span class="tsl"></span></label>
         </div>
         <div class="fr" style="margin-top:14px">
           <label class="fl">Frequency</label>
@@ -1407,6 +1407,19 @@ function _buildSettingsTab_database(sr) {
           <label class="fl">Backup Time</label>
           <input type="time" id="st-dbk-time" value="${sr.db_backup_time||'03:00'}" style="max-width:140px"/>
           <div class="fh">Server local time (24h)</div>
+        </div>
+        <div class="fr" style="margin-top:14px">
+          <label class="fl">Encryption Passphrase</label>
+          <input type="password" id="st-dbk-passphrase" value="" oninput="_dbkEncWarn()" autocomplete="new-password" style="flex:1"
+                 placeholder="${sr.db_backup_passphrase_set?'•••••••• (leave blank to keep)':'set a passphrase to encrypt bundles'}"/>
+        </div>
+        <div class="fr" style="margin-top:6px">
+          <div class="fh" style="margin:0;flex:1">Encrypts each bundle (Argon2id/Scrypt + AES-256-GCM). Required for a full restore on a new server — escrow this passphrase in your vault; it is never stored in the bundle.</div>
+          ${sr.db_backup_passphrase_set?`<label style="font-size:12px;color:var(--text3);display:flex;align-items:center;gap:6px;cursor:pointer;flex-shrink:0">
+            <input type="checkbox" id="st-dbk-passphrase-clear" onchange="_dbkEncWarn()"> Remove</label>`:''}
+        </div>
+        <div id="st-dbk-enc-warn" data-stored="${sr.db_backup_passphrase_set?'1':'0'}" style="display:none;margin-top:10px;padding:9px 12px;border-radius:6px;background:var(--warn-bg);border:1px solid var(--warn-border);color:var(--warn);font-size:12px">
+          &#9888; Backups will be written <b>unencrypted</b>. A bundle contains the encryption key, TLS certificates and pingwatch.conf in cleartext &mdash; anyone with the file can read every stored credential. Set a passphrase (and escrow it) to protect it.
         </div>
         <div style="margin-top:18px;padding-top:16px;border-top:1px solid var(--border)">
           <div class="fr" style="display:flex;align-items:center;justify-content:space-between;gap:12px">
@@ -3162,6 +3175,20 @@ function _dbkFreqChange(){
   if(daysRow) daysRow.style.display = freq === 'weekly' ? '' : 'none';
 }
 
+// Show the cleartext-bundle warning when scheduled backups are on but no
+// passphrase will be in effect (none stored / cleared / none typed).
+function _dbkEncWarn(){
+  const warn = document.getElementById('st-dbk-enc-warn');
+  if(!warn) return;
+  const enabled = !!document.getElementById('st-dbk-enabled')?.checked;
+  const pp      = document.getElementById('st-dbk-passphrase');
+  const cleared = !!document.getElementById('st-dbk-passphrase-clear')?.checked;
+  const stored  = warn.dataset.stored === '1';
+  const typed   = !!(pp && pp.value.trim().length);
+  const willEncrypt = typed || (stored && !cleared);
+  warn.style.display = (enabled && !willEncrypt) ? 'block' : 'none';
+}
+
 function _toggleDbBackupRemote(){
   const body = document.getElementById('dbk-remote-collapse');
   const chevron = document.getElementById('dbk-remote-chevron');
@@ -3324,6 +3351,7 @@ async function _loadDbBackupSettings(){
     if(cb) cb.checked = days.includes(String(i));
   }
   _dbkFreqChange();
+  _dbkEncWarn();
   const lastInfo = document.getElementById('dbk-last-info');
   if(lastInfo) lastInfo.textContent = r.db_backup_last_ts
     ? `Last backup: ${r.db_backup_last_ts} \u2014 ${r.db_backup_last_result}` : '';
@@ -3401,12 +3429,18 @@ async function saveDbBackupSettings(){
     if(rUser)  body.db_backup_remote_user    = (rUser.value || '').trim();
     if(rPw && rPw.value) body.db_backup_remote_password = rPw.value;
     if(rKey && rKey.value && rKey.value.trim()) body.db_backup_remote_key = rKey.value;
+    // Bundle encryption passphrase
+    const pp    = document.getElementById('st-dbk-passphrase');
+    const ppClr = document.getElementById('st-dbk-passphrase-clear');
+    if(pp && pp.value) body.db_backup_passphrase = pp.value;
+    if(ppClr && ppClr.checked) body.db_backup_passphrase_clear = 1;
 
     const r = await api('PATCH', '/api/settings', body);
     if(!r?.ok){ toast('Failed to save DB backup settings','err'); return; }
     // Clear plaintext secret fields post-save so they don't linger in the DOM
     if(rPw)  rPw.value  = '';
     if(rKey) rKey.value = '';
+    if(pp)   pp.value   = '';
     toast('Database backup settings saved','ok');
   } catch(e) {
     toast('Failed to save DB backup settings','err');

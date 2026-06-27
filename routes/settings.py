@@ -226,6 +226,8 @@ def handle(h, method, path, body):
             "db_backup_keep":        int(_settings.get("db_backup_keep",    7) or 7),
             "db_backup_last_ts":     _settings.get("db_backup_last_ts",     ""),
             "db_backup_last_result": _settings.get("db_backup_last_result", ""),
+            # Bundle encryption passphrase — never returned; only a set/"" sentinel
+            "db_backup_passphrase_set": bool(_settings.get("db_backup_passphrase_enc", "")),
             # Group I2 — remote DB backup upload (SFTP / SMB)
             "db_backup_remote_enabled":     int(_settings.get("db_backup_remote_enabled", 0) or 0),
             "db_backup_remote_type":        _settings.get("db_backup_remote_type", "sftp"),
@@ -313,7 +315,8 @@ def handle(h, method, path, body):
     if path == "/api/settings" and method == "PATCH":
         user, _ = h._require("admin")
         if not user: return True
-        _MASKED_KEYS = {'smtp_pass'}
+        _MASKED_KEYS = {'smtp_pass', 'db_backup_passphrase',
+                        'db_backup_remote_password', 'db_backup_remote_key'}
         # Opaque/binary blobs (e.g. base64 logo data URI) — summarize by size in
         # the audit detail instead of dumping the value. A ~2 MB base64 logo would
         # otherwise flood the audit log file and DB on every settings save.
@@ -511,6 +514,16 @@ def handle(h, method, path, body):
             _k_enc = _enc_remote_key(str(body["db_backup_remote_key"]))
             _settings.load({"db_backup_remote_key_enc": _k_enc})
             _db_enqueue(lambda _k=_k_enc: db_save_settings({"db_backup_remote_key_enc": _k}))
+        # Bundle encryption passphrase — Fernet-encrypted at rest. Non-empty value
+        # = set/replace; explicit clear flag = remove (bundles become cleartext).
+        if body.get("db_backup_passphrase"):
+            from db.backups import encrypt_pw as _enc_pp
+            _pp_enc = _enc_pp(str(body["db_backup_passphrase"]))
+            _settings.load({"db_backup_passphrase_enc": _pp_enc})
+            _db_enqueue(lambda _p=_pp_enc: db_save_settings({"db_backup_passphrase_enc": _p}))
+        elif body.get("db_backup_passphrase_clear"):
+            _settings.load({"db_backup_passphrase_enc": ""})
+            _db_enqueue(lambda: db_save_settings({"db_backup_passphrase_enc": ""}))
         # Server-side logo size guard (2 MB base64 ≈ 2.8 MB string)
         if "email_logo_data" in body:
             _logo_val = str(body["email_logo_data"]).strip()
