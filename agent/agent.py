@@ -1038,6 +1038,9 @@ class TaskRunner:
         if ttype == "device_scan":
             self._run_device_scan(tid, payload)
             return
+        if ttype == "snmp_interfaces":
+            self._run_snmp_interfaces(tid, payload)
+            return
         cidr = str(payload.get("cidr") or "")
         mode = str(payload.get("mode") or "ping")
         if ttype not in ("ipam_scan", "discovery_scan") or not cidr:
@@ -1188,6 +1191,52 @@ class TaskRunner:
         if self._upload_chunk(tid, rows, done=True):
             log.info("task %d complete: %d services on %s",
                      tid, len(rows), host)
+            self._set(tid, "done")
+        else:
+            self._set(tid, "error", error="result upload failed")
+
+    def _run_snmp_interfaces(self, tid, payload):
+        """SNMP interface discovery (Add/Edit Sensor → Discover Interfaces on a
+        probe-bound device). Walks ifTable/ifXTable locally — the same
+        probes.snmpwalk_interfaces central runs — so discovery egresses from
+        the branch. The server long-polls for this result, so report promptly.
+        Errors are uploaded (not just set locally) so the waiting handler gets
+        an immediate reason instead of a timeout."""
+        host = str(payload.get("host") or "")
+        comm = str(payload.get("community") or "public")
+        try:
+            port = int(payload.get("port") or 161)
+        except (TypeError, ValueError):
+            port = 161
+        ver = str(payload.get("version") or "2c")
+        v3 = payload.get("v3_creds")
+        if not isinstance(v3, dict):
+            v3 = None
+        if not host:
+            self._upload_chunk(tid, [], done=True, error="bad snmp_interfaces payload")
+            self._set(tid, "error", error="bad snmp_interfaces payload")
+            return
+        log.info("task %d: snmp_interfaces %s (v%s)", tid, host, ver)
+        self._set(tid, "running", progress={"phase": "snmpwalk"})
+        try:
+            ifaces = probes.snmpwalk_interfaces(host, comm, port, timeout=10,
+                                                version=ver, v3_creds=v3)
+        except Exception as e:
+            msg = f"snmpwalk failed: {type(e).__name__}"
+            self._upload_chunk(tid, [], done=True, error=msg)
+            self._set(tid, "error", error=msg)
+            return
+        if ifaces is None:
+            msg = "snmpwalk not found on probe — install net-snmp"
+            self._upload_chunk(tid, [], done=True, error=msg)
+            self._set(tid, "error", error=msg)
+            return
+        if self._cancelled(tid):
+            self._set(tid, "error", error="cancelled")
+            return
+        if self._upload_chunk(tid, ifaces, done=True):
+            log.info("task %d complete: %d interfaces on %s",
+                     tid, len(ifaces), host)
             self._set(tid, "done")
         else:
             self._set(tid, "error", error="result upload failed")

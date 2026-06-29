@@ -66,6 +66,12 @@ _DEVSCAN_LOCK = threading.Lock()
 # central's own scan can produce (routes/devices.py _SCAN_TARGETS).
 _DEVSCAN_STYPES = frozenset({"ping", "tcp", "http", "tls", "banner"})
 
+# Task types whose result is awaited synchronously by an HTTP handler thread
+# through _DEVSCAN_WAITERS (vs. the async _SCANS registry used by subnet
+# discovery). Both are one-shot "run on the probe, return to the browser"
+# operations that central can't perform for branch-local devices.
+_SYNC_WAITER_TASKS = frozenset({"device_scan", "snmp_interfaces"})
+
 
 def _devscan_complete(task_id: int, rows, error: str = ""):
     """Hand a finished device-scan result to whoever is waiting on it."""
@@ -140,6 +146,74 @@ def run_remote_device_scan(probe: dict, host: str, targets: list,
                              "port": port, "ms": ms,
                              "detail": str(r.get("detail") or "")[:512]})
         return services, ""
+    finally:
+        with _DEVSCAN_LOCK:
+            _DEVSCAN_WAITERS.pop(tid, None)
+
+
+def run_remote_snmp_interfaces(probe: dict, host: str, community: str, port: int,
+                               version: str, v3_creds, created_by: str,
+                               timeout: float = 25.0) -> tuple:
+    """Run an SNMP interface-discovery walk on a remote probe and wait for it.
+
+    Mirrors run_remote_device_scan: queues an snmp_interfaces agent task (picked
+    up at the next ~10s checkin), blocks the calling handler thread until the
+    agent uploads the interface list, and returns (interfaces, ""). On failure
+    returns (None, reason). The walk runs ON the probe so discovery traffic
+    egresses from the branch — central usually can't even reach the device.
+
+    v3_creds (resolved + decrypted by the caller) rides in the payload so the
+    agent walks with the same credentials a local walk would use.
+    """
+    from db.probes import db_create_task
+    pid = probe["probe_id"]
+    payload = {"host": str(host)[:253],
+               "community": str(community or "public")[:128],
+               "port": int(port),
+               "version": str(version),
+               "v3_creds": v3_creds if isinstance(v3_creds, dict) else None}
+    tid = db_create_task(pid, "snmp_interfaces", json.dumps(payload), created_by)
+    if not tid:
+        return None, "could not queue the discovery task"
+    evt = threading.Event()
+    with _DEVSCAN_LOCK:
+        _DEVSCAN_WAITERS[tid] = {"evt": evt, "rows": [], "error": ""}
+    try:
+        if not evt.wait(timeout=timeout):
+            db_set_task_state(tid, "cancelled")
+            log_probes.warning(
+                f"snmp_interfaces task {tid} on {probe.get('name')} ({pid}) timed "
+                f"out after {timeout:.0f}s (host={host})")
+            return None, (f"Probe '{probe.get('name')}' did not return interface "
+                          f"discovery within {timeout:.0f}s — it may be busy, "
+                          "reconnecting, or running an older agent build that "
+                          "doesn't support remote SNMP discovery.")
+        with _DEVSCAN_LOCK:
+            w = _DEVSCAN_WAITERS.get(tid) or {}
+        if w.get("error"):
+            return None, str(w["error"])
+        # Sanitize to the same shape monitoring.probes.snmpwalk_interfaces
+        # produces locally — the agent is trusted-ish but keep bounds tight.
+        ifaces = []
+        for r in w.get("rows", [])[:4096]:
+            if not isinstance(r, dict):
+                continue
+            try:
+                idx = int(r.get("index"))
+            except (TypeError, ValueError):
+                continue
+            try:
+                speed_raw = int(r.get("speed_raw") or 0)
+            except (TypeError, ValueError):
+                speed_raw = 0
+            ifaces.append({"index": idx,
+                           "name":   str(r.get("name")   or "")[:128],
+                           "descr":  str(r.get("descr")  or "")[:256],
+                           "alias":  str(r.get("alias")  or "")[:256],
+                           "status": str(r.get("status") or "")[:32],
+                           "speed":  str(r.get("speed")  or "")[:32],
+                           "speed_raw": speed_raw})
+        return ifaces, ""
     finally:
         with _DEVSCAN_LOCK:
             _DEVSCAN_WAITERS.pop(tid, None)
@@ -546,13 +620,15 @@ def handle(h, method, path, body) -> bool:
             return True
         done  = bool(body.get("done"))
         error = str(body.get("error") or "")[:512]
-        # Device scans bypass the _SCANS registry — their result goes
-        # straight to the handler thread waiting in run_remote_device_scan.
-        if task.get("task_type") == "device_scan":
+        # Sync waiter tasks (device_scan, snmp_interfaces) bypass the _SCANS
+        # registry — their result goes straight to the handler thread blocked
+        # in run_remote_device_scan / run_remote_snmp_interfaces. The helper
+        # re-bounds the rows when it drains them, so accept a full chunk here.
+        if task.get("task_type") in _SYNC_WAITER_TASKS:
             with _DEVSCAN_LOCK:
                 w = _DEVSCAN_WAITERS.get(tid)
                 if w and rows:
-                    w["rows"].extend(rows[:64])
+                    w["rows"].extend(rows[:_MAX_TASK_ROWS_PER_CHUNK])
             if done or error:
                 db_set_task_state(tid, "error" if error else "done",
                                   error=error)

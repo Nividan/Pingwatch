@@ -373,6 +373,39 @@ def handle(h, method, path, body):
                 "priv_pass":  _ppw if _ppw else (decrypt_pw(getattr(_dev, "snmp_v3_priv_pass_default", "")) if _dev else ""),
                 "context":    (body.get("snmp_v3_context") or "").strip() or (getattr(_dev, "snmp_v3_context_default", "") if _dev else ""),
             }
+        # Distributed probes: if this device is measured from a remote probe,
+        # the SNMP walk must run THERE — central usually can't reach a branch
+        # device, and discovery traffic should egress from the probe, not
+        # central. Never silently fall back to a local walk (that's the bug
+        # this guards against); surface a clear error if the probe is down.
+        _did = (body.get("did") or "").strip()
+        if _did:
+            from core.app_state import STATE as _STATE
+            _dev = _STATE.devices.get(_did) if _STATE else None
+            if _dev:
+                from core.probe_assign import effective_probe
+                _pid = effective_probe(_dev)
+                if _pid:
+                    from db.probes import db_get_probe
+                    _probe = db_get_probe(_pid)
+                    _pname = (_probe or {}).get("name") or _pid
+                    if not _probe or _probe.get("status") != "enrolled":
+                        h._json(409, {"error": f"Probe '{_pname}' is not enrolled — "
+                                      "this device can only be discovered from there"})
+                        return True
+                    if time.time() - float(_probe.get("last_seen") or 0) > 35:
+                        h._json(503, {"error": f"Probe '{_pname}' is offline — "
+                                      "this device can only be discovered from there"})
+                        return True
+                    from routes.agent import run_remote_snmp_interfaces
+                    _ifaces, _err = run_remote_snmp_interfaces(
+                        _probe, _host, _comm, _port, _ver, _v3_creds, user)
+                    if _ifaces is None:
+                        h._json(502, {"error": _err or "remote discovery failed"})
+                        return True
+                    h._json(200, {"interfaces": _ifaces, "via_probe": _probe["name"]})
+                    return True
+
         _ifaces = snmpwalk_interfaces(_host, _comm, _port, timeout=10, version=_ver, v3_creds=_v3_creds)
         if _ifaces is None:
             h._json(503, {"error": "snmpwalk not found — install net-snmp"}); return True

@@ -1150,7 +1150,9 @@ async function discoverInterfaces(){
   try{
     r=await api('POST','/api/snmp/interfaces', discoveryBody);
   }catch(e){
-    if(statusEl){ statusEl.style.color='var(--down)'; statusEl.textContent='Request failed'; }
+    // api() throws on non-200 with the server's error text (e.g. a probe-down
+    // message) — surface it instead of a generic "Request failed".
+    if(statusEl){ statusEl.style.color='var(--down)'; statusEl.textContent=e.message||'Request failed'; }
     return;
   }finally{
     if(btn){ btn.disabled=false; btn.textContent='⊕ Discover Interfaces'; }
@@ -1166,7 +1168,7 @@ async function discoverInterfaces(){
     if(statusEl){ statusEl.style.color='var(--text3)'; statusEl.textContent='No interfaces returned.'; }
     return;
   }
-  if(statusEl){ statusEl.style.color='var(--text3)'; statusEl.textContent=`${ifaces.length} interface${ifaces.length!==1?'s':''} discovered`; }
+  if(statusEl){ statusEl.style.color='var(--text3)'; statusEl.textContent=`${ifaces.length} interface${ifaces.length!==1?'s':''} discovered`+(r.via_probe?` · via probe ${r.via_probe}`:''); }
 
   const METRICS=_IFACE_METRICS;
   window._ifaceMetrics=METRICS;
