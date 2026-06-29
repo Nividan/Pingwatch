@@ -49,6 +49,7 @@ from db import (
     db_mark_allocations_stale,
     apply_subnet_scan_results,
     db_search_allocations,
+    db_search_subnets,
     db_get_device_roles,
 )
 from db.ipam import ipam_sync_subnet_add
@@ -344,7 +345,12 @@ def handle(h, method, path, body):
             h._json(200, {'results': []})
             return True
         results = db_search_allocations(q, limit=50)
-        h._json(200, {'results': results})
+        # Also match subnets directly — allocation rows only exist for IPs that
+        # are used/discovered, so empty subnets (0% utilization) would never
+        # surface without this. Lets the palette find a just-imported subnet by
+        # CIDR, name, site, or VLAN.
+        subnets = db_search_subnets(q, limit=20)
+        h._json(200, {'results': results, 'subnets': subnets})
         return True
 
     # ── POST /api/ipam/subnets ────────────────────────────────────

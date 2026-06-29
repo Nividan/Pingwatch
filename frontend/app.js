@@ -746,13 +746,23 @@ function _cmdPaletteSearch(){
         subnet_cidr: row.subnet_cidr,
         subnet_name: row.subnet_name || '',
       }));
+      // Subnet hits — allocation rows only exist for used IPs, so an empty
+      // (0%-utilization) subnet only ever shows up via this list.
+      const subnets = (j.subnets || []).slice(0, 20).map(row => ({
+        kind: 'subnet',
+        subnet_id:   row.subnet_id,
+        subnet_cidr: row.subnet_cidr,
+        subnet_name: row.subnet_name || '',
+        site: row.site || '',
+        vlan: row.vlan || 0,
+      }));
       if (myToken !== _cmdIpFetchToken) return;
       // Keep devices on top — they're the most common target and shouldn't
-      // shift when the async IP fetch lands. Order: devices, IPs, sensors.
-      const sync = _cmdResults.filter(r => r.kind !== 'ip');
+      // shift when the async fetch lands. Order: devices, subnets, IPs, sensors.
+      const sync = _cmdResults.filter(r => r.kind !== 'ip' && r.kind !== 'subnet');
       const devs = sync.filter(r => r.kind === 'device');
       const sens = sync.filter(r => r.kind === 'sensor');
-      _cmdResults = devs.concat(ips).concat(sens).slice(0, 60);
+      _cmdResults = devs.concat(subnets).concat(ips).concat(sens).slice(0, 60);
       _cmdSelIdx = 0;
       _cmdPaletteRender();
     } catch { /* network blip — keep the sync results we already rendered */ }
@@ -767,6 +777,7 @@ function _cmdPaletteRender(){
     return;
   }
   const devs = _cmdResults.filter(r => r.kind==='device');
+  const subs = _cmdResults.filter(r => r.kind==='subnet');
   const ips  = _cmdResults.filter(r => r.kind==='ip');
   const sens = _cmdResults.filter(r => r.kind==='sensor');
   let html = '';
@@ -778,6 +789,23 @@ function _cmdPaletteRender(){
         <span class="pw-cmd-dot ${r.status}"></span>
         <span class="pw-cmd-name">${esc(r.name)}</span>
         <span class="pw-cmd-meta">${esc(r.host)}${r.vendor?' · '+esc(r.vendor):''}</span>
+      </div>`;
+    });
+  }
+  if (subs.length) {
+    html += '<div class="pw-cmd-section">Subnets</div>';
+    subs.forEach(r => {
+      const idx = _cmdResults.indexOf(r);
+      // Right-side meta: site + optional VLAN so the user can tell networks
+      // that share a name apart.
+      const metaBits = [];
+      if (r.site) metaBits.push(r.site);
+      if (r.vlan) metaBits.push('VLAN ' + r.vlan);
+      const meta = metaBits.join(' · ');
+      html += `<div class="pw-cmd-row${idx===_cmdSelIdx?' sel':''}" data-idx="${idx}" onclick="_cmdPickIdx(${idx})">
+        <span class="pw-cmd-dot unknown"></span>
+        <span class="pw-cmd-name"><span class="pw-cmd-ip">${esc(r.subnet_cidr)}</span> ${esc(r.subnet_name || '—')}</span>
+        <span class="pw-cmd-meta">${esc(meta)}</span>
       </div>`;
     });
   }
@@ -842,6 +870,17 @@ function _cmdPickIdx(idx){
   const r = _cmdResults[idx];
   if (!r) return;
   _closeCmdPalette();
+  if (r.kind === 'subnet') {
+    // Navigate to IPAM → select the subnet. No IP focus — the subnet may be
+    // empty (that's the whole reason it only surfaced via the subnet search).
+    if (typeof switchMainTab === 'function') switchMainTab('ipam');
+    setTimeout(() => {
+      if (typeof _ipamOnSubnetChange === 'function' && r.subnet_id) {
+        _ipamOnSubnetChange(r.subnet_id);
+      }
+    }, 50);
+    return;
+  }
   if (r.kind === 'ip') {
     // Navigate to IPAM → select the right subnet → focus the matching row.
     // _ipamOnSubnetChange is async (fetches allocations); the focus has to

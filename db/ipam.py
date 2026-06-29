@@ -697,6 +697,86 @@ def db_search_allocations(q: str, limit: int = 50) -> list:
         con.close()
 
 
+def db_search_subnets(q: str, limit: int = 20) -> list:
+    """Cross-subnet *subnet* search for the Ctrl+K palette.
+
+    db_search_allocations only matches rows in ip_allocations, so a freshly
+    created subnet with no allocated/used IPs (0% utilization) is invisible to
+    the palette — its CIDR/name/VLAN live solely in ipam_subnets. This matches
+    the query against those subnet-level fields so empty subnets are findable.
+
+    Matches on cidr (prefix), name (substring), site (substring), and the
+    numeric VLAN id (exact, when the query is all digits). `limit` is capped
+    at 50 to keep the response cheap.
+    """
+    q = (q or "").strip()
+    if not q:
+        return []
+    try:
+        limit = max(1, min(50, int(limit)))
+    except (TypeError, ValueError):
+        limit = 20
+    like      = f"%{q.lower()}%"
+    cidr_like = f"{q.lower()}%"
+    # VLAN matches only when the whole query is numeric, so "201" finds VLAN 201
+    # without "20" accidentally matching VLAN 2000, etc.
+    vlan_id   = int(q) if q.isdigit() else -1
+
+    if is_pg():
+        from db.pg_pool import pg_cursor
+        try:
+            with pg_cursor('main') as cur:
+                cur.execute(
+                    """SELECT id, cidr, name,
+                              COALESCE(site,'') AS site,
+                              COALESCE(vlan,0)  AS vlan
+                       FROM ipam_subnets
+                       WHERE LOWER(cidr)  LIKE %s
+                          OR LOWER(name)  LIKE %s
+                          OR LOWER(site)  LIKE %s
+                          OR vlan = %s
+                       ORDER BY cidr
+                       LIMIT %s""",
+                    (cidr_like, like, like, vlan_id, limit)
+                )
+                return [
+                    {"subnet_id": r["id"], "subnet_cidr": r["cidr"],
+                     "subnet_name": r["name"] or "",
+                     "site": r["site"] or "", "vlan": int(r["vlan"] or 0)}
+                    for r in cur.fetchall()
+                ]
+        except Exception as e:
+            log.error(f"IPAM subnet search error (q={q!r}): {e}")
+            return []
+
+    con = sqlite3.connect(DB_PATH, timeout=10)
+    try:
+        rows = con.execute(
+            """SELECT id, cidr, name,
+                      COALESCE(site,'') AS site,
+                      COALESCE(vlan,0)  AS vlan
+               FROM ipam_subnets
+               WHERE LOWER(cidr)  LIKE ?
+                  OR LOWER(name)  LIKE ?
+                  OR LOWER(site)  LIKE ?
+                  OR vlan = ?
+               ORDER BY cidr
+               LIMIT ?""",
+            (cidr_like, like, like, vlan_id, limit)
+        ).fetchall()
+        return [
+            {"subnet_id": r[0], "subnet_cidr": r[1],
+             "subnet_name": r[2] or "",
+             "site": r[3] or "", "vlan": int(r[4] or 0)}
+            for r in rows
+        ]
+    except Exception as e:
+        log.error(f"IPAM subnet search error (q={q!r}): {e}")
+        return []
+    finally:
+        con.close()
+
+
 def apply_subnet_scan_results(subnet_id: int, results: list, user: str) -> dict:
     """Write the alive IPs from a finished discovery scan into ip_allocations
     and flip previously-discovered IPs that didn't respond this round to
