@@ -1181,6 +1181,10 @@ async function discoverInterfaces(){
   html+='<div style="padding:6px 8px;background:var(--bg2);border-bottom:1px solid var(--border);display:flex;gap:8px;align-items:center">';
   html+='<span style="font-size:11px;color:var(--text3);white-space:nowrap">Set for checked:</span>';
   html+=`<div class="vm-met-wrap" style="flex-shrink:0"><button class="vm-met-btn" type="button" onclick="toggleIfaceMetPicker(this)">— bulk metrics —</button><div class="vm-met-drop" style="display:none">${metricCheckboxes}</div></div>`;
+  // Filter box — devices can have hundreds of interfaces; let the user narrow
+  // by name / description / index / status. Pushed to the right of the bar.
+  html+=`<input type="text" id="as-iface-filter" placeholder="Filter interfaces…" autocomplete="off" oninput="filterIfaceRows(this.value)" style="margin-left:auto;width:180px;font-size:11px;padding:4px 8px;background:var(--bg);border:1px solid var(--border);border-radius:4px;color:var(--text)"/>`;
+  html+='<span id="as-iface-filter-count" style="font-size:11px;color:var(--text3);white-space:nowrap"></span>';
   html+='</div>';
   html+='<div style="overflow-x:auto;max-height:220px;overflow-y:auto">';
   html+='<table style="width:100%;border-collapse:collapse;font-size:11px">';
@@ -1202,7 +1206,8 @@ async function discoverInterfaces(){
     const metCheckboxes=
       `<label class="vm-met-item vm-met-all-item" style="border-bottom:1px solid var(--border);margin-bottom:2px;padding-bottom:5px"><input type="checkbox" class="iface-row-met-all-cb" onchange="ifaceRowMetSelectAll(this)"> <strong>All metrics</strong></label>`+
       METRICS.map(m=>`<label class="vm-met-item"><input type="checkbox" value="${m.v}" onchange="ifaceRowMetChanged(this)"> ${esc(m.l)}</label>`).join('');
-    html+=`<tr style="border-top:1px solid var(--border);${rowBg}">`;
+    const searchHay=esc(`${iface.index} ${iface.name||''} ${iface.descr||''} ${iface.alias||''} ${iface.status||''}`.toLowerCase());
+    html+=`<tr class="as-iface-row" data-search="${searchHay}" style="border-top:1px solid var(--border);${rowBg}">`;
     html+=`<td style="padding:4px 8px;text-align:center"><input type="checkbox" class="as-iface-cb" data-idx="${iface.index}" data-name="${esc(iface.name||iface.descr)}" data-descr="${esc(iface.alias||iface.descr||'')}" onchange="updateIfaceSelCount()"/></td>`;
     html+=`<td style="padding:4px 8px;color:var(--text3)">${iface.index}</td>`;
     html+=`<td style="padding:4px 8px;font-weight:500;white-space:nowrap">${displayName}</td>`;
@@ -1222,8 +1227,33 @@ async function discoverInterfaces(){
   listEl.style.display='';
 }
 
+// Filter the discovered-interface table by name / description / index / status.
+// Hides non-matching rows (keeps their checked state so a selection survives
+// across searches). Empty query restores everything.
+function filterIfaceRows(q){
+  q=(q||'').trim().toLowerCase();
+  const rows=[...document.querySelectorAll('.as-iface-row')];
+  let shown=0;
+  rows.forEach(tr=>{
+    const hay=tr.getAttribute('data-search')||'';
+    const match=!q||hay.includes(q);
+    tr.style.display=match?'':'none';
+    if(match) shown++;
+  });
+  const cnt=document.getElementById('as-iface-filter-count');
+  if(cnt) cnt.textContent=q?`${shown} of ${rows.length}`:'';
+  // Refresh the header "select all" box + counts (now filter-aware).
+  updateIfaceSelCount();
+}
+
 function toggleAllIfaces(cb){
-  document.querySelectorAll('.as-iface-cb').forEach(c=>c.checked=cb.checked);
+  // Only toggle rows currently visible under the filter, so "select all" after
+  // a search doesn't silently check hidden interfaces.
+  document.querySelectorAll('.as-iface-row').forEach(tr=>{
+    if(tr.style.display==='none') return;
+    const c=tr.querySelector('.as-iface-cb');
+    if(c) c.checked=cb.checked;
+  });
   updateIfaceSelCount();
 }
 
@@ -1250,8 +1280,16 @@ function updateIfaceSelCount(){
   });
   const el=document.getElementById('as-iface-sel-count');
   if(el) el.textContent=n?`${n} of ${cbs.length} selected${totalSensors?` · ${totalSensors} sensor${totalSensors>1?'s':''}`:''}`:'0 selected';
+  // Header "select all" reflects only the rows visible under the active filter
+  // (it toggles visible rows), so a partial filter never shows a misleading
+  // fully-checked box. With no filter every row is visible — behavior unchanged.
   const all=document.getElementById('as-iface-all');
-  if(all){all.indeterminate=(n>0&&n<cbs.length);all.checked=(cbs.length>0&&n===cbs.length);}
+  if(all){
+    const visCbs=cbs.filter(c=>{const tr=c.closest('.as-iface-row');return !tr||tr.style.display!=='none';});
+    const visChecked=visCbs.filter(c=>c.checked).length;
+    all.indeterminate=(visChecked>0&&visChecked<visCbs.length);
+    all.checked=(visCbs.length>0&&visChecked===visCbs.length);
+  }
   const addBtn=document.getElementById('as-iface-add-btn');
   if(addBtn) addBtn.textContent=(n===1&&totalSensors===1)?'Apply to Form':'Add Selected as Sensors';
   // When exactly 1 interface+1 metric is selected, sync the OID and snmp_unit fields
