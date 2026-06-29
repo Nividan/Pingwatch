@@ -268,6 +268,17 @@ function _snrDragLeave(e){
   }
 }
 
+// If the device window's sensor filter is active, hide a freshly-rendered tile
+// that doesn't match — otherwise live SSE updates (which replace the tile) make
+// filtered-out sensors pop back into view. Mirrors filterDevSensors' matching.
+function _applyActiveSensorFilter(did,s,tile){
+  const f=document.getElementById(`dw-snr-filter-${did}`);
+  const q=f&&f.value.trim().toLowerCase();
+  if(!q) return;
+  const hay=`${s.name||''} ${s.stype||''} ${s.host||''} ${s.oid||''} ${s.snmp_oid||''}`.toLowerCase();
+  if(!hay.includes(q)) tile.style.display='none';
+}
+
 function renderTile(did,s){
   // ── VMware sensors go into a VM group row, not a full tile ──────
   if(s.stype==='vmware'&&s.vmware_vm_id){
@@ -296,6 +307,7 @@ function renderTile(did,s){
       _vmRowDragEl=null; _vmRowDragDid=null; _vmRowDragVmid=null;
     });
     if(old) old.replaceWith(t); else body.appendChild(t);
+    _applyActiveSensorFilter(did,s,t);
     _updateVmGrpStatus(did,s.vmware_vm_id);
     const cvs=t.querySelector('canvas.spk');
     if(cvs){ cvs.width=60; S.charts[key]={canvas:cvs,ctx:cvs.getContext('2d')}; if(s.history&&s.history.length>1)drawSpk(key,s.history); }
@@ -332,6 +344,7 @@ function renderTile(did,s){
   });
   if(old) old.replaceWith(t);
   else grid.appendChild(t);
+  _applyActiveSensorFilter(did,s,t);
   t.addEventListener('animationend',()=>{t.classList.remove('stl-enter');t.style.animationDelay='';},{once:true});
   const cvs=t.querySelector('canvas.spk');
   if(cvs){

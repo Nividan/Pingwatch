@@ -1702,6 +1702,10 @@ function openDevWin(did){
       <button class="dw-tab"        id="dwtab-log-${did}"     onclick="dwSwitchTab('${did}','log')">▸ Event Log</button>
     </div>
     <div class="dw-body" id="dwbody-sensors-${did}">
+      <div class="dw-snr-filterbar">
+        <input type="text" id="dw-snr-filter-${did}" class="dw-snr-filter" placeholder="Filter sensors by name, type or OID…" autocomplete="off" oninput="filterDevSensors('${did}',this.value)"/>
+        <span class="dw-snr-filter-cnt" id="dw-snr-filter-cnt-${did}"></span>
+      </div>
       <div class="sg" id="sg-${did}"></div>
       <div class="add-snr" onclick="openAddSensor('${did}')">＋ Add sensor — Ping · TCP Port · HTTP/S · SNMP</div>
     </div>
@@ -1744,6 +1748,9 @@ function openDevWin(did){
     _applySensorOrder(did);
     _vmApplySavedOrders(did);
     setupChartsByDid(did);
+    // Re-apply any filter the user typed while tiles were still loading.
+    const _f=document.getElementById(`dw-snr-filter-${did}`);
+    if(_f&&_f.value.trim()) filterDevSensors(did,_f.value);
   });
 
   _logsFetch.then(data=>{
@@ -1760,6 +1767,31 @@ function openDevWin(did){
     });
     renderDevLog(did);
   });
+}
+
+// Filter the open device window's sensor tiles by name / type / host / OID.
+// Toggles tile visibility (cheap, no re-render) and hides VMware group wrappers
+// that end up with no visible rows. Matches the authoritative sensor objects in
+// S.devices so it works regardless of tile markup.
+function filterDevSensors(did, q){
+  q=(q||'').trim().toLowerCase();
+  const dev=S.devices[did]; if(!dev) return;
+  const sensors=dev.sensors||[];
+  let shown=0;
+  sensors.forEach(s=>{
+    const hay=`${s.name||''} ${s.stype||''} ${s.host||''} ${s.oid||''} ${s.snmp_oid||''}`.toLowerCase();
+    const match=!q||hay.includes(q);
+    if(match) shown++;
+    const tile=document.getElementById(`t-${did}_${s.sensor_id}`);
+    if(tile) tile.style.display=match?'':'none';
+  });
+  // VMware groups: hide a group whose rows are all filtered out.
+  document.querySelectorAll(`#sg-${did} .vm-grp`).forEach(grp=>{
+    const anyVisible=[...grp.querySelectorAll('.vm-row')].some(r=>r.style.display!=='none');
+    grp.style.display=anyVisible?'':'none';
+  });
+  const cnt=document.getElementById(`dw-snr-filter-cnt-${did}`);
+  if(cnt) cnt.textContent=q?`${shown} of ${sensors.length}`:'';
 }
 
 function dwSwitchTab(did, tab){
