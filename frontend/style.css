@@ -40,6 +40,10 @@
   --accent-hover: #6cb1ff;
   --accent-glow:  rgba(77,158,255,.32);
   --accent-soft:  rgba(77,158,255,.10);
+  /* Secondary (green) accent — used by the dashboard widget picker (.mw-*).
+     Was only defined in map.css/livemap.css, so these rules rendered with an
+     undefined var (transparent fill + black text = unreadable). */
+  --accent2:      #00ff9d;
   /* Legacy alias — kept for rules (#cbn, .hb-exp-panel) that pre-date --topbar-h.
      Aliased so density-aware topbar height flows through to legacy callers. */
   --header-h: var(--topbar-h);
@@ -171,6 +175,8 @@
   --accent-hover: #0860ca;
   --accent-glow:  rgba(9,105,218,.22);
   --accent-soft:  rgba(9,105,218,.08);
+  /* Darker green on light bg so green-on-white text/badges stay readable. */
+  --accent2:      #0a8f5a;
   --topbar-bg:     rgba(255,255,255,.90);
   --topbar-border: rgba(216,222,229,.90);
   --body-grad-1:   rgba(9,105,218,.04);
