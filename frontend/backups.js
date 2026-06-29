@@ -514,12 +514,12 @@ async function _bkOpenSettings(did) {
   o.className = 'mo'; o.id = 'bk-settings';
   _overlayClose(o, ()=>closeM('bk-settings'));
   o.innerHTML = `
-    <div class="mbox" style="width:min(95vw,560px)">
+    <div class="mbox" style="width:min(95vw,560px);max-height:90vh;display:flex;flex-direction:column">
       <div class="mhd">
         <div class="mttl">⚙ Backup Settings — ${esc(dev.name || did)}</div>
         <button class="mclose" onclick="closeM('bk-settings')">✕</button>
       </div>
-      <div class="mbdy" style="gap:10px">
+      <div class="mbdy" style="gap:10px;flex:1;min-height:0;overflow-y:auto">
         <div class="fr">
           <label class="fl">Enabled</label>
           <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
