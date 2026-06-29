@@ -263,6 +263,18 @@ const _DW_REG = {
     render:  (wid, cfg) => _dwRefreshLatencyHeatmap(wid, cfg),
     refresh: (wid, cfg) => _dwRefreshLatencyHeatmap(wid, cfg),
   },
+  probe_status: {
+    label: 'Probe Status',
+    icon:  icon('probes', 14),
+    cat: 'status',
+    desc: 'Remote probe agents — online / offline / pending enrollment.',
+    meta: ['remote agents', 'probe', 'agent', 'live'],
+    popular: true,
+    defaultCols: 1,
+    fields: [],
+    render:  (wid, _cfg) => _dwRefreshProbeStatus(wid),
+    refresh: (wid, _cfg) => _dwRefreshProbeStatus(wid),
+  },
 };
 
 // ── Category palette + section order ──────────────────────────────
@@ -984,9 +996,13 @@ function _dwOpenPicker() {
         return false;
       }
       if (!q) return true;
+      // Match label, description, category, and the meta keyword tags — the
+      // tags let synonyms ("agent", "remote") surface a widget whose label
+      // doesn't literally contain the query.
       return (reg.label || '').toLowerCase().includes(q) ||
              (reg.desc  || '').toLowerCase().includes(q) ||
-             cat.toLowerCase().includes(q);
+             cat.toLowerCase().includes(q) ||
+             (reg.meta || []).some(m => String(m).toLowerCase().includes(q));
     });
   }
 
@@ -1612,6 +1628,77 @@ function _dwRefreshFleetStatus(wid) {
       <div class="donut">${pwDonut(segs, { size: 130, stroke: 16 })}</div>
       <div class="donut-legend">${legendRows}</div>
     </div>`);
+}
+
+// ── Widget: Probe Status (remote agent fleet) ─────────────────────
+// Summarizes the distributed-probe agents from /api/probes into an
+// online / offline / pending donut, with the disconnected agents listed
+// below so an at-a-glance dashboard surfaces a dead probe immediately.
+async function _dwRefreshProbeStatus(wid) {
+  const body = document.getElementById(`dw-body-${wid}`);
+  if (!body) return;
+  // Only show "Loading…" on first paint — refreshes swap silently.
+  if (!body.children.length) body.innerHTML = '<div class="dw-loading">Loading…</div>';
+  let probes;
+  try {
+    const d = await api('GET', '/api/probes');
+    probes = d.probes || [];
+  } catch {
+    body.innerHTML = '<div class="dw-err">Failed to load probe status</div>';
+    return;
+  }
+  const total = probes.length;
+  if (!total) {
+    // Many installs run central-only — make that an explicit, calm empty
+    // state rather than an error or a misleading "all good" ring.
+    _dwSwap(body, `
+      <div style="color:var(--text3);font-size:11px;padding:14px 8px;text-align:center;line-height:1.5">
+        No remote probes enrolled.<br>
+        <span style="opacity:.7">All monitoring runs from the central server.</span>
+      </div>`);
+    return;
+  }
+  // Bucket each probe. Connected wins; otherwise a probe still awaiting its
+  // first check-in (enroll token outstanding / pending) is "Pending", and an
+  // enrolled-but-silent or revoked probe is "Offline".
+  const cnt = { online: 0, offline: 0, pending: 0 };
+  const offlineNames = [];
+  probes.forEach(p => {
+    if (p.connected) { cnt.online++; return; }
+    if (p.enroll_pending || p.status === 'pending') { cnt.pending++; return; }
+    cnt.offline++;
+    offlineNames.push(p.name || p.probe_id);
+  });
+  const segs = [
+    { value: cnt.online,  color: 'var(--up)',    label: 'Online' },
+    { value: cnt.offline, color: 'var(--down)',  label: 'Offline' },
+    { value: cnt.pending, color: 'var(--pause)', label: 'Pending' },
+  ];
+  const legendRows = segs.map(seg => `
+    <div class="donut-legend-row">
+      <span class="sw" style="background:${seg.color}"></span>
+      <span class="lbl">${seg.label}</span>
+      <span class="ct">${seg.value}</span>
+      <span class="pct">${(seg.value / total * 100).toFixed(1)}%</span>
+    </div>`).join('');
+  // List up to 4 disconnected agents so a dead probe is named, not just counted.
+  let offlineHtml = '';
+  if (offlineNames.length) {
+    const shown = offlineNames.slice(0, 4).map(n => esc(n)).join(', ');
+    const more  = offlineNames.length > 4 ? ` +${offlineNames.length - 4} more` : '';
+    offlineHtml = `
+      <div style="margin-top:8px;padding-top:8px;border-top:1px solid var(--border);
+                  font-size:11px;color:var(--down);cursor:pointer"
+           onclick="switchMainTab('probes')" title="Open Probes page">
+        ⚠ Offline: ${shown}${more}
+      </div>`;
+  }
+  _dwSwap(body, `
+    <div class="donut-wrap" style="padding:6px 4px">
+      <div class="donut">${pwDonut(segs, { size: 130, stroke: 16 })}</div>
+      <div class="donut-legend">${legendRows}</div>
+    </div>
+    ${offlineHtml}`);
 }
 
 // ── Widget: Latency Heatmap (devices × time buckets) ──────────────
