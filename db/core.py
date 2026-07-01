@@ -1115,6 +1115,27 @@ def db_init():
             "CREATE INDEX IF NOT EXISTS idx_trusted_dev_exp "
             "ON trusted_devices(expires_at)"
         )
+        # ── SNMP sensor templates (per-vendor OID bundles) ───────────
+        con.execute("""
+            CREATE TABLE IF NOT EXISTS snmp_sensor_templates (
+                id          TEXT PRIMARY KEY,
+                name        TEXT NOT NULL,
+                vendor      TEXT NOT NULL DEFAULT '',
+                description TEXT DEFAULT '',
+                items_json  TEXT NOT NULL DEFAULT '[]',
+                source      TEXT NOT NULL DEFAULT 'user',
+                builtin_key TEXT DEFAULT '',
+                enabled     INTEGER DEFAULT 1,
+                created_by  TEXT DEFAULT '',
+                created_at  REAL DEFAULT 0,
+                updated_at  REAL DEFAULT 0
+            )""")
+        # Partial-unique index so re-seeding built-ins is an idempotent
+        # upsert keyed on builtin_key (empty for user rows → not constrained).
+        con.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS ix_snmptpl_builtin "
+            "ON snmp_sensor_templates(builtin_key) WHERE builtin_key <> ''"
+        )
         # ── Reports: templates, schedules, generated history ─────────
         con.execute("""
             CREATE TABLE IF NOT EXISTS report_templates (

@@ -204,8 +204,10 @@ function sensorFormHTML(dev, s=null) {
       <div class="fh" id="as-oid-unit" style="min-height:14px"></div>
     </div>
     <div class="fr" style="margin-top:2px">
-      <div style="display:flex;gap:8px;align-items:center">
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
         <button class="dp-btn" type="button" onclick="discoverInterfaces()" id="as-disc-btn">⊕ Discover Interfaces</button>
+        <select id="as-tpl-pick" style="max-width:210px"><option value="">— Template —</option></select>
+        <button class="dp-btn" type="button" onclick="discoverWithTemplate()" id="as-tpl-disc-btn">⊕ Discover with template</button>
         <span id="as-iface-status" style="font-size:11px;color:var(--text3)"></span>
       </div>
       <div id="as-iface-list" style="display:none;margin-top:8px"></div>
@@ -940,7 +942,27 @@ const _IFACE_METRICS=[
   {v:'admin_st', l:'Admin Status',        oid:'1.3.6.1.2.1.2.2.1.7.',    u:'1=up 2=down'},
 ];
 
+// Populate the "— Template —" picker from /api/snmp/templates. Cached per
+// modal open; called alongside _snmpLoadVendors when the SNMP form appears.
+let _snmpTemplates=null;
+async function _snmpLoadTemplates(){
+  const sel=document.getElementById('as-tpl-pick');
+  if(!sel||sel.options.length>1) return;
+  try{
+    if(!_snmpTemplates){
+      const r=await api('GET','/api/snmp/templates');
+      _snmpTemplates=r.templates||[];
+    }
+    _snmpTemplates.forEach(t=>{
+      const o=document.createElement('option');
+      o.value=t.id; o.textContent=(t.vendor?`${t.vendor} · `:'')+t.name;
+      sel.appendChild(o);
+    });
+  }catch(e){}
+}
+
 async function _snmpLoadVendors(){
+  _snmpLoadTemplates();
   const vsel=document.getElementById('as-oid-vendor');
   if(!vsel||vsel.options.length>1) return;
   if(_snmpCatalog){
@@ -1118,34 +1140,40 @@ function snmpDisplayChange() {
 }
 
 // ── SNMP Interface Discovery ──────────────────────────────────────────────
-async function discoverInterfaces(){
+// Build the {host, community, port, version, did, snmp_v3_*} body shared by
+// interface discovery and template discovery. Reads live form fields so users
+// can try creds before saving a device default; blank v3 passphrases fall back
+// to the device default server-side.
+function _snmpDiscoveryConnBody(){
   const did       = window._ifaceDid;
   const host      = document.getElementById('as-sh')?.value.trim() || S.devices[did]?.host || '';
   const community = document.getElementById('as-sc')?.value.trim()||S.devices[did]?.snmp_community_default||'public';
   const port      = parseInt(document.getElementById('as-sp')?.value)||161;
   const version   = document.getElementById('as-sv')?.value||'2c';
+  const body = {host, community, port, version, did};
+  if(version === '3'){
+    body.snmp_v3_user       = (document.getElementById('as-v3-user')?.value || '').trim();
+    body.snmp_v3_level      = document.getElementById('as-v3-level')?.value || 'noAuthNoPriv';
+    body.snmp_v3_auth_proto = document.getElementById('as-v3-auth-proto')?.value || '';
+    body.snmp_v3_priv_proto = document.getElementById('as-v3-priv-proto')?.value || '';
+    body.snmp_v3_context    = (document.getElementById('as-v3-ctx')?.value || '').trim();
+    const _ap = document.getElementById('as-v3-auth-pass')?.value || '';
+    const _pp = document.getElementById('as-v3-priv-pass')?.value || '';
+    if(_ap) body.snmp_v3_auth_pass = _ap;
+    if(_pp) body.snmp_v3_priv_pass = _pp;
+  }
+  return body;
+}
+
+async function discoverInterfaces(){
   const btn       = document.getElementById('as-disc-btn');
   const statusEl  = document.getElementById('as-iface-status');
   const listEl    = document.getElementById('as-iface-list');
-  if(!host){ toast('Enter a Host / IP first','err'); return; }
+  const discoveryBody = _snmpDiscoveryConnBody();
+  if(!discoveryBody.host){ toast('Enter a Host / IP first','err'); return; }
   if(btn){ btn.disabled=true; btn.textContent='Discovering…'; }
   if(statusEl){ statusEl.style.color='var(--text3)'; statusEl.textContent='Querying device…'; }
   if(listEl){ listEl.style.display='none'; listEl.innerHTML=''; }
-  const discoveryBody = {host, community, port, version, did};
-  // SNMPv3 discovery — read creds directly from the visible form fields so
-  // users can try v3 before saving a device default.  Blank passphrases OK;
-  // backend falls back to the device default / errors with a clear message.
-  if(version === '3'){
-    discoveryBody.snmp_v3_user       = (document.getElementById('as-v3-user')?.value || '').trim();
-    discoveryBody.snmp_v3_level      = document.getElementById('as-v3-level')?.value || 'noAuthNoPriv';
-    discoveryBody.snmp_v3_auth_proto = document.getElementById('as-v3-auth-proto')?.value || '';
-    discoveryBody.snmp_v3_priv_proto = document.getElementById('as-v3-priv-proto')?.value || '';
-    discoveryBody.snmp_v3_context    = (document.getElementById('as-v3-ctx')?.value || '').trim();
-    const _ap = document.getElementById('as-v3-auth-pass')?.value || '';
-    const _pp = document.getElementById('as-v3-priv-pass')?.value || '';
-    if(_ap) discoveryBody.snmp_v3_auth_pass = _ap;
-    if(_pp) discoveryBody.snmp_v3_priv_pass = _pp;
-  }
   let r;
   try{
     r=await api('POST','/api/snmp/interfaces', discoveryBody);
@@ -1447,6 +1475,193 @@ async function addSelectedIfaceSensors(){
       }
     }catch(e){}
     toast(`Added ${added} sensor${added>1?'s':''}${failed?`, ${failed} failed`:''}`, 'ok');
+    closeM('mas');
+  }else{
+    toast('Failed to add sensors','err');
+  }
+}
+
+// ── SNMP template discovery (Add Sensor → Discover with template) ─────────
+// Probe the device against a picked template; the server returns candidate
+// rows (only metrics that responded), already expanded rows×metrics with a
+// server-built suggested_name. We render a checkable list and bulk-create.
+let _snmpCandidates=[];
+
+async function discoverWithTemplate(){
+  const tplId=document.getElementById('as-tpl-pick')?.value||'';
+  const btn=document.getElementById('as-tpl-disc-btn');
+  const statusEl=document.getElementById('as-iface-status');
+  const listEl=document.getElementById('as-iface-list');
+  if(!tplId){ toast('Pick a template first','err'); return; }
+  const body=_snmpDiscoveryConnBody();
+  if(!body.host){ toast('Enter a Host / IP first','err'); return; }
+  body.template_id=tplId;
+  if(btn){ btn.disabled=true; btn.textContent='Discovering…'; }
+  if(statusEl){ statusEl.style.color='var(--text3)'; statusEl.textContent='Probing device…'; }
+  if(listEl){ listEl.style.display='none'; listEl.innerHTML=''; }
+  let r;
+  try{
+    r=await api('POST','/api/snmp/discover', body);
+  }catch(e){
+    if(statusEl){ statusEl.style.color='var(--down)'; statusEl.textContent=e.message||'Request failed'; }
+    return;
+  }finally{
+    if(btn){ btn.disabled=false; btn.textContent='⊕ Discover with template'; }
+  }
+  _snmpCandidates=r.candidates||[];
+  const via=r.via_probe?` · via probe ${r.via_probe}`:'';
+  if(!_snmpCandidates.length){
+    if(statusEl){ statusEl.style.color='var(--text3)'; statusEl.textContent='No matching metrics responded on this device.'+via; }
+    return;
+  }
+  if(statusEl){ statusEl.style.color='var(--text3)'; statusEl.textContent=`${_snmpCandidates.length} metric${_snmpCandidates.length!==1?'s':''} found`+via; }
+  _snmpRenderCandidates();
+}
+
+function _snmpRenderCandidates(){
+  const listEl=document.getElementById('as-iface-list');
+  if(!listEl) return;
+  let html='<div style="border:1px solid var(--border);border-radius:6px;margin-top:4px;overflow:visible">';
+  html+='<div style="padding:6px 8px;background:var(--bg2);border-bottom:1px solid var(--border);display:flex;gap:8px;align-items:center">';
+  html+='<input type="text" id="snmpc-filter" placeholder="Filter metrics…" autocomplete="off" oninput="_snmpcFilter(this.value)" style="width:180px;font-size:11px;padding:4px 8px;background:var(--bg);border:1px solid var(--border);border-radius:4px;color:var(--text)"/>';
+  html+='<span id="snmpc-filter-count" style="font-size:11px;color:var(--text3)"></span>';
+  html+='</div>';
+  html+='<div style="overflow-x:auto;max-height:240px;overflow-y:auto">';
+  html+='<table style="width:100%;border-collapse:collapse;font-size:11px">';
+  html+='<thead><tr style="background:var(--bg2);color:var(--text2);position:sticky;top:0">';
+  html+='<th style="padding:5px 8px;text-align:center"><input type="checkbox" id="snmpc-all" onchange="_snmpcToggleAll(this)"/></th>';
+  html+='<th style="padding:5px 8px;text-align:left">Name</th>';
+  html+='<th style="padding:5px 8px;text-align:left">OID</th>';
+  html+='<th style="padding:5px 8px;text-align:left">Value</th>';
+  html+='<th style="padding:5px 8px;text-align:left">Unit</th>';
+  html+='<th style="padding:5px 8px;text-align:center">64-bit</th>';
+  html+='</tr></thead><tbody>';
+  _snmpCandidates.forEach((c,i)=>{
+    const val=c.kind==='scalar'?String(c.value||'').slice(0,40):'';
+    const search=esc(`${c.suggested_name||''} ${c.item_label||''} ${c.oid||''} ${c.row_name||''} ${c.unit||''}`.toLowerCase());
+    const rowBg=i%2?'background:var(--bg2)':'';
+    const hc=c.hc_oid?'<input type="checkbox" class="snmpc-hc" title="Use 64-bit counter"/>':'';
+    html+=`<tr class="snmpc-row" data-search="${search}" style="border-top:1px solid var(--border);${rowBg}">`;
+    html+=`<td style="padding:4px 8px;text-align:center"><input type="checkbox" class="snmpc-cb" data-i="${i}" onchange="_snmpcUpdateCount()"/></td>`;
+    html+=`<td style="padding:4px 8px;font-weight:500">${esc(c.suggested_name||c.item_label||'')}</td>`;
+    html+=`<td style="padding:4px 8px;color:var(--text3);font-family:monospace">${esc(c.oid||'')}</td>`;
+    html+=`<td style="padding:4px 8px;color:var(--text2)">${val?esc(val):'<span style="color:var(--text3)">—</span>'}</td>`;
+    html+=`<td style="padding:4px 8px;color:var(--text3)">${esc(c.unit||'')}</td>`;
+    html+=`<td style="padding:4px 8px;text-align:center">${hc}</td>`;
+    html+='</tr>';
+  });
+  html+='</tbody></table></div>';
+  html+='<div style="padding:8px 10px;background:var(--bg2);border-top:1px solid var(--border);display:flex;gap:8px;align-items:center">';
+  html+='<button class="btn-p" style="font-size:11px;padding:5px 14px" onclick="_snmpAddSelectedCandidates()" id="snmpc-add-btn">Add Selected as Sensors</button>';
+  html+='<span id="snmpc-sel-count" style="font-size:11px;color:var(--text3)">0 selected</span>';
+  html+='</div></div>';
+  listEl.innerHTML=html;
+  listEl.style.display='';
+  _snmpcUpdateCount();
+}
+
+function _snmpcFilter(q){
+  q=(q||'').trim().toLowerCase();
+  const rows=[...document.querySelectorAll('.snmpc-row')];
+  let shown=0;
+  rows.forEach(tr=>{
+    const m=!q||(tr.getAttribute('data-search')||'').includes(q);
+    tr.style.display=m?'':'none';
+    if(m) shown++;
+  });
+  const cnt=document.getElementById('snmpc-filter-count');
+  if(cnt) cnt.textContent=q?`${shown} of ${rows.length}`:'';
+  _snmpcUpdateCount();
+}
+
+function _snmpcToggleAll(cb){
+  document.querySelectorAll('.snmpc-row').forEach(tr=>{
+    if(tr.style.display==='none') return;
+    const c=tr.querySelector('.snmpc-cb');
+    if(c) c.checked=cb.checked;
+  });
+  _snmpcUpdateCount();
+}
+
+function _snmpcUpdateCount(){
+  const cbs=[...document.querySelectorAll('.snmpc-cb')];
+  const n=cbs.filter(c=>c.checked).length;
+  const el=document.getElementById('snmpc-sel-count');
+  if(el) el.textContent=n?`${n} of ${cbs.length} selected`:'0 selected';
+  const all=document.getElementById('snmpc-all');
+  if(all){
+    const vis=cbs.filter(c=>{const tr=c.closest('.snmpc-row');return !tr||tr.style.display!=='none';});
+    const vc=vis.filter(c=>c.checked).length;
+    all.indeterminate=(vc>0&&vc<vis.length);
+    all.checked=(vis.length>0&&vc===vis.length);
+  }
+}
+
+async function _snmpAddSelectedCandidates(){
+  const did=window._ifaceDid;
+  if(!did){ toast('Device context lost — reopen the sensor form','err'); return; }
+  const checked=[...document.querySelectorAll('.snmpc-cb:checked')];
+  if(!checked.length){ toast('Select at least one metric','err'); return; }
+  const conn=_snmpDiscoveryConnBody();
+  const iv=parseInt(document.getElementById('as-iv')?.value)||5;
+  const tmo=parseInt(document.getElementById('as-tmo')?.value)||4;
+  const fWarn=parseInt(document.getElementById('as-wms')?.value)||null;
+  const fCrit=parseInt(document.getElementById('as-cms')?.value)||null;
+  const start=document.getElementById('as-si')?.value==='1';
+  const btn=document.getElementById('snmpc-add-btn');
+  if(btn){ btn.disabled=true; btn.textContent=`Adding ${checked.length}…`; }
+  let added=0,failed=0; const addedSids=[];
+  for(const cb of checked){
+    const c=_snmpCandidates[parseInt(cb.dataset.i)];
+    if(!c) continue;
+    const useHc=cb.closest('.snmpc-row')?.querySelector('.snmpc-hc')?.checked;
+    const oid=(useHc&&c.hc_oid)?c.hc_oid:c.oid;
+    // Threshold precedence: item warn/crit → interface speed auto (75/90% of
+    // link Mbps) → form defaults.
+    let wms=(c.warn!=null?c.warn:fWarn), cms=(c.crit!=null?c.crit:fCrit);
+    if(c.warn==null&&c.crit==null&&c.speed_auto_threshold&&c.speed_raw>0){
+      const mbps=Math.round(c.speed_raw/1_000_000);
+      wms=Math.round(mbps*0.75); cms=Math.round(mbps*0.90);
+    }
+    const body={
+      name:(c.suggested_name||c.item_label||'SNMP').slice(0,120), type:'snmp',
+      host:conn.host, port:conn.port, snmp_community:conn.community,
+      snmp_oid:oid, snmp_version:conn.version, snmp_unit:_normSnmpUnit(c.unit||''),
+      interval:(c.interval||iv), timeout:tmo, verify_ssl:true, url:null,
+      dns_query:'',dns_record_type:'A',dns_server:'',http_expected_status:0,
+      warn_ms:wms,crit_ms:cms,
+      loss_warn_pct:0,loss_crit_pct:0,keyword:'',keyword_case:false,banner_regex:''
+    };
+    // Carry live v3 creds so a not-yet-saved device still polls correctly.
+    ['snmp_v3_user','snmp_v3_level','snmp_v3_auth_proto','snmp_v3_priv_proto',
+     'snmp_v3_context','snmp_v3_auth_pass','snmp_v3_priv_pass'].forEach(k=>{ if(conn[k]!=null) body[k]=conn[k]; });
+    let r=null;
+    try{ r=await api('POST',`/api/device/${did}/sensor`, body); }catch(e){}
+    if(r?.sid){
+      if(start){ try{ await api('POST',`/api/device/${did}/sensor/${r.sid}/start`); }catch(e){} }
+      addedSids.push(r.sid); added++;
+    }else failed++;
+  }
+  if(btn){ btn.disabled=false; btn.textContent='Add Selected as Sensors'; }
+  if(added){
+    try{
+      const devR=await fetch(`/api/device/${did}`);
+      if(devR.ok){
+        const dev=await devR.json();
+        S.devices[did]=dev;
+        const newSensors=(dev.sensors||[]).filter(s=>addedSids.includes(s.sensor_id));
+        newSensors.forEach(ns=>{
+          S.sensors[`${did}/${ns.sensor_id}`]=ns;
+          S.logs[`${did}/${ns.sensor_id}`]=[];
+          if(document.getElementById('dwo')&&document.getElementById(`sg-${did}`)){
+            renderTile(did,ns);setupCharts(dev);
+          }
+        });
+        const cnt=document.querySelector(`#sbn-${did} .dev-cnt`);
+        if(cnt) cnt.textContent=dev.sensors.length;
+      }
+    }catch(e){}
+    toast(`Added ${added} sensor${added>1?'s':''}${failed?`, ${failed} failed`:''}`,'ok');
     closeM('mas');
   }else{
     toast('Failed to add sensors','err');

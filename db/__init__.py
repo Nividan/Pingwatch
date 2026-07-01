@@ -227,6 +227,14 @@ from db.licenses    import (
 )
 
 # reports (templates, schedules, generated history)
+from db.snmp_sensor_templates import (
+    db_list_snmp_templates,
+    db_get_snmp_template,
+    db_create_snmp_template,
+    db_update_snmp_template,
+    db_delete_snmp_template,
+    db_seed_snmp_templates,
+)
 from db.reports     import (
     db_list_report_templates,
     db_get_report_template,
@@ -342,6 +350,8 @@ __all__ = [
     "db_resolve_all_active", "db_has_acked_event", "db_has_active_event",
     "db_alert_stats",
     # reports
+    "db_list_snmp_templates", "db_get_snmp_template", "db_create_snmp_template",
+    "db_update_snmp_template", "db_delete_snmp_template", "db_seed_snmp_templates",
     "db_list_report_templates", "db_get_report_template",
     "db_create_report_template", "db_update_report_template", "db_delete_report_template",
     "db_list_report_schedules", "db_get_report_schedule",

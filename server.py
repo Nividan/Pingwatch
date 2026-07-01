@@ -555,12 +555,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
     # ── PATCH ─────────────────────────────────────────────────────
     def do_PATCH(self):
-        from routes import auth, devices, settings, topology, tls as _tls_mod, ldap as _ldap_mod, radius as _radius_mod, alert_profiles as _alert_profiles_mod, maintenance_windows as _maint_mod, groups as _groups_mod, licenses as _lic_mod, reports as _reports_mod, saml as _saml_mod, oidc as _oidc_mod, ipam as _ipam_mod, probes as _probes_mod
+        from routes import auth, devices, settings, topology, monitoring, tls as _tls_mod, ldap as _ldap_mod, radius as _radius_mod, alert_profiles as _alert_profiles_mod, maintenance_windows as _maint_mod, groups as _groups_mod, licenses as _lic_mod, reports as _reports_mod, saml as _saml_mod, oidc as _oidc_mod, ipam as _ipam_mod, probes as _probes_mod
         p    = urlparse(self.path).path
         body = self._body()
         if body is None: return
 
-        for mod in (auth, devices, settings, topology, _ldap_mod, _radius_mod, _tls_mod, _alert_profiles_mod, _maint_mod, _groups_mod, _lic_mod, _reports_mod, _saml_mod, _oidc_mod, _ipam_mod, _probes_mod):
+        for mod in (auth, devices, settings, topology, monitoring, _ldap_mod, _radius_mod, _tls_mod, _alert_profiles_mod, _maint_mod, _groups_mod, _lic_mod, _reports_mod, _saml_mod, _oidc_mod, _ipam_mod, _probes_mod):
             if mod.handle(self, 'PATCH', p, body):
                 return
 
@@ -593,11 +593,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
     # ── DELETE ────────────────────────────────────────────────────
     def do_DELETE(self):
-        from routes import auth, devices, topology, backups
+        from routes import auth, devices, topology, backups, monitoring
         p = urlparse(self.path).path
 
         from routes import ipam, alert_profiles as _alert_profiles_mod, maintenance_windows as _maint_mod, groups as _groups_mod, discovery as _disc_mod, licenses as _lic_mod, reports as _reports_mod, sites as _sites_mod, api_tokens as _api_tokens_mod, probes as _probes_mod, mcp_oauth as _mcp_oauth_mod
-        for mod in (auth, devices, topology, backups, ipam, _alert_profiles_mod, _maint_mod, _groups_mod, _disc_mod, _lic_mod, _reports_mod, _sites_mod, _api_tokens_mod, _probes_mod, _mcp_oauth_mod):
+        for mod in (auth, devices, topology, backups, monitoring, ipam, _alert_profiles_mod, _maint_mod, _groups_mod, _disc_mod, _lic_mod, _reports_mod, _sites_mod, _api_tokens_mod, _probes_mod, _mcp_oauth_mod):
             if mod.handle(self, 'DELETE', p, {}):
                 return
 

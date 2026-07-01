@@ -70,7 +70,7 @@ _DEVSCAN_STYPES = frozenset({"ping", "tcp", "http", "tls", "banner"})
 # through _DEVSCAN_WAITERS (vs. the async _SCANS registry used by subnet
 # discovery). Both are one-shot "run on the probe, return to the browser"
 # operations that central can't perform for branch-local devices.
-_SYNC_WAITER_TASKS = frozenset({"device_scan", "snmp_interfaces"})
+_SYNC_WAITER_TASKS = frozenset({"device_scan", "snmp_interfaces", "snmp_discover"})
 
 
 def _devscan_complete(task_id: int, rows, error: str = ""):
@@ -217,6 +217,99 @@ def run_remote_snmp_interfaces(probe: dict, host: str, community: str, port: int
     finally:
         with _DEVSCAN_LOCK:
             _DEVSCAN_WAITERS.pop(tid, None)
+
+
+def run_remote_snmp_discover(probe: dict, host: str, items: list, community: str,
+                             port: int, version: str, v3_creds, created_by: str,
+                             timeout: float = 25.0, op_timeout: int = 10) -> tuple:
+    """Discover a device against a template's items on a remote probe and wait
+    for the result. Mirrors run_remote_snmp_interfaces but carries the item list
+    in the payload and returns sanitized candidate rows (the same shape
+    monitoring.probes.snmp_discover_template produces). Returns (candidates, "")
+    or (None, reason). `op_timeout` is the per-OID snmp timeout the agent uses
+    (lower for the large device-wide scan); `timeout` is the waiter budget."""
+    from db.probes import db_create_task
+    pid = probe["probe_id"]
+    payload = {"host": str(host)[:253],
+               "community": str(community or "public")[:128],
+               "port": int(port),
+               "version": str(version),
+               "v3_creds": v3_creds if isinstance(v3_creds, dict) else None,
+               "op_timeout": int(op_timeout),
+               "items": items if isinstance(items, list) else []}
+    tid = db_create_task(pid, "snmp_discover", json.dumps(payload), created_by)
+    if not tid:
+        return None, "could not queue the discovery task"
+    evt = threading.Event()
+    with _DEVSCAN_LOCK:
+        _DEVSCAN_WAITERS[tid] = {"evt": evt, "rows": [], "error": ""}
+    try:
+        if not evt.wait(timeout=timeout):
+            db_set_task_state(tid, "cancelled")
+            log_probes.warning(
+                f"snmp_discover task {tid} on {probe.get('name')} ({pid}) timed "
+                f"out after {timeout:.0f}s (host={host})")
+            return None, (f"Probe '{probe.get('name')}' did not return template "
+                          f"discovery within {timeout:.0f}s — it may be busy, "
+                          "reconnecting, or running an older agent build that "
+                          "doesn't support remote SNMP discovery.")
+        with _DEVSCAN_LOCK:
+            w = _DEVSCAN_WAITERS.get(tid) or {}
+        if w.get("error"):
+            return None, str(w["error"])
+        cands = []
+        for r in w.get("rows", [])[:4096]:
+            c = _sanitize_candidate(r)
+            if c:
+                cands.append(c)
+        return cands, ""
+    finally:
+        with _DEVSCAN_LOCK:
+            _DEVSCAN_WAITERS.pop(tid, None)
+
+
+def _sanitize_candidate(r) -> dict:
+    """Bound + type-coerce one discovery candidate row from a (trusted-ish)
+    probe into the shape the frontend renders."""
+    if not isinstance(r, dict):
+        return None
+    kind = "table" if r.get("kind") == "table" else "scalar"
+    oid = str(r.get("oid") or "").strip()
+    if not oid:
+        return None
+
+    def _num(v):
+        if v is None or v == "":
+            return None
+        try:
+            return float(v) if "." in str(v) else int(v)
+        except (TypeError, ValueError):
+            return None
+
+    c = {"kind": kind,
+         "item_label": str(r.get("item_label") or "")[:120],
+         "oid": oid[:255],
+         "unit": str(r.get("unit") or "")[:64],
+         "warn": _num(r.get("warn")), "crit": _num(r.get("crit")),
+         "interval": _num(r.get("interval")),
+         "group": str(r.get("group") or "")[:80],
+         "suggested_name": str(r.get("suggested_name") or "")[:120]}
+    if kind == "scalar":
+        c["value"] = str(r.get("value") or "")[:120]
+        c["snmp_type"] = str(r.get("snmp_type") or "")[:32]
+    else:
+        try:
+            c["index"] = int(r.get("index"))
+        except (TypeError, ValueError):
+            return None
+        c["row_name"] = str(r.get("row_name") or "")[:128]
+        c["hc_oid"] = str(r.get("hc_oid") or "")[:255]
+        c["speed_auto_threshold"] = bool(r.get("speed_auto_threshold"))
+        try:
+            c["speed_raw"] = int(r.get("speed_raw") or 0)
+        except (TypeError, ValueError):
+            c["speed_raw"] = 0
+    return c
 
 
 # ── Enroll rate limiting (per IP, mirrors the login limiter) ─────

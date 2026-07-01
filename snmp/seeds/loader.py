@@ -41,6 +41,16 @@ def load_all_seeds():
     except Exception as e:
         log.error(f"SNMP seed load error: {e}")
 
+    # Built-in SNMP sensor templates (per-vendor OID bundles + Interfaces).
+    try:
+        from db import db_seed_snmp_templates
+        from . import snmp_templates
+        db_seed_snmp_templates(snmp_templates.SNMP_SENSOR_TEMPLATES)
+        log.info(f"SNMP sensor templates seeded: "
+                 f"{len(snmp_templates.SNMP_SENSOR_TEMPLATES)} built-ins")
+    except Exception as e:
+        log.error(f"SNMP template seed error: {e}")
+
     # Load any user-supplied MIB files from snmp/mibs/
     try:
         import os

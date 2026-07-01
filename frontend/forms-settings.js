@@ -1552,6 +1552,437 @@ function _buildSettingsTab_reports(sr) {
     </div>`;
 }
 
+// ── SNMP Sensor Templates tab ────────────────────────────────────────
+// Per-vendor bundles of SNMP OIDs (scalar + table) used by the Add Sensor
+// "Discover with template" flow. Built-ins ship seeded (source='builtin')
+// and are editable; a deleted built-in returns on next server restart.
+let _snmpTplCache = [];
+
+// Common unit suggestions offered in the item editor (freeform text allowed).
+const _SNMP_TPL_UNITS = ['', '%', 'bytes', 'errors', 'packets', 'count',
+  'celsius', 'string', 'seconds', 'volts', 'amps', 'rpm', 'dbm',
+  '1=up 2=down', '1=normal'];
+
+function _buildSettingsTab_snmpTemplates() {
+  return `<div class="mbdy stab-fade" id="stab-snmp-templates" style="display:none;overflow-y:auto;flex:1">
+      <div style="font-size:12px;color:var(--text3);margin-bottom:14px">
+        Reusable per-vendor sets of SNMP metrics. Pick one in <b>Add Sensor &rarr; Discover with template</b>
+        to probe a device and bulk-add the metrics it supports. Built-in templates are editable;
+        resetting one restores it on the next restart.
+      </div>
+      <div id="snmptpl-list"><div style="color:var(--text3);font-size:12px;padding:12px">Loading…</div></div>
+    </div>`;
+}
+
+async function _snmpTplLoad() {
+  try {
+    const r = await api('GET', '/api/snmp/templates');
+    _snmpTplCache = r.templates || [];
+  } catch { _snmpTplCache = []; }
+  _snmpTplRender();
+}
+
+function _snmpTplRender() {
+  const wrap = document.getElementById('snmptpl-list');
+  if (!wrap) return;
+  if (!_snmpTplCache.length) {
+    wrap.innerHTML = '<div style="color:var(--text3);font-size:12px;padding:12px">No templates yet — click ＋ New Template.</div>';
+    return;
+  }
+  const rows = _snmpTplCache.map(t => {
+    const nItems = (t.items || []).length;
+    const isB = t.source === 'builtin';
+    const badge = isB
+      ? '<span style="font-size:9px;padding:1px 6px;border-radius:8px;background:var(--accent-soft);color:var(--accent)">BUILT-IN</span>'
+      : '<span style="font-size:9px;padding:1px 6px;border-radius:8px;background:var(--bg4);color:var(--text3)">CUSTOM</span>';
+    const delLabel = isB ? 'Reset' : 'Delete';
+    return `<tr style="border-top:1px solid var(--border)">
+      <td style="padding:7px 8px;color:var(--text2)">${esc(t.vendor || '—')}</td>
+      <td style="padding:7px 8px;font-weight:500">${esc(t.name)} ${badge}</td>
+      <td style="padding:7px 8px;color:var(--text3);text-align:center">${nItems}</td>
+      <td style="padding:7px 8px;text-align:right;white-space:nowrap">
+        <button class="btn-xs" onclick="_snmpTplOpenEditor('${t.id}')">Edit</button>
+        <button class="btn-xs" onclick="_snmpTplClone('${t.id}')">Clone</button>
+        <button class="btn-xs" onclick="_snmpTplDelete('${t.id}')" style="color:var(--down)">${delLabel}</button>
+      </td>
+    </tr>`;
+  }).join('');
+  wrap.innerHTML = `
+    <table style="width:100%;border-collapse:collapse;font-size:12px">
+      <thead><tr style="color:var(--text3);text-align:left">
+        <th style="padding:6px 8px">Vendor</th>
+        <th style="padding:6px 8px">Name</th>
+        <th style="padding:6px 8px;text-align:center">Items</th>
+        <th style="padding:6px 8px"></th>
+      </tr></thead>
+      <tbody>${rows}</tbody>
+    </table>`;
+}
+
+function _snmpTplOpenEditor(id) {
+  closeM('snmptpl-editor');
+  const t = id ? (_snmpTplCache.find(x => x.id === id) || null) : null;
+  const items = t ? (t.items || []) : [];
+  const o = document.createElement('div');
+  o.className = 'mo'; o.id = 'snmptpl-editor';
+  _overlayClose(o, () => closeM('snmptpl-editor'));
+  o.innerHTML = `
+    <div class="mbox" style="width:min(96vw,760px);max-height:90vh;display:flex;flex-direction:column">
+      <div class="mhd">
+        <div class="mttl">${t ? '✏ Edit SNMP Template' : '＋ New SNMP Template'}</div>
+        <button class="mclose" onclick="closeM('snmptpl-editor')">✕</button>
+      </div>
+      <div class="mbdy" style="flex:1;min-height:0;overflow-y:auto">
+        <div class="fgrid" style="grid-template-columns:1fr 1fr">
+          <div class="fr"><label class="fl">Name</label>
+            <input type="text" id="snmptpl-name" value="${esc(t?.name || '')}" maxlength="120" placeholder="e.g. Cisco IOS Core"/></div>
+          <div class="fr"><label class="fl">Vendor</label>
+            <input type="text" id="snmptpl-vendor" value="${esc(t?.vendor || '')}" maxlength="80" placeholder="e.g. Cisco" list="snmptpl-vendors"/>
+            <datalist id="snmptpl-vendors">${[...new Set(_snmpTplCache.map(x => x.vendor).filter(Boolean))].map(v => `<option value="${esc(v)}">`).join('')}</datalist></div>
+        </div>
+        <div class="fr"><label class="fl">Description</label>
+          <input type="text" id="snmptpl-desc" value="${esc(t?.description || '')}" maxlength="500" placeholder="Optional"/></div>
+        <div class="fr" style="margin-top:6px">
+          <div style="display:flex;align-items:center;justify-content:space-between">
+            <label class="fl" style="margin:0">Items</label>
+            <button class="btn-xs" type="button" onclick="_snmpTplAddItemRow()">＋ Add item</button>
+          </div>
+          <div class="fh">Scalar = one OID → one sensor. Table = an OID base walked per index → one sensor per row.</div>
+          <div id="snmptpl-items" style="margin-top:6px;display:flex;flex-direction:column;gap:8px"></div>
+        </div>
+      </div>
+      <div class="mft">
+        <button class="btn-s" onclick="closeM('snmptpl-editor')">Cancel</button>
+        <button class="btn-p" id="snmptpl-save-btn" onclick="_snmpTplSave(${id ? `'${id}'` : 'null'})">Save Template</button>
+      </div>
+    </div>`;
+  document.body.appendChild(o);
+  if (items.length) items.forEach(it => _snmpTplAddItemRow(it));
+  else _snmpTplAddItemRow();
+  setTimeout(() => document.getElementById('snmptpl-name')?.focus(), 50);
+}
+
+function _snmpTplAddItemRow(item) {
+  const box = document.getElementById('snmptpl-items');
+  if (!box) return;
+  item = item || {};
+  const kind = item.kind === 'table' ? 'table' : 'scalar';
+  const row = document.createElement('div');
+  row.className = 'snmptpl-item';
+  row.style.cssText = 'border:1px solid var(--border);border-radius:6px;padding:8px;background:var(--bg2)';
+  const unitOpts = _SNMP_TPL_UNITS.map(u => `<option value="${esc(u)}"${(item.unit || '') === u ? ' selected' : ''}>${u || '— unit —'}</option>`).join('');
+  row.innerHTML = `
+    <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+      <select class="it-kind" style="width:92px" onchange="_snmpTplRowKind(this)">
+        <option value="scalar"${kind === 'scalar' ? ' selected' : ''}>Scalar</option>
+        <option value="table"${kind === 'table' ? ' selected' : ''}>Table</option>
+      </select>
+      <input type="text" class="it-label" value="${esc(item.label || '')}" placeholder="Label (e.g. CPU Load)" style="flex:1;min-width:130px"/>
+      <input type="text" class="it-oid" value="${esc(item.oid || '')}" placeholder="OID (base for table)" style="flex:1.4;min-width:170px;font-family:monospace;font-size:11px"/>
+      <button class="btn-xs" type="button" title="Remove" onclick="this.closest('.snmptpl-item').remove()" style="color:var(--down)">✕</button>
+    </div>
+    <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-top:6px">
+      <select class="it-unit" style="width:120px" title="Unit">${unitOpts}</select>
+      <input type="number" class="it-warn" value="${item.warn ?? ''}" placeholder="warn" style="width:78px" title="Warn threshold (blank = default)"/>
+      <input type="number" class="it-crit" value="${item.crit ?? ''}" placeholder="crit" style="width:78px" title="Crit threshold (blank = default)"/>
+      <input type="number" class="it-interval" value="${item.interval ?? ''}" placeholder="interval" style="width:88px" title="Poll interval s (blank = default)"/>
+    </div>
+    <div class="it-table-extra" style="display:${kind === 'table' ? 'flex' : 'none'};gap:6px;align-items:center;flex-wrap:wrap;margin-top:6px">
+      <input type="text" class="it-name-oid" value="${esc(item.name_oid || '')}" placeholder="Name OID (e.g. ifName)" style="flex:1;min-width:150px;font-family:monospace;font-size:11px"/>
+      <label style="display:flex;align-items:center;gap:5px;font-size:11px;color:var(--text2)">
+        <input type="checkbox" class="it-speed-auto"${item.speed_auto_threshold ? ' checked' : ''}/> speed auto-threshold</label>
+    </div>`;
+  box.appendChild(row);
+}
+
+function _snmpTplRowKind(sel) {
+  const extra = sel.closest('.snmptpl-item')?.querySelector('.it-table-extra');
+  if (extra) extra.style.display = sel.value === 'table' ? 'flex' : 'none';
+}
+
+function _snmpTplReadItems() {
+  const out = [];
+  document.querySelectorAll('#snmptpl-items .snmptpl-item').forEach(row => {
+    const kind = row.querySelector('.it-kind').value;
+    const label = row.querySelector('.it-label').value.trim();
+    const oid = row.querySelector('.it-oid').value.trim();
+    if (!label || !oid) return;  // skip blank rows
+    const num = el => { const v = el.value.trim(); return v === '' ? null : Number(v); };
+    const it = {
+      kind, label, oid,
+      unit: row.querySelector('.it-unit').value,
+      warn: num(row.querySelector('.it-warn')),
+      crit: num(row.querySelector('.it-crit')),
+      interval: num(row.querySelector('.it-interval')),
+    };
+    if (kind === 'table') {
+      const nOid = row.querySelector('.it-name-oid').value.trim();
+      if (nOid) it.name_oid = nOid;
+      it.speed_auto_threshold = row.querySelector('.it-speed-auto').checked;
+    }
+    out.push(it);
+  });
+  return out;
+}
+
+async function _snmpTplSave(id) {
+  const name = document.getElementById('snmptpl-name').value.trim();
+  const items = _snmpTplReadItems();
+  if (!name) { toast('Name is required', 'err'); return; }
+  if (!items.length) { toast('Add at least one item (label + OID)', 'err'); return; }
+  const payload = {
+    name,
+    vendor: document.getElementById('snmptpl-vendor').value.trim(),
+    description: document.getElementById('snmptpl-desc').value.trim(),
+    items,
+  };
+  const btn = document.getElementById('snmptpl-save-btn');
+  if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
+  try {
+    if (id) await api('PATCH', `/api/snmp/templates/${id}`, payload);
+    else    await api('POST', '/api/snmp/templates', payload);
+    closeM('snmptpl-editor');
+    await _snmpTplLoad();
+    toast('Template saved', 'ok');
+  } catch (e) {
+    if (btn) { btn.disabled = false; btn.textContent = 'Save Template'; }
+    toast(e.message || 'Save failed', 'err');
+  }
+}
+
+async function _snmpTplClone(id) {
+  const t = _snmpTplCache.find(x => x.id === id);
+  if (!t) return;
+  try {
+    await api('POST', '/api/snmp/templates', {
+      name: `Copy of ${t.name}`.slice(0, 120),
+      vendor: t.vendor, description: t.description, items: t.items || [],
+    });
+    await _snmpTplLoad();
+    toast('Template cloned', 'ok');
+  } catch (e) { toast(e.message || 'Clone failed', 'err'); }
+}
+
+async function _snmpTplDelete(id) {
+  const t = _snmpTplCache.find(x => x.id === id);
+  if (!t) return;
+  const isB = t.source === 'builtin';
+  const msg = isB
+    ? `Reset built-in template "${t.name}" to default? It will be restored on the next server restart.`
+    : `Delete template "${t.name}"?`;
+  if (!confirm(msg)) return;
+  try {
+    await api('DELETE', `/api/snmp/templates/${id}`);
+    await _snmpTplLoad();
+    toast(isB ? 'Template reset' : 'Template deleted', 'ok');
+  } catch (e) { toast(e.message || 'Delete failed', 'err'); }
+}
+
+// ── Scan Device → Build Template ─────────────────────────────────────
+// Probe a device against ALL known OIDs (catalog + templates) and save the
+// responders as a new template. Authoring aid — does not add sensors.
+let _snmpScanCands = [];
+
+function _snmpScanOpen() {
+  closeM('snmp-scan');
+  const devs = Object.values(S.devices || {}).sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+  const o = document.createElement('div');
+  o.className = 'mo'; o.id = 'snmp-scan';
+  _overlayClose(o, () => closeM('snmp-scan'));
+  o.innerHTML = `
+    <div class="mbox" style="width:min(96vw,780px);max-height:90vh;display:flex;flex-direction:column">
+      <div class="mhd"><div class="mttl">🔍 Scan Device → Build Template</div>
+        <button class="mclose" onclick="closeM('snmp-scan')">✕</button></div>
+      <div class="mbdy" style="flex:1;min-height:0;overflow-y:auto">
+        <div class="fh" style="margin-bottom:10px">Probe a device against every known OID (catalog + templates) and save the metrics it supports as a reusable template. No sensors are created here.</div>
+        <div class="fgrid" style="grid-template-columns:1fr 1fr">
+          <div class="fr"><label class="fl">Device</label>
+            <select id="scan-did" onchange="_snmpScanDeviceChange()">
+              <option value="">— pick a device —</option>
+              ${devs.map(d => `<option value="${esc(d.device_id)}">${esc(d.name || d.device_id)} (${esc(d.host || '')})</option>`).join('')}
+            </select></div>
+          <div class="fr"><label class="fl">Host / IP</label>
+            <input type="text" id="scan-host" placeholder="from device"/></div>
+        </div>
+        <div class="fgrid" style="grid-template-columns:1fr 1fr 1fr">
+          <div class="fr"><label class="fl">Community</label>
+            <input type="text" id="scan-comm" value="public"/></div>
+          <div class="fr"><label class="fl">Port</label>
+            <input type="number" id="scan-port" value="161"/></div>
+          <div class="fr"><label class="fl">Version</label>
+            <select id="scan-ver" onchange="_snmpScanV3Toggle()">
+              <option value="2c">v2c</option><option value="1">v1</option><option value="3">v3</option>
+            </select></div>
+        </div>
+        <div id="scan-v3" style="display:none">
+          <div class="fgrid" style="grid-template-columns:1fr 1fr">
+            <div class="fr"><label class="fl">v3 User</label><input type="text" id="scan-v3-user"/></div>
+            <div class="fr"><label class="fl">Level</label>
+              <select id="scan-v3-level"><option value="noAuthNoPriv">noAuthNoPriv</option><option value="authNoPriv">authNoPriv</option><option value="authPriv">authPriv</option></select></div>
+          </div>
+          <div class="fgrid" style="grid-template-columns:1fr 1fr">
+            <div class="fr"><label class="fl">Auth Proto</label>
+              <select id="scan-v3-auth-proto"><option value="">—</option><option>MD5</option><option>SHA</option><option>SHA-256</option><option>SHA-512</option></select></div>
+            <div class="fr"><label class="fl">Auth Pass</label><input type="password" id="scan-v3-auth-pass" placeholder="blank = device default"/></div>
+          </div>
+          <div class="fgrid" style="grid-template-columns:1fr 1fr">
+            <div class="fr"><label class="fl">Priv Proto</label>
+              <select id="scan-v3-priv-proto"><option value="">—</option><option>DES</option><option>AES</option><option>AES-256</option></select></div>
+            <div class="fr"><label class="fl">Priv Pass</label><input type="password" id="scan-v3-priv-pass" placeholder="blank = device default"/></div>
+          </div>
+        </div>
+        <div class="fr" style="margin-top:6px;display:flex;align-items:center;gap:8px">
+          <button class="btn-p" type="button" onclick="_snmpScanRun()" id="scan-run-btn">Scan</button>
+          <span id="scan-status" style="font-size:11px;color:var(--text3)"></span>
+        </div>
+        <div id="scan-results" style="margin-top:10px"></div>
+      </div>
+      <div class="mft" id="scan-foot" style="display:none;flex-wrap:wrap;gap:8px">
+        <input type="text" id="scan-tpl-name" placeholder="New template name" style="flex:1;min-width:160px" maxlength="120"/>
+        <input type="text" id="scan-tpl-vendor" placeholder="Vendor" style="width:150px" maxlength="80"/>
+        <button class="btn-s" onclick="closeM('snmp-scan')">Cancel</button>
+        <button class="btn-p" onclick="_snmpScanSave()" id="scan-save-btn">Save as Template</button>
+      </div>
+    </div>`;
+  document.body.appendChild(o);
+}
+
+function _snmpScanDeviceChange() {
+  const d = S.devices[document.getElementById('scan-did').value];
+  if (!d) return;
+  const set = (id, v) => { const el = document.getElementById(id); if (el && v != null && v !== '') el.value = v; };
+  set('scan-host', d.host || '');
+  set('scan-comm', d.snmp_community_default || 'public');
+  if (d.snmp_version_default) { set('scan-ver', d.snmp_version_default); _snmpScanV3Toggle(); }
+  const vend = document.getElementById('scan-tpl-vendor');
+  if (vend && !vend.value && d.vendor) vend.value = d.vendor;
+}
+
+function _snmpScanV3Toggle() {
+  const el = document.getElementById('scan-v3');
+  if (el) el.style.display = (document.getElementById('scan-ver')?.value === '3') ? '' : 'none';
+}
+
+async function _snmpScanRun() {
+  const host = document.getElementById('scan-host').value.trim();
+  if (!host) { toast('Pick a device or enter a host', 'err'); return; }
+  const body = {
+    did: document.getElementById('scan-did').value,
+    host,
+    community: document.getElementById('scan-comm').value.trim() || 'public',
+    port: parseInt(document.getElementById('scan-port').value) || 161,
+    version: document.getElementById('scan-ver').value || '2c',
+  };
+  if (body.version === '3') {
+    body.snmp_v3_user = document.getElementById('scan-v3-user').value.trim();
+    body.snmp_v3_level = document.getElementById('scan-v3-level').value;
+    body.snmp_v3_auth_proto = document.getElementById('scan-v3-auth-proto').value;
+    body.snmp_v3_priv_proto = document.getElementById('scan-v3-priv-proto').value;
+    const ap = document.getElementById('scan-v3-auth-pass').value;
+    const pp = document.getElementById('scan-v3-priv-pass').value;
+    if (ap) body.snmp_v3_auth_pass = ap;
+    if (pp) body.snmp_v3_priv_pass = pp;
+  }
+  const btn = document.getElementById('scan-run-btn');
+  const st = document.getElementById('scan-status');
+  if (btn) { btn.disabled = true; btn.textContent = 'Scanning…'; }
+  if (st) { st.style.color = 'var(--text3)'; st.textContent = 'Probing all known OIDs — this can take up to a minute…'; }
+  let r;
+  try { r = await api('POST', '/api/snmp/scan', body); }
+  catch (e) { if (st) { st.style.color = 'var(--down)'; st.textContent = e.message || 'Scan failed'; } return; }
+  finally { if (btn) { btn.disabled = false; btn.textContent = 'Scan'; } }
+  _snmpScanCands = r.candidates || [];
+  const via = r.via_probe ? ` · via probe ${r.via_probe}` : '';
+  const foot = document.getElementById('scan-foot');
+  if (!_snmpScanCands.length) {
+    if (st) st.textContent = 'No known OIDs responded on this device.' + via;
+    if (foot) foot.style.display = 'none';
+    document.getElementById('scan-results').innerHTML = '';
+    return;
+  }
+  if (st) st.textContent = `${_snmpScanCands.length} metrics responded` + via;
+  _snmpScanRender();
+}
+
+function _snmpScanRender() {
+  const wrap = document.getElementById('scan-results');
+  const groups = {};
+  _snmpScanCands.forEach((c, i) => { const g = c.group || 'Other'; (groups[g] = groups[g] || []).push(i); });
+  let html = '<div style="border:1px solid var(--border);border-radius:6px;max-height:42vh;overflow:auto">';
+  html += '<div style="padding:6px 8px;background:var(--bg2);border-bottom:1px solid var(--border);display:flex;gap:10px;align-items:center;position:sticky;top:0">';
+  html += '<label style="display:flex;gap:6px;align-items:center;font-size:11px;cursor:pointer"><input type="checkbox" id="scan-all" onchange="_snmpScanToggleAll(this)"> Select all</label>';
+  html += '<span id="scan-count" style="font-size:11px;color:var(--text3)">0 selected</span></div>';
+  Object.keys(groups).sort().forEach(g => {
+    html += `<div style="padding:5px 8px;background:var(--bg3);font-size:11px;font-weight:600;color:var(--text2)">${esc(g)} <span style="color:var(--text3)">(${groups[g].length})</span></div>`;
+    groups[g].forEach(i => {
+      const c = _snmpScanCands[i];
+      const val = c.kind === 'scalar' ? String(c.value || '').slice(0, 40) : '';
+      html += `<label style="display:flex;gap:8px;align-items:center;padding:4px 10px;border-top:1px solid var(--border);font-size:11px;cursor:pointer">
+        <input type="checkbox" class="scan-cb" data-i="${i}" onchange="_snmpScanCbCount()">
+        <span style="flex:1">${esc(c.suggested_name || c.item_label || '')}</span>
+        <span style="color:var(--text3);font-family:monospace;font-size:10px">${esc(c.oid || '')}</span>
+        <span style="color:var(--text2);min-width:56px;text-align:right">${esc(val)}</span>
+        <span style="color:var(--text3);min-width:46px">${esc(c.unit || '')}</span>
+      </label>`;
+    });
+  });
+  html += '</div>';
+  wrap.innerHTML = html;
+  document.getElementById('scan-foot').style.display = '';
+  _snmpScanCbCount();
+}
+
+function _snmpScanToggleAll(cb) {
+  document.querySelectorAll('.scan-cb').forEach(c => c.checked = cb.checked);
+  _snmpScanCbCount();
+}
+
+function _snmpScanCbCount() {
+  const cbs = [...document.querySelectorAll('.scan-cb')];
+  const n = cbs.filter(c => c.checked).length;
+  const el = document.getElementById('scan-count');
+  if (el) el.textContent = `${n} selected`;
+  const all = document.getElementById('scan-all');
+  if (all) { all.indeterminate = (n > 0 && n < cbs.length); all.checked = (cbs.length > 0 && n === cbs.length); }
+}
+
+async function _snmpScanSave() {
+  const name = document.getElementById('scan-tpl-name').value.trim();
+  if (!name) { toast('Enter a template name', 'err'); return; }
+  const sel = [...document.querySelectorAll('.scan-cb:checked')]
+    .map(cb => _snmpScanCands[parseInt(cb.dataset.i)]).filter(Boolean);
+  if (!sel.length) { toast('Select at least one metric', 'err'); return; }
+  // Collapse table candidates (per-index rows) back to their base table item;
+  // dedup scalars by OID. Keeps the saved template device-agnostic.
+  const seen = new Set(), items = [];
+  sel.forEach(c => {
+    if (c.kind === 'table') {
+      const base = (c.oid || '').replace(/\.\d+$/, '.');
+      const key = 't|' + (c.item_label || '') + '|' + base;
+      if (seen.has(key)) return; seen.add(key);
+      items.push({ kind: 'table', label: c.item_label || base, oid: base,
+                   unit: c.unit || '', speed_auto_threshold: !!c.speed_auto_threshold });
+    } else {
+      if (seen.has('s|' + c.oid)) return; seen.add('s|' + c.oid);
+      items.push({ kind: 'scalar', label: c.item_label || c.oid, oid: c.oid, unit: c.unit || '' });
+    }
+  });
+  const btn = document.getElementById('scan-save-btn');
+  if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
+  try {
+    await api('POST', '/api/snmp/templates', {
+      name, vendor: document.getElementById('scan-tpl-vendor').value.trim(),
+      description: 'Built from device scan', items,
+    });
+    closeM('snmp-scan');
+    _snmpTplLoad();
+    toast(`Template "${name}" saved with ${items.length} item${items.length > 1 ? 's' : ''}`, 'ok');
+  } catch (e) {
+    if (btn) { btn.disabled = false; btn.textContent = 'Save as Template'; }
+    toast(e.message || 'Save failed', 'err');
+  }
+}
+
 function _buildSettingsTab_sensors(sr) {
   const _scanActive = new Set(
     String(sr.scan_ports || 'ping,21,22,25,53,80,443,3389,3306,5432,6379,27017,389,8080,8443')
@@ -2070,6 +2501,7 @@ async function openSettings(initialTab){
       <button class="stab-nav rbac-admin" id="stab-btn-apitokens" onclick="switchSettingsTab('apitokens')">${icon('shield',13)} API Tokens</button>
       <div class="stab-section">Monitoring</div>
       <button class="stab-nav" id="stab-btn-sensors" onclick="switchSettingsTab('sensors')">${icon('activity',13)} Sensors</button>
+      <button class="stab-nav" id="stab-btn-snmp-templates" onclick="switchSettingsTab('snmp-templates')">${icon('cpu',13)} SNMP Templates</button>
       <button class="stab-nav" id="stab-btn-auto-discovery" onclick="switchSettingsTab('auto-discovery')">${icon('zoom',13)} Auto-Discovery</button>
       <button class="stab-nav" id="stab-btn-reports" onclick="switchSettingsTab('reports')">${icon('reports',13)} Reports</button>
       <button class="stab-nav" id="stab-btn-backup" onclick="switchSettingsTab('backup')">${icon('download',13)} Config Backup</button>
@@ -2086,6 +2518,7 @@ async function openSettings(initialTab){
     ${_buildSettingsTab_database(sr)}
     ${_buildSettingsTab_reports(sr)}
     ${_buildSettingsTab_sensors(sr)}
+    ${_buildSettingsTab_snmpTemplates()}
     ${_buildSettingsTab_networking(sr, tr)}
     ${_buildSettingsTab_certificates(sr, tr)}
     ${_buildSettingsTab_backup(sr)}
@@ -2129,6 +2562,11 @@ async function openSettings(initialTab){
       <button class="btn-s" onclick="resetSensorTypeDefaults()">Reset to Defaults</button>
       <button class="btn-p" onclick="saveSensorTypeDefaults()">Save Sensor Defaults</button>
     </div>
+    <div class="mft" id="stab-footer-snmp-templates" style="display:none">
+      <button class="btn-s" onclick="closeM('mset')">Close</button>
+      <button class="btn-s" onclick="_snmpScanOpen()">🔍 Scan Device</button>
+      <button class="btn-p" onclick="_snmpTplOpenEditor(null)">＋ New Template</button>
+    </div>
     <div class="mft" id="stab-footer-networking" style="display:none">
       <button class="btn-s" onclick="closeM('mset')">Close</button>
       <button class="btn-p" onclick="saveNetworkingSettings()">Save Networking</button>
@@ -2163,7 +2601,7 @@ async function openSettings(initialTab){
 let _stabSwitching = false;
 function switchSettingsTab(tab){
   if (_stabSwitching) return;
-  const tabs = ['general','retention','users','groups','apitokens','integrations','database','reports','sensors','networking','certificates','backup','auto-discovery','diagnostics','upgrade'];
+  const tabs = ['general','retention','users','groups','apitokens','integrations','database','reports','sensors','snmp-templates','networking','certificates','backup','auto-discovery','diagnostics','upgrade'];
 
   // Find currently visible tab
   let cur = null;
@@ -2198,6 +2636,7 @@ function switchSettingsTab(tab){
           setTimeout(() => {
             _stabSwitching = false;
             if (tab === 'sensors')        loadSensorsDefaultsTab();
+            if (tab === 'snmp-templates') _snmpTplLoad();
             if (tab === 'backup')         _loadBackupScheduleSettings();
             if (tab === 'database')       _loadDbBackupSettings();
             if (tab === 'groups')         _groupsLoad();

@@ -879,6 +879,27 @@ def pg_create_main_schema(cur):
         "ON trusted_devices(expires_at)"
     )
 
+    # ── SNMP sensor templates (per-vendor OID bundles) ──────────────
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS snmp_sensor_templates (
+            id          TEXT PRIMARY KEY,
+            name        TEXT NOT NULL,
+            vendor      TEXT NOT NULL DEFAULT '',
+            description TEXT DEFAULT '',
+            items_json  TEXT NOT NULL DEFAULT '[]',
+            source      TEXT NOT NULL DEFAULT 'user',
+            builtin_key TEXT DEFAULT '',
+            enabled     INTEGER DEFAULT 1,
+            created_by  TEXT DEFAULT '',
+            created_at  DOUBLE PRECISION DEFAULT 0,
+            updated_at  DOUBLE PRECISION DEFAULT 0
+        )""")
+    # Idempotent-reseed key (built-ins only; user rows have empty key).
+    cur.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS ix_snmptpl_builtin "
+        "ON snmp_sensor_templates(builtin_key) WHERE builtin_key <> ''"
+    )
+
     # ── Reports: templates, schedules, generated history ────────────
     cur.execute("""
         CREATE TABLE IF NOT EXISTS report_templates (

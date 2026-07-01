@@ -63,6 +63,222 @@ def _get_flap_sensor(flap_id):
         return None
 
 
+# ── SNMP sensor template validation/cleaning ─────────────────────────
+_SNMP_TPL_KINDS = ("scalar", "table")
+
+
+def _is_oid(s: str) -> bool:
+    """Loose OID check: digits + dots, starts with a digit. Table item bases
+    may carry a trailing dot (index appended at discovery time)."""
+    s = (s or "").strip()
+    if not s or s[0] not in "0123456789":
+        return False
+    return all(c in "0123456789." for c in s)
+
+
+def _clean_num(v):
+    """Return a number or None (blank item threshold/interval → default)."""
+    if v is None or v == "":
+        return None
+    try:
+        return float(v) if "." in str(v) else int(v)
+    except (TypeError, ValueError):
+        return None
+
+
+def _snmp_tpl_clean_items(raw) -> list:
+    """Sanitize the items list. Drops malformed items rather than failing the
+    whole save — the validator has already rejected an empty/entirely-invalid
+    list."""
+    out = []
+    if not isinstance(raw, list):
+        return out
+    for it in raw[:500]:
+        if not isinstance(it, dict):
+            continue
+        kind = str(it.get("kind") or "scalar").strip().lower()
+        if kind not in _SNMP_TPL_KINDS:
+            continue
+        oid = str(it.get("oid") or "").strip()
+        label = str(it.get("label") or "").strip()[:120]
+        if not label or not _is_oid(oid):
+            continue
+        item = {
+            "kind": kind,
+            "label": label,
+            "oid": oid[:255],
+            "unit": str(it.get("unit") or "").strip()[:64],
+            "warn": _clean_num(it.get("warn")),
+            "crit": _clean_num(it.get("crit")),
+            "interval": _clean_num(it.get("interval")),
+        }
+        if kind == "table":
+            for k in ("name_oid", "name_oid2", "speed_oid", "hc_variant_oid"):
+                v = str(it.get(k) or "").strip()
+                if v:
+                    item[k] = v[:255]
+            item["speed_auto_threshold"] = bool(it.get("speed_auto_threshold"))
+        out.append(item)
+    return out
+
+
+def _snmp_tpl_validate(body: dict) -> str:
+    """Return an error string, or "" if the payload is a valid template."""
+    name = str(body.get("name") or "").strip()
+    if not name:
+        return "name is required"
+    if len(name) > 120:
+        return "name too long (max 120)"
+    items = _snmp_tpl_clean_items(body.get("items"))
+    if not items:
+        return "at least one valid item (label + OID) is required"
+    return ""
+
+
+def _snmp_tpl_clean(body: dict) -> dict:
+    return {
+        "name":        str(body.get("name") or "").strip()[:120],
+        "vendor":      str(body.get("vendor") or "").strip()[:80],
+        "description": str(body.get("description") or "").strip()[:500],
+        "items":       _snmp_tpl_clean_items(body.get("items")),
+        "enabled":     bool(body.get("enabled", True)),
+    }
+
+
+def _snmp_tpl_audit(h, user, action, detail):
+    try:
+        from db import db_log_audit
+        db_log_audit(user, h.client_address[0], action, str(detail)[:200])
+    except Exception:
+        pass
+
+
+# ── Shared SNMP discovery plumbing (interfaces + template discover + scan) ──
+
+def _snmp_v3_creds(body, dev):
+    """Build the v3 creds dict from request fields, falling back to the device's
+    stored defaults for any blank field. Returns (creds, err)."""
+    _V3_LEVELS = {"noAuthNoPriv", "authNoPriv", "authPriv"}
+    _V3_AUTH   = {"", "MD5", "SHA", "SHA-224", "SHA-256", "SHA-384", "SHA-512"}
+    _V3_PRIV   = {"", "DES", "AES", "AES-192", "AES-256"}
+    level = (body.get("snmp_v3_level") or "noAuthNoPriv").strip()
+    if level not in _V3_LEVELS:
+        return None, "invalid snmp_v3_level"
+    aproto = (body.get("snmp_v3_auth_proto") or "").strip()
+    if aproto not in _V3_AUTH:
+        return None, "invalid snmp_v3_auth_proto"
+    pproto = (body.get("snmp_v3_priv_proto") or "").strip()
+    if pproto not in _V3_PRIV:
+        return None, "invalid snmp_v3_priv_proto"
+    apw = body.get("snmp_v3_auth_pass") or ""
+    ppw = body.get("snmp_v3_priv_pass") or ""
+    from db.backups import decrypt_pw
+    g = lambda a: (getattr(dev, a, "") if dev else "")
+    return {
+        "user":       (body.get("snmp_v3_user") or "").strip() or g("snmp_v3_user_default"),
+        "level":      level,
+        "auth_proto": aproto or g("snmp_v3_auth_proto_default"),
+        "auth_pass":  apw if apw else (decrypt_pw(g("snmp_v3_auth_pass_default")) if dev else ""),
+        "priv_proto": pproto or g("snmp_v3_priv_proto_default"),
+        "priv_pass":  ppw if ppw else (decrypt_pw(g("snmp_v3_priv_pass_default")) if dev else ""),
+        "context":    (body.get("snmp_v3_context") or "").strip() or g("snmp_v3_context_default"),
+    }, None
+
+
+def _snmp_conn_params(body):
+    """Parse + validate host/community/port/version/v3_creds from a discovery
+    request. Resolves the device (by `did`) for probe routing + v3 defaults.
+    Returns (params, err) — err is a user-facing string or None."""
+    host = (body.get("host") or "").strip()
+    comm = (body.get("community") or "public").strip()
+    try:
+        port = int(body.get("port") or 161)
+    except (TypeError, ValueError):
+        return None, "port must be an integer"
+    ver = (body.get("version") or "2c").strip()
+    if not host:
+        return None, "host required"
+    if not (1 <= port <= 65535):
+        return None, "port must be 1-65535"
+    if ver not in ("1", "2c", "3"):
+        return None, "version must be 1, 2c, or 3"
+    did = (body.get("did") or "").strip()
+    dev = None
+    if did:
+        from core.app_state import STATE
+        dev = STATE.devices.get(did) if STATE else None
+    v3 = None
+    if ver == "3":
+        v3, verr = _snmp_v3_creds(body, dev)
+        if verr:
+            return None, verr
+    return {"host": host, "community": comm, "port": port, "version": ver,
+            "v3_creds": v3, "device": dev, "did": did}, None
+
+
+def _snmp_all_known_items():
+    """Aggregate every known SNMP item for the device-scan flow: all templates'
+    items (built-in + user) ∪ the SNMP_CATALOG scalars, deduped by OID and tagged
+    with a vendor `group` for grouped display. Deduping matters — many templates
+    share sysUpTime / ifTable bases, and probing each once keeps the scan cheap."""
+    seen = set()
+    items = []
+    try:
+        from db import db_list_snmp_templates
+        for tpl in db_list_snmp_templates():
+            grp = tpl.get("vendor") or tpl.get("name") or ""
+            for it in (tpl.get("items") or []):
+                oid = (it.get("oid") or "").strip()
+                if not oid or oid in seen:
+                    continue
+                seen.add(oid)
+                d = dict(it)
+                d["group"] = grp
+                items.append(d)
+    except Exception as e:
+        log.error(f"snmp scan aggregate (templates): {e}")
+    try:
+        from snmp.catalog import SNMP_CATALOG
+        for group in SNMP_CATALOG:
+            grp = group.get("vendor") or ""
+            for e in (group.get("oids") or []):
+                oid = (e.get("oid") or "").strip()
+                if not oid or oid in seen:
+                    continue
+                seen.add(oid)
+                items.append({"kind": "scalar", "label": e.get("label") or oid,
+                              "oid": oid, "unit": e.get("unit") or "", "group": grp})
+    except Exception as e:
+        log.error(f"snmp scan aggregate (catalog): {e}")
+    return items
+
+
+def _snmp_route(params):
+    """Decide where a discovery walk runs for the resolved device. Discovery on
+    a probe-bound device MUST run on the probe (central usually can't reach it),
+    never falling back to a local walk. Returns one of:
+        ("local", None)          — run on central
+        ("probe", probe_dict)    — run on the device's enrolled probe
+        ("error", (status, msg)) — probe unusable; caller returns the error."""
+    dev = params.get("device")
+    if not dev:
+        return ("local", None)
+    from core.probe_assign import effective_probe
+    pid = effective_probe(dev)
+    if not pid:
+        return ("local", None)
+    from db.probes import db_get_probe
+    probe = db_get_probe(pid)
+    pname = (probe or {}).get("name") or pid
+    if not probe or probe.get("status") != "enrolled":
+        return ("error", (409, f"Probe '{pname}' is not enrolled — "
+                          "this device can only be discovered from there"))
+    if time.time() - float(probe.get("last_seen") or 0) > 35:
+        return ("error", (503, f"Probe '{pname}' is offline — "
+                          "this device can only be discovered from there"))
+    return ("probe", probe)
+
+
 def handle(h, method, path, body):
     """Return True if this module handled the request, False otherwise."""
     STATE = app_state.STATE
@@ -316,100 +532,153 @@ def handle(h, method, path, body):
         h._json(200, {"catalog": SNMP_CATALOG})
         return True
 
+    # ── /api/snmp/templates — SNMP sensor template CRUD ───────────
+    # GET: list (viewer — feeds the Add Sensor picker + Settings tab).
+    # POST/PATCH/DELETE: admin (config management).
+    if path == "/api/snmp/templates" and method == "GET":
+        user, _ = h._require("viewer")
+        if not user: return True
+        from db import db_list_snmp_templates
+        h._json(200, {"templates": db_list_snmp_templates()})
+        return True
+
+    if path == "/api/snmp/templates" and method == "POST":
+        user, _ = h._require("admin")
+        if not user: return True
+        err = _snmp_tpl_validate(body)
+        if err:
+            h._json(400, {"error": err}); return True
+        from db import db_create_snmp_template, db_get_snmp_template
+        tid = db_create_snmp_template(_snmp_tpl_clean(body), created_by=user)
+        if not tid:
+            h._json(500, {"error": "failed to create template"}); return True
+        _snmp_tpl_audit(h, user, "snmp_template_create", body.get("name", ""))
+        h._json(201, {"id": tid, "template": db_get_snmp_template(tid)})
+        return True
+
+    if path.startswith("/api/snmp/templates/") and method in ("PATCH", "DELETE"):
+        tid = path[len("/api/snmp/templates/"):]
+        if not tid or "/" in tid:
+            h._json(404, {"error": "not found"}); return True
+        user, _ = h._require("admin")
+        if not user: return True
+        from db import (db_get_snmp_template, db_update_snmp_template,
+                        db_delete_snmp_template)
+        existing = db_get_snmp_template(tid)
+        if not existing:
+            h._json(404, {"error": "template not found"}); return True
+        if method == "DELETE":
+            db_delete_snmp_template(tid)
+            _snmp_tpl_audit(h, user, "snmp_template_delete", existing.get("name", ""))
+            h._json(200, {"ok": True}); return True
+        err = _snmp_tpl_validate(body)
+        if err:
+            h._json(400, {"error": err}); return True
+        if not db_update_snmp_template(tid, _snmp_tpl_clean(body)):
+            h._json(500, {"error": "failed to update template"}); return True
+        _snmp_tpl_audit(h, user, "snmp_template_update", body.get("name", ""))
+        h._json(200, {"template": db_get_snmp_template(tid)}); return True
+
     # ── /api/snmp/interfaces POST ─────────────────────────────────
+    # Discover a device's interfaces. Routes to the device's remote probe when
+    # it's probe-bound (central usually can't reach a branch device).
     if path == "/api/snmp/interfaces" and method == "POST":
         user, _ = h._require("operator")
         if not user: return True
+        params, perr = _snmp_conn_params(body)
+        if perr:
+            h._json(400, {"error": perr}); return True
+        mode, val = _snmp_route(params)
+        if mode == "error":
+            h._json(val[0], {"error": val[1]}); return True
+        if mode == "probe":
+            from routes.agent import run_remote_snmp_interfaces
+            _ifaces, _err = run_remote_snmp_interfaces(
+                val, params["host"], params["community"], params["port"],
+                params["version"], params["v3_creds"], user)
+            if _ifaces is None:
+                h._json(502, {"error": _err or "remote discovery failed"}); return True
+            h._json(200, {"interfaces": _ifaces, "via_probe": val["name"]}); return True
         from monitoring.probes import snmpwalk_interfaces
-        _host = (body.get("host")      or "").strip()
-        _comm = (body.get("community") or "public").strip()
-        try:
-            _port = int(body.get("port") or 161)
-        except (TypeError, ValueError):
-            h._json(400, {"error": "port must be an integer"}); return True
-        _ver  = (body.get("version")   or "2c").strip()
-        if not _host:
-            h._json(400, {"error": "host required"}); return True
-        if not (1 <= _port <= 65535):
-            h._json(400, {"error": "port must be 1-65535"}); return True
-        if _ver not in ("1", "2c", "3"):
-            h._json(400, {"error": "version must be 1, 2c, or 3"}); return True
-        # v3 credentials — accept either live form values (all fields) OR
-        # partial input that falls back to the device default when the caller
-        # supplied a device id.  Backend validates with the same whitelist
-        # used at probe time.
-        _v3_creds = None
-        if _ver == "3":
-            _V3_LEVELS = {"noAuthNoPriv", "authNoPriv", "authPriv"}
-            _V3_AUTH   = {"", "MD5", "SHA", "SHA-224", "SHA-256", "SHA-384", "SHA-512"}
-            _V3_PRIV   = {"", "DES", "AES", "AES-192", "AES-256"}
-            _v3_level = (body.get("snmp_v3_level") or "noAuthNoPriv").strip()
-            if _v3_level not in _V3_LEVELS:
-                h._json(400, {"error": "invalid snmp_v3_level"}); return True
-            _v3_aproto = (body.get("snmp_v3_auth_proto") or "").strip()
-            if _v3_aproto not in _V3_AUTH:
-                h._json(400, {"error": "invalid snmp_v3_auth_proto"}); return True
-            _v3_pproto = (body.get("snmp_v3_priv_proto") or "").strip()
-            if _v3_pproto not in _V3_PRIV:
-                h._json(400, {"error": "invalid snmp_v3_priv_proto"}); return True
-            # Fall back to a device-level default when caller passes did +
-            # leaves the passphrase blank (user hit Discover before filling
-            # auth fields — reuse the stored device default).
-            _did = (body.get("did") or "").strip()
-            _dev = None
-            if _did:
-                from core.app_state import STATE
-                _dev = STATE.devices.get(_did) if STATE else None
-            _pick = lambda v, attr: v or (getattr(_dev, attr, "") if _dev else "")
-            _apw  = body.get("snmp_v3_auth_pass") or ""
-            _ppw  = body.get("snmp_v3_priv_pass") or ""
-            from db.backups import decrypt_pw
-            _v3_creds = {
-                "user":       _pick((body.get("snmp_v3_user") or "").strip(), "snmp_v3_user_default"),
-                "level":      _v3_level,
-                "auth_proto": _v3_aproto or (getattr(_dev, "snmp_v3_auth_proto_default", "") if _dev else ""),
-                "auth_pass":  _apw if _apw else (decrypt_pw(getattr(_dev, "snmp_v3_auth_pass_default", "")) if _dev else ""),
-                "priv_proto": _v3_pproto or (getattr(_dev, "snmp_v3_priv_proto_default", "") if _dev else ""),
-                "priv_pass":  _ppw if _ppw else (decrypt_pw(getattr(_dev, "snmp_v3_priv_pass_default", "")) if _dev else ""),
-                "context":    (body.get("snmp_v3_context") or "").strip() or (getattr(_dev, "snmp_v3_context_default", "") if _dev else ""),
-            }
-        # Distributed probes: if this device is measured from a remote probe,
-        # the SNMP walk must run THERE — central usually can't reach a branch
-        # device, and discovery traffic should egress from the probe, not
-        # central. Never silently fall back to a local walk (that's the bug
-        # this guards against); surface a clear error if the probe is down.
-        _did = (body.get("did") or "").strip()
-        if _did:
-            from core.app_state import STATE as _STATE
-            _dev = _STATE.devices.get(_did) if _STATE else None
-            if _dev:
-                from core.probe_assign import effective_probe
-                _pid = effective_probe(_dev)
-                if _pid:
-                    from db.probes import db_get_probe
-                    _probe = db_get_probe(_pid)
-                    _pname = (_probe or {}).get("name") or _pid
-                    if not _probe or _probe.get("status") != "enrolled":
-                        h._json(409, {"error": f"Probe '{_pname}' is not enrolled — "
-                                      "this device can only be discovered from there"})
-                        return True
-                    if time.time() - float(_probe.get("last_seen") or 0) > 35:
-                        h._json(503, {"error": f"Probe '{_pname}' is offline — "
-                                      "this device can only be discovered from there"})
-                        return True
-                    from routes.agent import run_remote_snmp_interfaces
-                    _ifaces, _err = run_remote_snmp_interfaces(
-                        _probe, _host, _comm, _port, _ver, _v3_creds, user)
-                    if _ifaces is None:
-                        h._json(502, {"error": _err or "remote discovery failed"})
-                        return True
-                    h._json(200, {"interfaces": _ifaces, "via_probe": _probe["name"]})
-                    return True
-
-        _ifaces = snmpwalk_interfaces(_host, _comm, _port, timeout=10, version=_ver, v3_creds=_v3_creds)
+        _ifaces = snmpwalk_interfaces(params["host"], params["community"],
+                                      params["port"], timeout=10,
+                                      version=params["version"], v3_creds=params["v3_creds"])
         if _ifaces is None:
             h._json(503, {"error": "snmpwalk not found — install net-snmp"}); return True
         h._json(200, {"interfaces": _ifaces})
+        return True
+
+    # ── /api/snmp/discover POST — discover a device against a template ─
+    # Body: {template_id, host, community, port, version, did, snmp_v3_*}.
+    # Returns only the template metrics that responded, as candidate rows.
+    if path == "/api/snmp/discover" and method == "POST":
+        user, _ = h._require("operator")
+        if not user: return True
+        tpl_id = (body.get("template_id") or "").strip()
+        if not tpl_id:
+            h._json(400, {"error": "template_id required"}); return True
+        from db import db_get_snmp_template
+        tpl = db_get_snmp_template(tpl_id)
+        if not tpl:
+            h._json(404, {"error": "template not found"}); return True
+        items = tpl.get("items") or []
+        if not items:
+            h._json(400, {"error": "template has no items"}); return True
+        params, perr = _snmp_conn_params(body)
+        if perr:
+            h._json(400, {"error": perr}); return True
+        mode, val = _snmp_route(params)
+        if mode == "error":
+            h._json(val[0], {"error": val[1]}); return True
+        if mode == "probe":
+            from routes.agent import run_remote_snmp_discover
+            cands, _err = run_remote_snmp_discover(
+                val, params["host"], items, params["community"], params["port"],
+                params["version"], params["v3_creds"], user)
+            if cands is None:
+                h._json(502, {"error": _err or "remote discovery failed"}); return True
+            h._json(200, {"candidates": cands, "via_probe": val["name"]}); return True
+        from monitoring.probes import snmp_discover_template
+        cands = snmp_discover_template(params["host"], items, params["community"],
+                                       params["port"], timeout=10,
+                                       version=params["version"], v3_creds=params["v3_creds"])
+        if cands is None:
+            h._json(503, {"error": "snmpwalk not found — install net-snmp"}); return True
+        h._json(200, {"candidates": cands})
+        return True
+
+    # ── /api/snmp/scan POST — probe a device against ALL known OIDs ────
+    # Authoring aid: discovers every catalog/template metric the device supports
+    # so the user can save the responders as a new template. Uses a short per-OID
+    # timeout + higher waiter budget since the item set is large.
+    if path == "/api/snmp/scan" and method == "POST":
+        user, _ = h._require("admin")   # authoring tool → admin, like template CRUD
+        if not user: return True
+        params, perr = _snmp_conn_params(body)
+        if perr:
+            h._json(400, {"error": perr}); return True
+        items = _snmp_all_known_items()
+        if not items:
+            h._json(200, {"candidates": []}); return True
+        mode, val = _snmp_route(params)
+        if mode == "error":
+            h._json(val[0], {"error": val[1]}); return True
+        if mode == "probe":
+            from routes.agent import run_remote_snmp_discover
+            cands, _err = run_remote_snmp_discover(
+                val, params["host"], items, params["community"], params["port"],
+                params["version"], params["v3_creds"], user,
+                timeout=50.0, op_timeout=3)
+            if cands is None:
+                h._json(502, {"error": _err or "remote scan failed"}); return True
+            h._json(200, {"candidates": cands, "via_probe": val["name"]}); return True
+        from monitoring.probes import snmp_discover_template
+        cands = snmp_discover_template(params["host"], items, params["community"],
+                                       params["port"], timeout=3,
+                                       version=params["version"], v3_creds=params["v3_creds"])
+        if cands is None:
+            h._json(503, {"error": "snmpwalk not found — install net-snmp"}); return True
+        h._json(200, {"candidates": cands})
         return True
 
     # ── /api/snmp/reenrich POST (admin) ───────────────────────────

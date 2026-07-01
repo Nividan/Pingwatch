@@ -504,6 +504,52 @@ def probe_snmp(host, community, oid, port=161, timeout=5, version="2c", v3_creds
         return {"ok": False, "ms": None, "detail": str(e)[:80]}
 
 
+def _snmpwalk_indexed(auth_args, target, base_oid, timeout):
+    """Run `snmpwalk -O nq` (numeric OIDs, quick/no type) on one subtree and
+    return {last-index-int: value:str}. Returns None if the snmpwalk binary is
+    missing, {} on timeout / no rows. Shared by snmpwalk_interfaces and
+    snmpwalk_oid so both walk identically."""
+    kw = {"creationflags": subprocess.CREATE_NO_WINDOW} if SYS == "Windows" else {}
+    cmd = ["snmpwalk", *auth_args,
+           "-t", str(timeout), "-r", "1",
+           "-O", "nq",    # numeric OIDs + quick (no type prefix)
+           target, base_oid]
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True,
+                           timeout=timeout + 5, **kw)
+    except FileNotFoundError:
+        return None          # snmpwalk not installed
+    except subprocess.TimeoutExpired:
+        return {}
+    result = {}
+    for line in r.stdout.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        parts = line.split(None, 1)
+        if len(parts) != 2:
+            continue
+        oid_str, val = parts
+        try:
+            idx = int(oid_str.rstrip(".").rsplit(".", 1)[-1])
+            result[idx] = val.strip().strip('"')
+        except (ValueError, IndexError):
+            pass
+    return result
+
+
+def snmpwalk_oid(host, base_oid, community="public", port=161, timeout=8,
+                 version="2c", v3_creds=None):
+    """Walk an arbitrary OID subtree → {index:int -> value:str}. Returns None if
+    the snmpwalk binary is missing or the SNMP auth is invalid. Generic building
+    block for template/table discovery (generalizes snmpwalk_interfaces)."""
+    auth_args, auth_err = _snmp_auth_args(community, version, v3_creds)
+    if auth_err:
+        log_sensors.warning("snmpwalk_oid %s: %s", host, auth_err)
+        return None
+    return _snmpwalk_indexed(auth_args, f"{host}:{port}", base_oid, timeout)
+
+
 def snmpwalk_interfaces(host, community="public", port=161, timeout=8, version="2c", v3_creds=None):
     """
     Walk the ifTable and ifXTable on a live device to discover its interfaces.
@@ -514,37 +560,10 @@ def snmpwalk_interfaces(host, community="public", port=161, timeout=8, version="
     if auth_err:
         log_sensors.warning("snmpwalk_interfaces %s: %s", host, auth_err)
         return []
-    kw = {"creationflags": subprocess.CREATE_NO_WINDOW} if SYS == "Windows" else {}
     target = f"{host}:{port}"
 
     def _walk(base_oid):
-        """Run snmpwalk -OnQ (numeric OIDs, quick/no type) and return {index: value}."""
-        cmd = ["snmpwalk", *auth_args,
-               "-t", str(timeout), "-r", "1",
-               "-O", "nq",    # numeric OIDs + quick (no type prefix)
-               target, base_oid]
-        try:
-            r = subprocess.run(cmd, capture_output=True, text=True,
-                               timeout=timeout + 5, **kw)
-        except FileNotFoundError:
-            return None          # snmpwalk not installed
-        except subprocess.TimeoutExpired:
-            return {}
-        result = {}
-        for line in r.stdout.splitlines():
-            line = line.strip()
-            if not line:
-                continue
-            parts = line.split(None, 1)
-            if len(parts) != 2:
-                continue
-            oid_str, val = parts
-            try:
-                idx = int(oid_str.rstrip(".").rsplit(".", 1)[-1])
-                result[idx] = val.strip().strip('"')
-            except (ValueError, IndexError):
-                pass
-        return result
+        return _snmpwalk_indexed(auth_args, target, base_oid, timeout)
 
     # Walk the five tables we care about
     descrs   = _walk("1.3.6.1.2.1.2.2.1.2")      # ifDescr
@@ -595,6 +614,98 @@ def snmpwalk_interfaces(host, community="public", port=161, timeout=8, version="
         })
 
     return interfaces
+
+
+def snmp_discover_template(host, items, community="public", port=161, timeout=8,
+                           version="2c", v3_creds=None):
+    """Probe a device against a template's items; return candidate rows for only
+    the metrics that responded.
+
+    Scalars → one concurrent snmpget each (kept if ok). Tables → walk the item's
+    base OID once, resolve each row's name from name_oid/name_oid2 (walked once
+    and cached), and emit one candidate per responding index. Returns None if the
+    snmpwalk binary is missing (so the caller can tell "install net-snmp" apart
+    from "device exposes nothing"). Total candidates are capped at 4096 to keep
+    the result inside a single sync-waiter chunk.
+    """
+    from concurrent.futures import ThreadPoolExecutor
+    _CAP = 4096
+    items = items or []
+    scalars = [it for it in items if (it.get("kind") or "scalar") == "scalar"]
+    tables  = [it for it in items if it.get("kind") == "table"]
+    candidates = []
+
+    # ── Scalars — concurrent snmpget, keep responders ──
+    def _do_scalar(it):
+        oid = (it.get("oid") or "").strip()
+        if not oid:
+            return None
+        r = probe_snmp(host, community, oid, port=port, timeout=timeout,
+                       version=version, v3_creds=v3_creds)
+        if not r.get("ok"):
+            return None
+        label = it.get("label") or oid
+        return {"kind": "scalar", "item_label": label, "oid": oid,
+                "unit": it.get("unit") or "", "value": r.get("value"),
+                "snmp_type": r.get("snmp_type") or "",
+                "warn": it.get("warn"), "crit": it.get("crit"),
+                "interval": it.get("interval"), "suggested_name": label,
+                "group": it.get("group") or ""}
+    if scalars:
+        with ThreadPoolExecutor(max_workers=min(16, len(scalars))) as ex:
+            for c in ex.map(_do_scalar, scalars):
+                if c:
+                    candidates.append(c)
+
+    # ── Tables — walk each base once; resolve names via cached name walks ──
+    _name_cache = {}   # oid -> {index: value}
+
+    def _walk_cached(oid):
+        oid = (oid or "").strip().rstrip(".")
+        if not oid:
+            return {}
+        if oid not in _name_cache:
+            _name_cache[oid] = snmpwalk_oid(host, oid, community, port,
+                                            timeout, version, v3_creds) or {}
+        return _name_cache[oid]
+
+    for it in tables:
+        if len(candidates) >= _CAP:
+            break
+        base = (it.get("oid") or "").strip().rstrip(".")
+        if not base:
+            continue
+        vals = snmpwalk_oid(host, base, community, port, timeout, version, v3_creds)
+        if vals is None:
+            return None   # snmpwalk binary missing → abort whole discovery
+        if not vals:
+            continue
+        names1 = _walk_cached(it.get("name_oid"))
+        names2 = _walk_cached(it.get("name_oid2"))
+        speed_base = (it.get("speed_oid") or "").strip().rstrip(".")
+        speeds = _walk_cached(speed_base) if (it.get("speed_auto_threshold") and speed_base) else {}
+        hc_base = (it.get("hc_variant_oid") or "").strip().rstrip(".")
+        label = it.get("label") or base
+        for idx in sorted(vals):
+            row_name = names1.get(idx) or names2.get(idx) or str(idx)
+            try:
+                speed_raw = int(speeds.get(idx) or 0)
+            except (TypeError, ValueError):
+                speed_raw = 0
+            candidates.append({
+                "kind": "table", "item_label": label, "index": idx,
+                "row_name": row_name, "oid": f"{base}.{idx}",
+                "hc_oid": f"{hc_base}.{idx}" if hc_base else "",
+                "unit": it.get("unit") or "",
+                "speed_auto_threshold": bool(it.get("speed_auto_threshold")),
+                "speed_raw": speed_raw,
+                "warn": it.get("warn"), "crit": it.get("crit"),
+                "interval": it.get("interval"),
+                "suggested_name": f"{row_name} {label}".strip(),
+                "group": it.get("group") or ""})
+            if len(candidates) >= _CAP:
+                break
+    return candidates
 
 
 def probe_tls(host, port=443, timeout=10):

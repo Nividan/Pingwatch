@@ -1041,6 +1041,9 @@ class TaskRunner:
         if ttype == "snmp_interfaces":
             self._run_snmp_interfaces(tid, payload)
             return
+        if ttype == "snmp_discover":
+            self._run_snmp_discover(tid, payload)
+            return
         cidr = str(payload.get("cidr") or "")
         mode = str(payload.get("mode") or "ping")
         if ttype not in ("ipam_scan", "discovery_scan") or not cidr:
@@ -1237,6 +1240,58 @@ class TaskRunner:
         if self._upload_chunk(tid, ifaces, done=True):
             log.info("task %d complete: %d interfaces on %s",
                      tid, len(ifaces), host)
+            self._set(tid, "done")
+        else:
+            self._set(tid, "error", error="result upload failed")
+
+    def _run_snmp_discover(self, tid, payload):
+        """SNMP template discovery (Add Sensor → Discover with template on a
+        probe-bound device). Runs the same probes.snmp_discover_template central
+        runs, so scalar gets + table walks egress from the branch. Uploads the
+        candidate rows; errors are uploaded (not just set) so the waiting handler
+        gets an immediate reason instead of a timeout."""
+        host = str(payload.get("host") or "")
+        comm = str(payload.get("community") or "public")
+        try:
+            port = int(payload.get("port") or 161)
+        except (TypeError, ValueError):
+            port = 161
+        ver = str(payload.get("version") or "2c")
+        v3 = payload.get("v3_creds")
+        if not isinstance(v3, dict):
+            v3 = None
+        items = payload.get("items")
+        if not host or not isinstance(items, list) or not items:
+            self._upload_chunk(tid, [], done=True, error="bad snmp_discover payload")
+            self._set(tid, "error", error="bad snmp_discover payload")
+            return
+        try:
+            op_to = int(payload.get("op_timeout") or 10)
+        except (TypeError, ValueError):
+            op_to = 10
+        op_to = max(2, min(15, op_to))   # clamp; scans pass a short per-OID timeout
+        log.info("task %d: snmp_discover %s (%d items, v%s)",
+                 tid, host, len(items), ver)
+        self._set(tid, "running", progress={"phase": "snmp"})
+        try:
+            cands = probes.snmp_discover_template(host, items, comm, port,
+                                                  timeout=op_to, version=ver, v3_creds=v3)
+        except Exception as e:
+            msg = f"snmp discovery failed: {type(e).__name__}"
+            self._upload_chunk(tid, [], done=True, error=msg)
+            self._set(tid, "error", error=msg)
+            return
+        if cands is None:
+            msg = "snmpwalk not found on probe — install net-snmp"
+            self._upload_chunk(tid, [], done=True, error=msg)
+            self._set(tid, "error", error=msg)
+            return
+        if self._cancelled(tid):
+            self._set(tid, "error", error="cancelled")
+            return
+        if self._upload_chunk(tid, cands, done=True):
+            log.info("task %d complete: %d candidates on %s",
+                     tid, len(cands), host)
             self._set(tid, "done")
         else:
             self._set(tid, "error", error="result upload failed")
