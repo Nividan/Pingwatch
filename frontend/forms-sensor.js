@@ -1205,8 +1205,8 @@ async function discoverInterfaces(){
     `<label class="vm-met-item vm-met-all-item" style="border-bottom:1px solid var(--border);margin-bottom:2px;padding-bottom:5px"><input type="checkbox" class="iface-met-all-cb" onchange="ifaceMetSelectAll(this)"> <strong>All metrics</strong></label>`+
     METRICS.map(m=>`<label class="vm-met-item"><input type="checkbox" value="${m.v}" onchange="ifaceMetChanged(this)"> ${esc(m.l)}</label>`).join('');
 
-  let html='<div style="border:1px solid var(--border);border-radius:6px;margin-top:4px;overflow:visible">';
-  html+='<div style="padding:6px 8px;background:var(--bg2);border-bottom:1px solid var(--border);display:flex;gap:8px;align-items:center">';
+  let html='<div style="flex:1;min-height:0;display:flex;flex-direction:column;overflow:hidden">';
+  html+='<div style="padding:8px 14px;background:var(--bg2);border-bottom:1px solid var(--border);display:flex;gap:8px;align-items:center;flex:none">';
   html+='<span style="font-size:11px;color:var(--text3);white-space:nowrap">Set for checked:</span>';
   html+=`<div class="vm-met-wrap" style="flex-shrink:0"><button class="vm-met-btn" type="button" onclick="toggleIfaceMetPicker(this)">— bulk metrics —</button><div class="vm-met-drop" style="display:none">${metricCheckboxes}</div></div>`;
   // Filter box — devices can have hundreds of interfaces; let the user narrow
@@ -1214,7 +1214,7 @@ async function discoverInterfaces(){
   html+=`<input type="text" id="as-iface-filter" placeholder="Filter interfaces…" autocomplete="off" oninput="filterIfaceRows(this.value)" style="margin-left:auto;width:180px;font-size:11px;padding:4px 8px;background:var(--bg);border:1px solid var(--border);border-radius:4px;color:var(--text)"/>`;
   html+='<span id="as-iface-filter-count" style="font-size:11px;color:var(--text3);white-space:nowrap"></span>';
   html+='</div>';
-  html+='<div style="overflow-x:auto;max-height:220px;overflow-y:auto">';
+  html+='<div style="flex:1;min-height:0;overflow:auto">';
   html+='<table style="width:100%;border-collapse:collapse;font-size:11px">';
   html+='<thead><tr style="background:var(--bg2);color:var(--text2);position:sticky;top:0">';
   html+='<th style="padding:5px 8px;text-align:center"><input type="checkbox" id="as-iface-all" title="Select all" onchange="toggleAllIfaces(this)"/></th>';
@@ -1224,7 +1224,7 @@ async function discoverInterfaces(){
   html+='<th style="padding:5px 8px;text-align:left;white-space:nowrap">Status</th>';
   html+='<th style="padding:5px 8px;text-align:left;white-space:nowrap">Speed</th>';
   html+='<th style="padding:5px 8px;text-align:left;white-space:nowrap">Monitor metric</th>';
-  html+='</tr></thead><tbody>';
+  html+='</tr></thead><tbody id="as-iface-tbody">';
 
   ifaces.forEach((iface,i)=>{
     const stClr=iface.status==='up'?'var(--up)':'var(--down)';
@@ -1247,12 +1247,11 @@ async function discoverInterfaces(){
   });
 
   html+='</tbody></table></div>';
-  html+='<div style="padding:8px 10px;background:var(--bg2);border-top:1px solid var(--border);display:flex;gap:8px;align-items:center">';
-  html+='<button class="btn-p" style="font-size:11px;padding:5px 14px" onclick="addSelectedIfaceSensors()" id="as-iface-add-btn">Add Selected as Sensors</button>';
+  html+='<div style="padding:10px 14px;background:var(--bg2);border-top:1px solid var(--border);display:flex;gap:8px;align-items:center;flex:none">';
+  html+='<button class="btn-p" onclick="addSelectedIfaceSensors()" id="as-iface-add-btn">Add Selected as Sensors</button>';
   html+='<span id="as-iface-sel-count" style="font-size:11px;color:var(--text3)">0 selected</span>';
   html+='</div></div>';
-  listEl.innerHTML=html;
-  listEl.style.display='';
+  _discHost('Discover Interfaces').innerHTML=html;
 }
 
 // Filter the discovered-interface table by name / description / index / status.
@@ -1382,8 +1381,7 @@ async function addSelectedIfaceSensors(){
     // Update sensor name to reflect the metric
     const nameEl2=document.getElementById('as-n');
     if(nameEl2) nameEl2.value=`${esc(ifaceName)} ${metric.l}`;
-    const listEl=document.getElementById('as-iface-list');
-    if(listEl) listEl.style.display='none';
+    closeM('disc-modal');
     const statusEl=document.getElementById('as-iface-status');
     if(statusEl){statusEl.style.color='var(--up)';statusEl.textContent=`Applied: ${metric.l} on ${ifaceName} — save to confirm`;}
     return;
@@ -1475,7 +1473,7 @@ async function addSelectedIfaceSensors(){
       }
     }catch(e){}
     toast(`Added ${added} sensor${added>1?'s':''}${failed?`, ${failed} failed`:''}`, 'ok');
-    closeM('mas');
+    closeM('disc-modal'); closeM('mas');
   }else{
     toast('Failed to add sensors','err');
   }
@@ -1518,45 +1516,61 @@ async function discoverWithTemplate(){
   _snmpRenderCandidates();
 }
 
+// Shared large modal for discovery results (SNMP template/interfaces, VMware).
+// Opens on top of the Add Sensor modal only when there are results, so the
+// picker has room instead of cramming into the form. Returns a flex-column body
+// element the flow renders into (a .disc-tools / .disc-list / .disc-foot block).
+function _discHost(title){
+  closeM('disc-modal');
+  const o=document.createElement('div'); o.className='mo'; o.id='disc-modal';
+  o.style.zIndex='1200';   // above the Add Sensor modal (.mo = 1000)
+  _overlayClose(o,()=>closeM('disc-modal'));
+  // max-width overrides .mbox's 540px cap so the picker is actually wide.
+  o.innerHTML=`<div class="mbox" style="width:min(97vw,980px);max-width:97vw;height:84vh;max-height:84vh;display:flex;flex-direction:column">
+    <div class="mhd"><div class="mttl">${esc(title)}</div><button class="mclose" onclick="closeM('disc-modal')">✕</button></div>
+    <div id="disc-body" style="flex:1;min-height:0;display:flex;flex-direction:column;overflow:hidden"></div>
+  </div>`;
+  document.body.appendChild(o);
+  return document.getElementById('disc-body');
+}
+
 function _snmpRenderCandidates(){
-  const listEl=document.getElementById('as-iface-list');
-  if(!listEl) return;
-  let html='<div style="border:1px solid var(--border);border-radius:6px;margin-top:4px;overflow:visible">';
-  html+='<div style="padding:6px 8px;background:var(--bg2);border-bottom:1px solid var(--border);display:flex;gap:8px;align-items:center">';
-  html+='<input type="text" id="snmpc-filter" placeholder="Filter metrics…" autocomplete="off" oninput="_snmpcFilter(this.value)" style="width:180px;font-size:11px;padding:4px 8px;background:var(--bg);border:1px solid var(--border);border-radius:4px;color:var(--text)"/>';
-  html+='<span id="snmpc-filter-count" style="font-size:11px;color:var(--text3)"></span>';
-  html+='</div>';
-  html+='<div style="overflow-x:auto;max-height:240px;overflow-y:auto">';
-  html+='<table style="width:100%;border-collapse:collapse;font-size:11px">';
-  html+='<thead><tr style="background:var(--bg2);color:var(--text2);position:sticky;top:0">';
-  html+='<th style="padding:5px 8px;text-align:center"><input type="checkbox" id="snmpc-all" onchange="_snmpcToggleAll(this)"/></th>';
-  html+='<th style="padding:5px 8px;text-align:left">Name</th>';
-  html+='<th style="padding:5px 8px;text-align:left">OID</th>';
-  html+='<th style="padding:5px 8px;text-align:left">Value</th>';
-  html+='<th style="padding:5px 8px;text-align:left">Unit</th>';
-  html+='<th style="padding:5px 8px;text-align:center">64-bit</th>';
-  html+='</tr></thead><tbody>';
-  _snmpCandidates.forEach((c,i)=>{
-    const val=c.kind==='scalar'?String(c.value||'').slice(0,40):'';
-    const search=esc(`${c.suggested_name||''} ${c.item_label||''} ${c.oid||''} ${c.row_name||''} ${c.unit||''}`.toLowerCase());
-    const rowBg=i%2?'background:var(--bg2)':'';
-    const hc=c.hc_oid?'<input type="checkbox" class="snmpc-hc" title="Use 64-bit counter"/>':'';
-    html+=`<tr class="snmpc-row" data-search="${search}" style="border-top:1px solid var(--border);${rowBg}">`;
-    html+=`<td style="padding:4px 8px;text-align:center"><input type="checkbox" class="snmpc-cb" data-i="${i}" onchange="_snmpcUpdateCount()"/></td>`;
-    html+=`<td style="padding:4px 8px;font-weight:500">${esc(c.suggested_name||c.item_label||'')}</td>`;
-    html+=`<td style="padding:4px 8px;color:var(--text3);font-family:monospace">${esc(c.oid||'')}</td>`;
-    html+=`<td style="padding:4px 8px;color:var(--text2)">${val?esc(val):'<span style="color:var(--text3)">—</span>'}</td>`;
-    html+=`<td style="padding:4px 8px;color:var(--text3)">${esc(c.unit||'')}</td>`;
-    html+=`<td style="padding:4px 8px;text-align:center">${hc}</td>`;
-    html+='</tr>';
+  const body=_discHost('Discover with Template');
+  const cands=_snmpCandidates;
+  const hasGroups=cands.some(c=>c.group);
+  const groups={};
+  cands.forEach((c,i)=>{ const g=hasGroups?(c.group||'Other'):''; (groups[g]=groups[g]||[]).push(i); });
+  let rows='';
+  Object.keys(groups).sort().forEach(g=>{
+    if(g) rows+=`<div class="disc-grp">${esc(g)} <span class="disc-grp-n">${groups[g].length}</span></div>`;
+    groups[g].forEach(i=>{
+      const c=cands[i];
+      const val=c.kind==='scalar'?String(c.value||'').slice(0,40):'';
+      const search=esc(`${c.suggested_name||''} ${c.item_label||''} ${c.oid||''} ${c.unit||''}`.toLowerCase());
+      // 64-bit toggle is its own control — kept outside the row-select label so
+      // clicking it doesn't also toggle the row checkbox.
+      const hc=c.hc_oid?`<label class="disc-hc" title="Monitor the 64-bit counter"><input type="checkbox" class="snmpc-hc"> 64-bit</label>`:'';
+      rows+=`<div class="disc-row snmpc-row" data-search="${search}">
+        <label class="disc-pick">
+          <input type="checkbox" class="snmpc-cb disc-cb" data-i="${i}" onchange="_snmpcUpdateCount()">
+          <span class="disc-main"><span class="disc-name">${esc(c.suggested_name||c.item_label||'')}</span><span class="disc-sub">${esc(c.oid||'')}</span></span>
+        </label>
+        <span class="disc-val">${val?esc(val):''}<span class="disc-unit">${esc(c.unit||'')}</span></span>
+        ${hc}
+      </div>`;
+    });
   });
-  html+='</tbody></table></div>';
-  html+='<div style="padding:8px 10px;background:var(--bg2);border-top:1px solid var(--border);display:flex;gap:8px;align-items:center">';
-  html+='<button class="btn-p" style="font-size:11px;padding:5px 14px" onclick="_snmpAddSelectedCandidates()" id="snmpc-add-btn">Add Selected as Sensors</button>';
-  html+='<span id="snmpc-sel-count" style="font-size:11px;color:var(--text3)">0 selected</span>';
-  html+='</div></div>';
-  listEl.innerHTML=html;
-  listEl.style.display='';
+  body.innerHTML=`
+    <div class="disc-tools">
+      <input type="text" id="snmpc-filter" class="disc-filter" placeholder="Filter metrics…" autocomplete="off" oninput="_snmpcFilter(this.value)"/>
+      <span id="snmpc-filter-count" class="disc-count"></span>
+    </div>
+    <div class="disc-list">${rows}</div>
+    <div class="disc-foot">
+      <label class="disc-selall"><input type="checkbox" id="snmpc-all" onchange="_snmpcToggleAll(this)"> Select all</label>
+      <span id="snmpc-sel-count" class="disc-count">0 selected</span>
+      <button class="btn-p" id="snmpc-add-btn" onclick="_snmpAddSelectedCandidates()">Add Selected as Sensors</button>
+    </div>`;
   _snmpcUpdateCount();
 }
 
@@ -1662,7 +1676,7 @@ async function _snmpAddSelectedCandidates(){
       }
     }catch(e){}
     toast(`Added ${added} sensor${added>1?'s':''}${failed?`, ${failed} failed`:''}`,'ok');
-    closeM('mas');
+    closeM('disc-modal'); closeM('mas');
   }else{
     toast('Failed to add sensors','err');
   }
@@ -2104,13 +2118,13 @@ async function discoverVMs(){
       mets.map(m=>`<label class="vm-met-item"><input type="checkbox" value="${m.v}" onchange="vmMetChanged(this)"> ${esc(m.l)}</label>`).join('')
     ).join('');
 
-  let html='<div style="border:1px solid var(--border);border-radius:6px;margin-top:4px;overflow:visible">';
+  let html='<div style="flex:1;min-height:0;display:flex;flex-direction:column;overflow:hidden">';
   html+='<div style="padding:6px 8px;background:var(--bg2);border-bottom:1px solid var(--border);display:flex;gap:8px;align-items:center">';
   html+='<input type="text" id="as-vm-search" placeholder="Search VM names…" oninput="filterVMs(this.value)" autocomplete="off" style="flex:1;font-size:12px;padding:4px 8px;background:var(--bg3);border:1px solid var(--border2);border-radius:4px;color:var(--text);outline:none"/>';
   html+='<span style="font-size:11px;color:var(--text3);white-space:nowrap;flex-shrink:0">Set for checked:</span>';
   html+=`<div class="vm-met-wrap" style="flex-shrink:0"><button class="vm-met-btn" type="button" onclick="toggleVmMetPicker(this)">— bulk metrics —</button><div class="vm-met-drop" style="display:none">${metricCheckboxes}</div></div>`;
   html+='</div>';
-  html+='<div style="overflow-x:auto;overflow-y:auto;max-height:260px">';
+  html+='<div style="flex:1;min-height:0;overflow:auto">';
   html+='<table style="width:100%;border-collapse:collapse;font-size:12px">';
   html+='<thead><tr style="background:var(--bg2);color:var(--text2);position:sticky;top:0;z-index:1">';
   html+='<th style="padding:5px 8px;text-align:center;white-space:nowrap"><input type="checkbox" id="as-vm-all" title="Select all visible" onchange="toggleAllVMs(this)"/></th>';
@@ -2143,8 +2157,7 @@ async function discoverVMs(){
   html+='<button class="btn-p" style="font-size:11px;padding:5px 14px" onclick="addSelectedVMSensors()" id="as-vm-add-btn">Add Selected as Sensors</button>';
   html+='<span id="as-vm-sel-count" style="font-size:11px;color:var(--text3)">0 VMs · 0 sensors</span>';
   html+='</div></div>';
-  listEl.innerHTML=html;
-  listEl.style.display='';
+  _discHost('Discover VMs').innerHTML=html;
 }
 
 async function discoverHosts(){
@@ -2212,13 +2225,13 @@ async function discoverHosts(){
       mets.map(m=>`<label class="vm-met-item"><input type="checkbox" value="${m.v}" onchange="vmMetChanged(this)"> ${esc(m.l)}</label>`).join('')
     ).join('');
 
-  let html='<div style="border:1px solid var(--border);border-radius:6px;margin-top:4px;overflow:visible">';
+  let html='<div style="flex:1;min-height:0;display:flex;flex-direction:column;overflow:hidden">';
   html+='<div style="padding:6px 8px;background:var(--bg2);border-bottom:1px solid var(--border);display:flex;gap:8px;align-items:center">';
   html+='<input type="text" id="as-vm-search" placeholder="Search host names…" oninput="filterVMs(this.value)" autocomplete="off" style="flex:1;font-size:12px;padding:4px 8px;background:var(--bg3);border:1px solid var(--border2);border-radius:4px;color:var(--text);outline:none"/>';
   html+='<span style="font-size:11px;color:var(--text3);white-space:nowrap;flex-shrink:0">Set for checked:</span>';
   html+=`<div class="vm-met-wrap" style="flex-shrink:0"><button class="vm-met-btn" type="button" onclick="toggleVmMetPicker(this)">— bulk metrics —</button><div class="vm-met-drop" style="display:none">${metricCheckboxes}</div></div>`;
   html+='</div>';
-  html+='<div style="overflow-x:auto;overflow-y:auto;max-height:260px">';
+  html+='<div style="flex:1;min-height:0;overflow:auto">';
   html+='<table style="width:100%;border-collapse:collapse;font-size:12px">';
   html+='<thead><tr style="background:var(--bg2);color:var(--text2);position:sticky;top:0;z-index:1">';
   html+='<th style="padding:5px 8px;text-align:center;white-space:nowrap"><input type="checkbox" id="as-vm-all" title="Select all visible" onchange="toggleAllVMs(this)"/></th>';
@@ -2253,8 +2266,7 @@ async function discoverHosts(){
   html+='<button class="btn-p" style="font-size:11px;padding:5px 14px" onclick="addSelectedVMSensors()" id="as-vm-add-btn">Add Selected as Sensors</button>';
   html+='<span id="as-vm-sel-count" style="font-size:11px;color:var(--text3)">0 hosts · 0 sensors</span>';
   html+='</div></div>';
-  listEl.innerHTML=html;
-  listEl.style.display='';
+  _discHost('Discover Hosts').innerHTML=html;
 }
 
 async function discoverDatastores(){
@@ -2312,11 +2324,11 @@ async function discoverDatastores(){
     }catch(e){}
   }
 
-  let html='<div style="border:1px solid var(--border);border-radius:6px;margin-top:4px;overflow:visible">';
+  let html='<div style="flex:1;min-height:0;display:flex;flex-direction:column;overflow:hidden">';
   html+='<div style="padding:6px 8px;background:var(--bg2);border-bottom:1px solid var(--border);display:flex;gap:8px;align-items:center">';
   html+='<input type="text" id="as-vm-search" placeholder="Search datastore names…" oninput="filterDatastores(this.value)" autocomplete="off" style="flex:1;font-size:12px;padding:4px 8px;background:var(--bg3);border:1px solid var(--border2);border-radius:4px;color:var(--text);outline:none"/>';
   html+='</div>';
-  html+='<div style="overflow-x:auto;overflow-y:auto;max-height:320px">';
+  html+='<div style="flex:1;min-height:0;overflow:auto">';
   html+='<table style="width:100%;border-collapse:collapse;font-size:12px">';
   html+='<thead><tr style="background:var(--bg2);color:var(--text2);position:sticky;top:0;z-index:1">';
   html+='<th style="padding:5px 8px;text-align:left;white-space:nowrap;min-width:180px">Datastore</th>';
@@ -2347,8 +2359,7 @@ async function discoverDatastores(){
   });
 
   html+='</tbody></table></div></div>';
-  listEl.innerHTML=html;
-  listEl.style.display='';
+  _discHost('Discover Datastores').innerHTML=html;
 }
 
 function filterDatastores(q){
@@ -2380,8 +2391,7 @@ function selectDatastore(d){
   if(nameEl&&(!nameEl.value||nameEl.value.startsWith('Ping,'))){
     nameEl.value=`${d.name} Free Space`;
   }
-  const listEl=document.getElementById('as-vm-list');
-  if(listEl) listEl.style.display='none';
+  closeM('disc-modal');
   const statusEl=document.getElementById('as-vm-status');
   if(statusEl){
     statusEl.style.color='var(--up)';
@@ -2557,8 +2567,7 @@ async function addSelectedVMSensors(){
     const nameEl=document.getElementById('as-n');
     if(nameEl&&(!nameEl.value||nameEl.value.startsWith('Ping,')))
       nameEl.value=`${vmname} ${metricDef?metricDef.l:metric}`;
-    const listEl=document.getElementById('as-vm-list');
-    if(listEl) listEl.style.display='none';
+    closeM('disc-modal');
     const statusEl=document.getElementById('as-vm-status');
     if(statusEl){statusEl.style.color='var(--up)';statusEl.textContent=`Applied: ${metricDef?metricDef.l:metric} on ${vmname} — save to confirm`;}
     return;
@@ -2662,7 +2671,7 @@ async function addSelectedVMSensors(){
       }
     }catch(e){}
     toast(`Added ${added} sensor${added>1?'s':''}${failed?`, ${failed} failed`:''}`, 'ok');
-    closeM('mas');
+    closeM('disc-modal'); closeM('mas');
   }else{
     toast('Failed to add sensors','err');
   }
