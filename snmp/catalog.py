@@ -112,12 +112,12 @@ SNMP_CATALOG = [
     {
         "vendor": "Juniper — JunOS (EX/MX/SRX/QFX)",
         "oids": [
-            # Routing Engine
-            {"label": "RE CPU Utilization",           "oid": "1.3.6.1.4.1.2636.3.1.13.1.11.9.1.0.0", "unit": "%"},
-            {"label": "RE Memory Buffer Utilization", "oid": "1.3.6.1.4.1.2636.3.1.13.1.9.9.1.0.0",  "unit": "%"},
-            {"label": "RE Temperature",               "oid": "1.3.6.1.4.1.2636.3.1.13.1.8.9.1.0.0",  "unit": "°C"},
-            {"label": "RE Uptime",                    "oid": "1.3.6.1.4.1.2636.3.1.13.1.2.9.1.0.0",  "unit": "seconds"},
-            {"label": "RE Memory DRAM Size",          "oid": "1.3.6.1.4.1.2636.3.1.13.1.7.9.1.0.0",  "unit": "MB"},
+            # Routing Engine — jnxOperatingTable cols: Temp=7, CPU=8, Buffer=11, UpTime=13, Memory=15
+            {"label": "RE CPU Utilization",           "oid": "1.3.6.1.4.1.2636.3.1.13.1.8.9.1.0.0",  "unit": "%"},
+            {"label": "RE Buffer Utilization",        "oid": "1.3.6.1.4.1.2636.3.1.13.1.11.9.1.0.0", "unit": "%"},
+            {"label": "RE Temperature",               "oid": "1.3.6.1.4.1.2636.3.1.13.1.7.9.1.0.0",  "unit": "°C"},
+            {"label": "RE Uptime",                    "oid": "1.3.6.1.4.1.2636.3.1.13.1.13.9.1.0.0", "unit": "1/100 sec"},
+            {"label": "RE Installed Memory",          "oid": "1.3.6.1.4.1.2636.3.1.13.1.15.9.1.0.0", "unit": "MB"},
             # Chassis
             {"label": "Chassis Description",          "oid": "1.3.6.1.4.1.2636.3.1.2.0",             "unit": "string"},
             {"label": "Chassis Serial Number",        "oid": "1.3.6.1.4.1.2636.3.1.3.0",             "unit": "string"},
@@ -129,16 +129,7 @@ SNMP_CATALOG = [
             # Firewall (SRX)
             {"label": "SRX Active Sessions",          "oid": "1.3.6.1.4.1.2636.3.39.1.12.1.1.1.2.0", "unit": "count"},
             {"label": "SRX Active Sessions IPv6",     "oid": "1.3.6.1.4.1.2636.3.39.1.12.1.1.1.3.0", "unit": "count"},
-            # Interfaces — Juniper uses standard ifTable; interface indices vary by model
-            # Use ⊕ Discover Interfaces to find actual indices for your device
-            {"label": "IF 1 — Oper Status (ifTable)", "oid": "1.3.6.1.2.1.2.2.1.8.1",              "unit": "1=up 2=down"},
-            {"label": "IF 1 — In Octets (32-bit)",    "oid": "1.3.6.1.2.1.2.2.1.10.1",             "unit": "bytes"},
-            {"label": "IF 1 — Out Octets (32-bit)",   "oid": "1.3.6.1.2.1.2.2.1.16.1",             "unit": "bytes"},
-            {"label": "IF 1 — HC In Octets (64-bit)", "oid": "1.3.6.1.2.1.31.1.1.1.6.1",           "unit": "bytes"},
-            {"label": "IF 1 — HC Out Octets (64-bit)","oid": "1.3.6.1.2.1.31.1.1.1.10.1",          "unit": "bytes"},
-            {"label": "IF 1 — In Errors",             "oid": "1.3.6.1.2.1.2.2.1.14.1",             "unit": "errors"},
-            {"label": "IF 2 — Oper Status",           "oid": "1.3.6.1.2.1.2.2.1.8.2",              "unit": "1=up 2=down"},
-            {"label": "IF 2 — In Octets",             "oid": "1.3.6.1.2.1.2.2.1.10.2",             "unit": "bytes"},
+            # Interfaces → use the built-in "Interfaces" template (ifTable + 64-bit ifXTable) or the ⊕ Discover button
         ],
     },
     {
