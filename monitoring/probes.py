@@ -491,6 +491,16 @@ def probe_snmp(host, community, oid, port=161, timeout=5, version="2c", v3_creds
                 val = val.strip()
             else:
                 val = rhs
+            # net-snmp returns rc=0 with an exception varbind for an absent OID
+            # (noSuchObject / noSuchInstance / endOfMibView), printed as plain
+            # text with no type prefix. Treat as a non-response — otherwise a
+            # sensor on a dead OID reads "up" with a junk value and discovery
+            # lists dead OIDs as responders.
+            vlow = val.lower()
+            if not snmp_type and (vlow.startswith("no such object")
+                                  or vlow.startswith("no such instance")
+                                  or vlow.startswith("no more variables")):
+                return {"ok": False, "ms": None, "detail": "No object at this OID"}
             return {"ok": True, "ms": ms, "detail": f"{val}", "value": val,
                     "snmp_type": snmp_type, "raw": raw}
         err = raw[:120] if raw else "No response"
@@ -530,9 +540,17 @@ def _snmpwalk_indexed(auth_args, target, base_oid, timeout):
         if len(parts) != 2:
             continue
         oid_str, val = parts
+        val = val.strip().strip('"')
+        # Skip net-snmp exception varbinds (absent OID / past end of MIB view) —
+        # otherwise the subtree's trailing index maps to a junk "No Such Object…"
+        # string and discovery emits a phantom row.
+        vlow = val.lower()
+        if (vlow.startswith("no such object") or vlow.startswith("no such instance")
+                or vlow.startswith("no more variables")):
+            continue
         try:
             idx = int(oid_str.rstrip(".").rsplit(".", 1)[-1])
-            result[idx] = val.strip().strip('"')
+            result[idx] = val
         except (ValueError, IndexError):
             pass
     return result

@@ -43,9 +43,9 @@ SNMP_CATALOG = [
         "vendor": "Cisco — IOS / IOS-XE / NX-OS",
         "oids": [
             # CPU
-            {"label": "CPU 1-min Avg (new, core 1)",  "oid": "1.3.6.1.4.1.9.9.109.1.1.1.1.3.1",  "unit": "%"},
-            {"label": "CPU 5-min Avg (new, core 1)",  "oid": "1.3.6.1.4.1.9.9.109.1.1.1.1.7.1",  "unit": "%"},
-            {"label": "CPU 5-min Avg (IOS legacy)",   "oid": "1.3.6.1.4.1.9.2.1.56.0",            "unit": "%"},
+            {"label": "CPU 1-min Avg (new, core 1)",  "oid": "1.3.6.1.4.1.9.9.109.1.1.1.1.7.1",  "unit": "%"},
+            {"label": "CPU 5-min Avg (new, core 1)",  "oid": "1.3.6.1.4.1.9.9.109.1.1.1.1.8.1",  "unit": "%"},
+            {"label": "CPU 5-min Avg (IOS legacy)",   "oid": "1.3.6.1.4.1.9.2.1.58.0",            "unit": "%"},
             # Memory
             {"label": "Memory Pool Used (processor)", "oid": "1.3.6.1.4.1.9.9.48.1.1.1.6.1",      "unit": "bytes"},
             {"label": "Memory Pool Free (processor)", "oid": "1.3.6.1.4.1.9.9.48.1.1.1.7.1",      "unit": "bytes"},
@@ -83,13 +83,14 @@ SNMP_CATALOG = [
             # System resources
             {"label": "CPU Usage",                    "oid": "1.3.6.1.4.1.12356.101.4.1.3.0",     "unit": "%"},
             {"label": "Memory Usage",                 "oid": "1.3.6.1.4.1.12356.101.4.1.4.0",     "unit": "%"},
-            {"label": "Memory Capacity",              "oid": "1.3.6.1.4.1.12356.101.4.1.5.0",     "unit": "MB"},
+            {"label": "Memory Capacity",              "oid": "1.3.6.1.4.1.12356.101.4.1.5.0",     "unit": "KB"},
             {"label": "Disk Usage",                   "oid": "1.3.6.1.4.1.12356.101.4.1.6.0",     "unit": "%"},
-            {"label": "System Uptime",                "oid": "1.3.6.1.4.1.12356.101.4.1.8.0",     "unit": "seconds"},
-            # Sessions
-            {"label": "Active Sessions",              "oid": "1.3.6.1.4.1.12356.101.4.1.9.0",     "unit": "count"},
-            {"label": "Session Rate (new/sec)",       "oid": "1.3.6.1.4.1.12356.101.4.1.10.0",    "unit": "sess/sec"},
-            {"label": "Failed Auth Count",            "oid": "1.3.6.1.4.1.12356.101.4.1.11.0",    "unit": "count"},
+            {"label": "System Uptime",                "oid": "1.3.6.1.2.1.1.3.0",                 "unit": "1/100 sec"},
+            # Sessions — fgSysSesCount(8) / SesRate1(9) / Ses6Count(10) / Ses6Rate1(11)
+            {"label": "Active Sessions",              "oid": "1.3.6.1.4.1.12356.101.4.1.8.0",     "unit": "count"},
+            {"label": "Session Setup Rate (1-min)",   "oid": "1.3.6.1.4.1.12356.101.4.1.9.0",     "unit": "sess/sec"},
+            {"label": "IPv6 Sessions",                "oid": "1.3.6.1.4.1.12356.101.4.1.10.0",    "unit": "count"},
+            {"label": "IPv6 Session Rate (1-min)",    "oid": "1.3.6.1.4.1.12356.101.4.1.11.0",    "unit": "sess/sec"},
             # VPN — IPSec
             {"label": "IPSec Active Tunnels",         "oid": "1.3.6.1.4.1.12356.101.12.2.2.1.3.1","unit": "count"},
             {"label": "IPSec Tunnels Established",    "oid": "1.3.6.1.4.1.12356.101.12.2.2.1.4.1","unit": "count"},
@@ -102,19 +103,10 @@ SNMP_CATALOG = [
             # IPS
             {"label": "IPS Intrusions Detected",      "oid": "1.3.6.1.4.1.12356.101.9.2.1.0",     "unit": "count"},
             {"label": "IPS Intrusions Blocked",       "oid": "1.3.6.1.4.1.12356.101.9.2.2.0",     "unit": "count"},
-            # Firmware
+            # Firmware / identity  (serial = fnSysSerial in FORTINET-CORE-MIB, .100 not .101)
             {"label": "Firmware Version",             "oid": "1.3.6.1.4.1.12356.101.4.1.1.0",     "unit": "string"},
-            {"label": "Serial Number",                "oid": "1.3.6.1.4.1.12356.101.4.1.2.0",     "unit": "string"},
-            # Interfaces — FortiGate-specific fgIntf MIB (use ⊕ Discover for full list)
-            {"label": "IF 1 — Name (fgIntf)",        "oid": "1.3.6.1.4.1.12356.101.7.2.1.1.1",   "unit": "string"},
-            {"label": "IF 1 — IP Address",           "oid": "1.3.6.1.4.1.12356.101.7.2.1.2.1",   "unit": "string"},
-            {"label": "IF 1 — Rx Packets",           "oid": "1.3.6.1.4.1.12356.101.7.2.1.5.1",   "unit": "packets"},
-            {"label": "IF 1 — Tx Packets",           "oid": "1.3.6.1.4.1.12356.101.7.2.1.6.1",   "unit": "packets"},
-            {"label": "IF 1 — Rx Bytes",             "oid": "1.3.6.1.4.1.12356.101.7.2.1.7.1",   "unit": "bytes"},
-            {"label": "IF 1 — Tx Bytes",             "oid": "1.3.6.1.4.1.12356.101.7.2.1.8.1",   "unit": "bytes"},
-            {"label": "IF 1 — Oper Status (ifTable)","oid": "1.3.6.1.2.1.2.2.1.8.1",             "unit": "1=up 2=down"},
-            {"label": "IF 2 — Oper Status (ifTable)","oid": "1.3.6.1.2.1.2.2.1.8.2",             "unit": "1=up 2=down"},
-            {"label": "IF 3 — Oper Status (ifTable)","oid": "1.3.6.1.2.1.2.2.1.8.3",             "unit": "1=up 2=down"},
+            {"label": "Serial Number",                "oid": "1.3.6.1.4.1.12356.100.1.1.1.0",     "unit": "string"},
+            # Interfaces → use the built-in "Interfaces" template (ifTable + 64-bit ifXTable) or the ⊕ Discover button
         ],
     },
     {
