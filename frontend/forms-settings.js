@@ -1568,7 +1568,8 @@ function _buildSettingsTab_snmpTemplates() {
       <div style="font-size:12px;color:var(--text3);margin-bottom:14px">
         Reusable per-vendor sets of SNMP metrics. Pick one in <b>Add Sensor &rarr; Discover with template</b>
         to probe a device and bulk-add the metrics it supports. Built-in templates are editable;
-        resetting one restores it on the next restart.
+        resetting one restores it on the next restart. <b>Export</b> writes a template to a JSON
+        file you can hand-edit in any text editor or share; <b>Import</b> loads it back as a custom template.
       </div>
       <div id="snmptpl-list"><div style="color:var(--text3);font-size:12px;padding:12px">Loading…</div></div>
     </div>`;
@@ -1603,6 +1604,7 @@ function _snmpTplRender() {
       <td style="padding:7px 8px;text-align:right;white-space:nowrap">
         <button class="btn-xs" onclick="_snmpTplOpenEditor('${t.id}')">Edit</button>
         <button class="btn-xs" onclick="_snmpTplClone('${t.id}')">Clone</button>
+        <button class="btn-xs" onclick="_snmpTplExport('${t.id}')" title="Download as a JSON file (hand-editable, importable on any install)">Export</button>
         <button class="btn-xs" onclick="_snmpTplDelete('${t.id}')" style="color:var(--down)">${delLabel}</button>
       </td>
     </tr>`;
@@ -1816,6 +1818,75 @@ async function _snmpTplDelete(id) {
     await _snmpTplLoad();
     toast(isB ? 'Template reset to shipped defaults' : 'Template deleted', 'ok');
   } catch (e) { toast(e.message || 'Delete failed', 'err'); }
+}
+
+// ── Template export / import (JSON files) ────────────────────────────
+// Export writes only the portable fields (name/vendor/description/items —
+// no DB ids or builtin markers) so a file can be hand-edited in a text
+// editor, shared, or moved between installs. Import accepts a single
+// template object or an array of them and creates each as a CUSTOM
+// template through the normal validated POST (server re-cleans items).
+
+function _snmpTplExport(id) {
+  const t = _snmpTplCache.find(x => x.id === id);
+  if (!t) return;
+  const data = {
+    pingwatch_snmp_template: 1,
+    name: t.name || '',
+    vendor: t.vendor || '',
+    description: t.description || '',
+    items: t.items || [],
+  };
+  const slug = (t.name || 'template').toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'template';
+  const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `snmp-template-${slug}.json`;
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
+
+function _snmpTplImport() {
+  const inp = document.createElement('input');
+  inp.type = 'file';
+  inp.accept = '.json,application/json';
+  inp.onchange = () => {
+    const f = inp.files && inp.files[0];
+    if (!f) return;
+    const r = new FileReader();
+    r.onload = async () => {
+      let data;
+      try { data = JSON.parse(r.result); }
+      catch { toast('Not a valid JSON file', 'err'); return; }
+      const list = Array.isArray(data) ? data
+                 : Array.isArray(data?.templates) ? data.templates : [data];
+      const names = new Set(_snmpTplCache.map(x => x.name));
+      let ok = 0, fail = 0, lastErr = '';
+      for (const t of list) {
+        const name = String(t?.name || '').trim();
+        if (!name || !Array.isArray(t?.items) || !t.items.length) {
+          fail++; lastErr = 'entry missing name or items'; continue;
+        }
+        const final = (names.has(name) ? `${name} (imported)` : name).slice(0, 120);
+        try {
+          await api('POST', '/api/snmp/templates', {
+            name: final,
+            vendor: String(t.vendor || ''),
+            description: String(t.description || ''),
+            items: t.items,
+          });
+          names.add(final); ok++;
+        } catch (e) { fail++; lastErr = e.message || 'save failed'; }
+      }
+      await _snmpTplLoad();
+      if (ok && !fail) toast(ok === 1 ? 'Template imported' : `${ok} templates imported`, 'ok');
+      else if (ok) toast(`${ok} imported, ${fail} failed (${lastErr})`, 'err');
+      else toast(`Import failed: ${lastErr}`, 'err');
+    };
+    r.readAsText(f);
+  };
+  inp.click();
 }
 
 // ── Scan Device → Build Template ─────────────────────────────────────
@@ -2626,6 +2697,7 @@ async function openSettings(initialTab){
     <div class="mft" id="stab-footer-snmp-templates" style="display:none">
       <button class="btn-s" onclick="closeM('mset')">Close</button>
       <button class="btn-s" onclick="_snmpScanOpen()">🔍 Scan Device</button>
+      <button class="btn-s" onclick="_snmpTplImport()" title="Load a template from a JSON file (single template or an array)">⤒ Import</button>
       <button class="btn-p" onclick="_snmpTplOpenEditor(null)">＋ New Template</button>
     </div>
     <div class="mft" id="stab-footer-networking" style="display:none">
