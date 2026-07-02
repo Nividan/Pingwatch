@@ -205,14 +205,10 @@ function sensorFormHTML(dev, s=null) {
     </div>
     <div class="fr" style="margin-top:2px">
       <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-        <button class="dp-btn" type="button" onclick="discoverInterfaces()" id="as-disc-btn">⊕ Discover Interfaces</button>
-        <select id="as-tpl-pick" style="max-width:210px"><option value="">— Template —</option></select>
-        <button class="dp-btn" type="button" onclick="discoverWithTemplate()" id="as-tpl-disc-btn">⊕ Discover with template</button>
-        <label style="display:flex;align-items:center;gap:5px;font-size:11px;color:var(--text2);cursor:pointer" title="Also walk ifTable/ifXTable in the same discovery (uncheck for devices where interfaces don't matter)">
-          <input type="checkbox" id="as-tpl-incif" checked> + Interfaces</label>
+        <select id="as-tpl-pick" style="max-width:240px"><option value="">— Template —</option></select>
+        <button class="dp-btn" type="button" onclick="discoverWithTemplate()" id="as-tpl-disc-btn" title="Probe the device against the picked template (interfaces included) and pick sensors from what responds">⊕ Discover</button>
         <span id="as-iface-status" style="font-size:11px;color:var(--text3)"></span>
       </div>
-      <div id="as-iface-list" style="display:none;margin-top:8px"></div>
     </div>
     <div class="fr"><label class="fl">OID</label>
       <input type="text" id="as-oid" value="${esc(s?.snmp_oid||'1.3.6.1.2.1.1.1.0')}" placeholder="1.3.6.1.2.1.1.1.0" autocomplete="off"/>
@@ -955,8 +951,9 @@ async function _snmpLoadTemplates(){
       const r=await api('GET','/api/snmp/templates');
       _snmpTemplates=r.templates||[];
     }
-    // "Everything" option first: probes every template's items in one pass
-    // (results come back grouped by vendor; only responders are shown).
+    // "Everything" option first and pre-selected: probes every template's
+    // items in one pass (results grouped by vendor; only responders shown).
+    // Picking a vendor template instead is the faster targeted path.
     const all=document.createElement('option');
     all.value='*'; all.textContent='★ All templates (full scan)';
     sel.appendChild(all);
@@ -965,6 +962,7 @@ async function _snmpLoadTemplates(){
       o.value=t.id; o.textContent=(t.vendor?`${t.vendor} · `:'')+t.name;
       sel.appendChild(o);
     });
+    sel.value='*';
   }catch(e){}
 }
 
@@ -1172,6 +1170,9 @@ function _snmpDiscoveryConnBody(){
   return body;
 }
 
+// LEGACY (v1.5 Build 6): retired from the UI — the Interfaces template +
+// default interface union in discoverWithTemplate() replaced this flow.
+// Kept one release for the /api/snmp/interfaces path; remove with it.
 async function discoverInterfaces(){
   const btn       = document.getElementById('as-disc-btn');
   const statusEl  = document.getElementById('as-iface-status');
@@ -1496,15 +1497,13 @@ async function discoverWithTemplate(){
   const tplId=document.getElementById('as-tpl-pick')?.value||'';
   const btn=document.getElementById('as-tpl-disc-btn');
   const statusEl=document.getElementById('as-iface-status');
-  const listEl=document.getElementById('as-iface-list');
   if(!tplId){ toast('Pick a template first','err'); return; }
   const body=_snmpDiscoveryConnBody();
   if(!body.host){ toast('Enter a Host / IP first','err'); return; }
   body.template_id=tplId;
-  if(document.getElementById('as-tpl-incif')?.checked) body.include_interfaces=true;
   if(btn){ btn.disabled=true; btn.textContent='Discovering…'; }
-  if(statusEl){ statusEl.style.color='var(--text3)'; statusEl.textContent='Probing device…'; }
-  if(listEl){ listEl.style.display='none'; listEl.innerHTML=''; }
+  if(statusEl){ statusEl.style.color='var(--text3)'; statusEl.textContent=
+    tplId==='*'?'Probing device against all templates…':'Probing device…'; }
   let r;
   try{
     r=await api('POST','/api/snmp/discover', body);
@@ -1512,7 +1511,7 @@ async function discoverWithTemplate(){
     if(statusEl){ statusEl.style.color='var(--down)'; statusEl.textContent=e.message||'Request failed'; }
     return;
   }finally{
-    if(btn){ btn.disabled=false; btn.textContent='⊕ Discover with template'; }
+    if(btn){ btn.disabled=false; btn.textContent='⊕ Discover'; }
   }
   _snmpCandidates=r.candidates||[];
   const via=r.via_probe?` · via probe ${r.via_probe}`:'';

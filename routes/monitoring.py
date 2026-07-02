@@ -665,10 +665,11 @@ def handle(h, method, path, body):
             if not tpl:
                 h._json(404, {"error": "template not found"}); return True
             items = list(tpl.get("items") or [])
-            # Optionally union the built-in Interfaces template so one
+            # Union the built-in Interfaces template by DEFAULT so one
             # discovery covers "vendor health + interfaces" (skipped when the
-            # picked template already is Interfaces).
-            if body.get("include_interfaces") and \
+            # picked template already is Interfaces; pass
+            # include_interfaces=false to opt out).
+            if body.get("include_interfaces", True) and \
                     (tpl.get("builtin_key") or "") != "builtin:interfaces":
                 try:
                     from db import db_list_snmp_templates
