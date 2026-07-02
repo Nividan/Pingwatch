@@ -29,19 +29,25 @@ TEMPLATES = [{
                     "buffer/memory %, temperature, state, load average; FRU "
                     "state; chassis alarms + identity."),
     "items": [
-        # ── jnxOperatingTable — one row per hardware component ──
+        # ── jnxOperatingTable — one row per hardware component. The MIB
+        #    defines 0 = "unavailable or inapplicable" for these gauges
+        #    (fans report CPU 0%, PSUs report 0 °C…) → skip_zero keeps the
+        #    preview to rows that actually measure something. ──
         table("CPU", "1.3.6.1.4.1.2636.3.1.13.1.8", unit="%",
-              name_oid=_JNX_DESCR, warn=75, crit=90),        # jnxOperatingCPU
+              name_oid=_JNX_DESCR, warn=75, crit=90,
+              skip_zero=True),                               # jnxOperatingCPU
         table("Buffer Utilization", "1.3.6.1.4.1.2636.3.1.13.1.11", unit="%",
-              name_oid=_JNX_DESCR, warn=80, crit=90),        # jnxOperatingBuffer
+              name_oid=_JNX_DESCR, warn=80, crit=90,
+              skip_zero=True),                               # jnxOperatingBuffer
         table("Temperature", "1.3.6.1.4.1.2636.3.1.13.1.7", unit="°C",
-              name_oid=_JNX_DESCR, warn=60, crit=75),        # jnxOperatingTemp
+              name_oid=_JNX_DESCR, warn=60, crit=75,
+              skip_zero=True),                               # jnxOperatingTemp
         table("Component State", "1.3.6.1.4.1.2636.3.1.13.1.6",
               unit=("2=running 3=ready 5=runningAtFullSpeed 7=standby "
                     "1=unknown 4=reset 6=down"),
               name_oid=_JNX_DESCR),                          # jnxOperatingState
         table("Load Average (1-min)", "1.3.6.1.4.1.2636.3.1.13.1.20",
-              name_oid=_JNX_DESCR),                          # jnxOperating1MinLoadAvg
+              name_oid=_JNX_DESCR, skip_zero=True),          # jnxOperating1MinLoadAvg
         # ── FRU state (jnxFruTable) ──
         table("FRU State", "1.3.6.1.4.1.2636.3.1.15.1.8",
               unit=("6=online 4=ready 10=standby 3=present 9=diagnostic "

@@ -58,7 +58,8 @@ TEMPLATES = [
             table("Entity Sensor", "1.3.6.1.2.1.99.1.1.1.4",
                   name_oid=ENT_NAME, name_oid2=ENT_DESCR,
                   scale_oid="1.3.6.1.2.1.99.1.1.1.2",
-                  precision_oid="1.3.6.1.2.1.99.1.1.1.3"),  # entPhySensorValue
+                  precision_oid="1.3.6.1.2.1.99.1.1.1.3",
+                  type_oid="1.3.6.1.2.1.99.1.1.1.1"),       # entPhySensorValue/Type
             table("Sensor Status", "1.3.6.1.2.1.99.1.1.1.5",
                   unit="1=ok 2=unavailable 3=nonoperational",
                   name_oid=ENT_NAME, name_oid2=ENT_DESCR),  # entPhySensorOperStatus

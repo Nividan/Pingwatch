@@ -208,6 +208,8 @@ function sensorFormHTML(dev, s=null) {
         <button class="dp-btn" type="button" onclick="discoverInterfaces()" id="as-disc-btn">⊕ Discover Interfaces</button>
         <select id="as-tpl-pick" style="max-width:210px"><option value="">— Template —</option></select>
         <button class="dp-btn" type="button" onclick="discoverWithTemplate()" id="as-tpl-disc-btn">⊕ Discover with template</button>
+        <label style="display:flex;align-items:center;gap:5px;font-size:11px;color:var(--text2);cursor:pointer" title="Also walk ifTable/ifXTable in the same discovery (uncheck for devices where interfaces don't matter)">
+          <input type="checkbox" id="as-tpl-incif" checked> + Interfaces</label>
         <span id="as-iface-status" style="font-size:11px;color:var(--text3)"></span>
       </div>
       <div id="as-iface-list" style="display:none;margin-top:8px"></div>
@@ -953,6 +955,11 @@ async function _snmpLoadTemplates(){
       const r=await api('GET','/api/snmp/templates');
       _snmpTemplates=r.templates||[];
     }
+    // "Everything" option first: probes every template's items in one pass
+    // (results come back grouped by vendor; only responders are shown).
+    const all=document.createElement('option');
+    all.value='*'; all.textContent='★ All templates (full scan)';
+    sel.appendChild(all);
     _snmpTemplates.forEach(t=>{
       const o=document.createElement('option');
       o.value=t.id; o.textContent=(t.vendor?`${t.vendor} · `:'')+t.name;
@@ -1494,6 +1501,7 @@ async function discoverWithTemplate(){
   const body=_snmpDiscoveryConnBody();
   if(!body.host){ toast('Enter a Host / IP first','err'); return; }
   body.template_id=tplId;
+  if(document.getElementById('as-tpl-incif')?.checked) body.include_interfaces=true;
   if(btn){ btn.disabled=true; btn.textContent='Discovering…'; }
   if(statusEl){ statusEl.style.color='var(--text3)'; statusEl.textContent='Probing device…'; }
   if(listEl){ listEl.style.display='none'; listEl.innerHTML=''; }

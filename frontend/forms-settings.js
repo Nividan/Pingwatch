@@ -1706,8 +1706,11 @@ function _snmpTplAddItemRow(item) {
       <input type="text" class="it-name-oid2" value="${esc(item.name_oid2 || '')}" placeholder="Fallback name OID" style="flex:1;min-width:130px;font-family:monospace;font-size:11px"/>
       <input type="text" class="it-scale-oid" value="${esc(item.scale_oid || '')}" placeholder="Scale OID (entity-sensor)" title="RFC 3433 scale column — per-row auto-scale" style="flex:1;min-width:130px;font-family:monospace;font-size:11px"/>
       <input type="text" class="it-precision-oid" value="${esc(item.precision_oid || '')}" placeholder="Precision OID" title="RFC 3433 precision column" style="flex:1;min-width:120px;font-family:monospace;font-size:11px"/>
+      <input type="text" class="it-type-oid" value="${esc(item.type_oid || '')}" placeholder="Type OID" title="RFC 3433 sensor-type column — per-row unit (°C/volts/rpm)" style="flex:1;min-width:110px;font-family:monospace;font-size:11px"/>
       <label style="display:flex;align-items:center;gap:5px;font-size:11px;color:var(--text2)">
         <input type="checkbox" class="it-speed-auto"${item.speed_auto_threshold ? ' checked' : ''}/> speed auto-threshold</label>
+      <label style="display:flex;align-items:center;gap:5px;font-size:11px;color:var(--text2)" title="Skip rows reading exactly 0 at discovery (MIBs where 0 = unavailable)">
+        <input type="checkbox" class="it-skip-zero"${item.skip_zero ? ' checked' : ''}/> skip zero rows</label>
     </div>`;
   box.appendChild(row);
 }
@@ -1752,7 +1755,10 @@ function _snmpTplReadItems() {
       if (scOid) it.scale_oid = scOid;
       const prOid = row.querySelector('.it-precision-oid').value.trim();
       if (prOid) it.precision_oid = prOid;
+      const tyOid = row.querySelector('.it-type-oid').value.trim();
+      if (tyOid) it.type_oid = tyOid;
       it.speed_auto_threshold = row.querySelector('.it-speed-auto').checked;
+      if (row.querySelector('.it-skip-zero').checked) it.skip_zero = true;
     }
     out.push(it);
   });

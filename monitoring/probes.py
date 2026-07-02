@@ -706,6 +706,11 @@ def snmpwalk_interfaces(host, community="public", port=161, timeout=8, version="
 _ENT_SCALE_EXP = {1: -24, 2: -21, 3: -18, 4: -15, 5: -12, 6: -9, 7: -6, 8: -3,
                   9: 0, 10: 3, 11: 6, 12: 9, 13: 12, 14: 18, 15: 15, 16: 21, 17: 24}
 
+# RFC 3433 EntitySensorDataType → display unit, for table items that carry a
+# type_oid (mixed sensor tables report volts/amps/°C/rpm rows side by side).
+_ENT_TYPE_UNIT = {3: "volts", 4: "volts", 5: "amps", 6: "W", 7: "hz",
+                  8: "°C", 9: "%", 10: "rpm", 14: "dbm"}
+
 
 def _clean_scale(v):
     """Validate an item's static scale divisor → float > 0, or 0 (= none)."""
@@ -851,8 +856,22 @@ def snmp_discover_template(host, items, community="public", port=161, timeout=8,
         pr_base = (it.get("precision_oid") or "").strip().rstrip(".")
         ent_scales = _walk_cached(sc_base) if sc_base else {}
         ent_precs  = _walk_cached(pr_base) if pr_base else {}
+        # Per-row unit from an RFC 3433 sensor-type column (mixed tables
+        # report volts/°C/rpm rows side by side under one value column).
+        ty_base = (it.get("type_oid") or "").strip().rstrip(".")
+        ent_types = _walk_cached(ty_base) if ty_base else {}
+        # skip_zero: drop rows reading exactly 0 — for tables like Juniper's
+        # jnxOperatingTable whose MIB defines zero as "unavailable or
+        # inapplicable" (fans report CPU 0%, PSUs report temp 0 °C, …).
+        skip_zero = bool(it.get("skip_zero"))
         label = it.get("label") or base
         for idx in sorted(vals, key=_idx_sort_key):
+            if skip_zero:
+                try:
+                    if float(vals.get(idx)) == 0:
+                        continue
+                except (TypeError, ValueError):
+                    pass
             row_name = names1.get(idx) or names2.get(idx) or str(idx)
             try:
                 speed_raw = int(speeds.get(idx) or 0)
@@ -878,12 +897,20 @@ def snmp_discover_template(host, items, community="public", port=161, timeout=8,
                 disp_val = ("%.1f" % pv).rstrip("0").rstrip(".")
             else:
                 disp_val = _apply_scale(vals.get(idx), row_scale)
+            row_unit = it.get("unit") or ("%" if pct_base else "")
+            if ent_types:
+                try:
+                    _tu = _ENT_TYPE_UNIT.get(int(ent_types.get(idx)))
+                    if _tu:
+                        row_unit = _tu
+                except (TypeError, ValueError):
+                    pass
             c = {
                 "kind": "percent" if pct_base else "table",
                 "item_label": label, "index": idx,
                 "row_name": row_name, "oid": f"{base}.{idx}",
                 "hc_oid": f"{hc_base}.{idx}" if hc_base else "",
-                "unit": it.get("unit") or ("%" if pct_base else ""),
+                "unit": row_unit,
                 "value": disp_val,
                 "speed_auto_threshold": bool(it.get("speed_auto_threshold")),
                 "speed_raw": speed_raw,

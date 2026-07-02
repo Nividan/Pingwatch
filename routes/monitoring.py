@@ -131,11 +131,13 @@ def _snmp_tpl_clean_items(raw) -> list:
                 item["oid2"] = oid2[:255]
                 item["percent_mode"] = mode if mode in _SNMP_PCT_MODES else "used_total"
             for k in ("name_oid", "name_oid2", "speed_oid", "hc_variant_oid",
-                      "scale_oid", "precision_oid"):
+                      "scale_oid", "precision_oid", "type_oid"):
                 v = str(it.get(k) or "").strip()
                 if v:
                     item[k] = v[:255]
             item["speed_auto_threshold"] = bool(it.get("speed_auto_threshold"))
+            if it.get("skip_zero"):
+                item["skip_zero"] = True
         out.append(item)
     return out
 
@@ -650,11 +652,35 @@ def handle(h, method, path, body):
         tpl_id = (body.get("template_id") or "").strip()
         if not tpl_id:
             h._json(400, {"error": "template_id required"}); return True
-        from db import db_get_snmp_template
-        tpl = db_get_snmp_template(tpl_id)
-        if not tpl:
-            h._json(404, {"error": "template not found"}); return True
-        items = tpl.get("items") or []
+        # "*" = discover against ALL templates at once (same aggregate the
+        # device-scan uses) — one pick shows everything the device answers,
+        # grouped by vendor; the shorter per-OID timeout keeps the big
+        # non-responder sweep bounded.
+        full_sweep = tpl_id == "*"
+        if full_sweep:
+            items = _snmp_all_known_items()
+        else:
+            from db import db_get_snmp_template
+            tpl = db_get_snmp_template(tpl_id)
+            if not tpl:
+                h._json(404, {"error": "template not found"}); return True
+            items = list(tpl.get("items") or [])
+            # Optionally union the built-in Interfaces template so one
+            # discovery covers "vendor health + interfaces" (skipped when the
+            # picked template already is Interfaces).
+            if body.get("include_interfaces") and \
+                    (tpl.get("builtin_key") or "") != "builtin:interfaces":
+                try:
+                    from db import db_list_snmp_templates
+                    for t in db_list_snmp_templates():
+                        if (t.get("builtin_key") or "") == "builtin:interfaces":
+                            have = {(i.get("kind"), i.get("oid")) for i in items}
+                            for it in (t.get("items") or []):
+                                if (it.get("kind"), it.get("oid")) not in have:
+                                    items.append(it)
+                            break
+                except Exception as e:
+                    log.error(f"snmp discover include_interfaces: {e}")
         if not items:
             h._json(400, {"error": "template has no items"}); return True
         params, perr = _snmp_conn_params(body)
@@ -665,15 +691,22 @@ def handle(h, method, path, body):
             h._json(val[0], {"error": val[1]}); return True
         if mode == "probe":
             from routes.agent import run_remote_snmp_discover
-            cands, _err = run_remote_snmp_discover(
-                val, params["host"], items, params["community"], params["port"],
-                params["version"], params["v3_creds"], user)
+            if full_sweep:
+                cands, _err = run_remote_snmp_discover(
+                    val, params["host"], items, params["community"], params["port"],
+                    params["version"], params["v3_creds"], user,
+                    timeout=50.0, op_timeout=3)
+            else:
+                cands, _err = run_remote_snmp_discover(
+                    val, params["host"], items, params["community"], params["port"],
+                    params["version"], params["v3_creds"], user)
             if cands is None:
                 h._json(502, {"error": _err or "remote discovery failed"}); return True
             h._json(200, {"candidates": cands, "via_probe": val["name"]}); return True
         from monitoring.probes import snmp_discover_template
         cands = snmp_discover_template(params["host"], items, params["community"],
-                                       params["port"], timeout=10,
+                                       params["port"],
+                                       timeout=3 if full_sweep else 10,
                                        version=params["version"], v3_creds=params["v3_creds"])
         if cands is None:
             h._json(503, {"error": "snmpwalk not found — install net-snmp"}); return True

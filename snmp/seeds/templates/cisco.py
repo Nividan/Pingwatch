@@ -69,11 +69,13 @@ TEMPLATES = [{
         table("Power Supply State", "1.3.6.1.4.1.9.9.13.1.5.1.3",
               unit=_ENVMON_STATE,
               name_oid="1.3.6.1.4.1.9.9.13.1.5.1.2"),        # …SupplyStatusDescr
-        # ── Entity sensors (CISCO-ENTITY-SENSOR, RFC 3433 auto-scale) ──
+        # ── Entity sensors (CISCO-ENTITY-SENSOR, RFC 3433 auto-scale;
+        #    per-row unit from the sensor-type column: °C/volts/amps/rpm) ──
         table("Entity Sensor", "1.3.6.1.4.1.9.9.91.1.1.1.1.4",
               name_oid=ENT_NAME, name_oid2=ENT_DESCR,
               scale_oid="1.3.6.1.4.1.9.9.91.1.1.1.1.2",      # entSensorScale
-              precision_oid="1.3.6.1.4.1.9.9.91.1.1.1.1.3"), # entSensorPrecision
+              precision_oid="1.3.6.1.4.1.9.9.91.1.1.1.1.3",  # entSensorPrecision
+              type_oid="1.3.6.1.4.1.9.9.91.1.1.1.1.1"),      # entSensorType
         # ── FRU control (entPhysicalIndex-indexed → name joins directly) ──
         table("FRU Power Status", "1.3.6.1.4.1.9.9.117.1.1.2.1.2",
               unit=("2=on 1=offEnvOther 3=offAdmin 4=offDenied 5=offEnvPower "

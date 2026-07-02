@@ -40,9 +40,9 @@ def percent(label, oid_a, oid_b, mode="used_total", warn=80, crit=90):
 
 
 def table(label, oid, unit="", name_oid="", name_oid2="", warn=None, crit=None,
-          scale=None, scale_oid="", precision_oid="", oid2="",
+          scale=None, scale_oid="", precision_oid="", type_oid="", oid2="",
           percent_mode="", speed_auto_threshold=False, speed_oid="",
-          hc_variant_oid=""):
+          hc_variant_oid="", skip_zero=False):
     it = {"kind": "table", "label": label, "oid": oid, "unit": unit,
           "warn": warn, "crit": crit, "interval": None}
     if name_oid:
@@ -55,6 +55,9 @@ def table(label, oid, unit="", name_oid="", name_oid2="", warn=None, crit=None,
         it["scale_oid"] = scale_oid
     if precision_oid:
         it["precision_oid"] = precision_oid
+    if type_oid:
+        # RFC 3433 sensor-type column → per-row unit (volts/°C/rpm/…)
+        it["type_oid"] = type_oid
     if oid2:
         it["oid2"] = oid2
         it["percent_mode"] = percent_mode or "used_total"
@@ -64,6 +67,9 @@ def table(label, oid, unit="", name_oid="", name_oid2="", warn=None, crit=None,
         it["speed_oid"] = speed_oid
     if hc_variant_oid:
         it["hc_variant_oid"] = hc_variant_oid
+    if skip_zero:
+        # For tables whose MIB defines 0 = "unavailable/inapplicable"
+        it["skip_zero"] = True
     return it
 
 

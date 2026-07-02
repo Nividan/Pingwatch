@@ -53,11 +53,13 @@ TEMPLATES = [{
                unit="%", warn=80, crit=90),          # panGPGWUtilizationPct
         scalar("GP Active Tunnels", "1.3.6.1.4.1.25461.2.1.2.5.1.3.0",
                unit="count"),                        # panGPGWUtilizationActiveTunnels
-        # ── Environment (standard ENTITY-SENSOR, RFC 3433 auto-scale) ──
+        # ── Environment (standard ENTITY-SENSOR, RFC 3433 auto-scale;
+        #    per-row unit from the sensor-type column) ──
         table("Entity Sensor", "1.3.6.1.2.1.99.1.1.1.4",
               name_oid=ENT_DESCR, name_oid2=ENT_NAME,
               scale_oid="1.3.6.1.2.1.99.1.1.1.2",    # entPhySensorScale
-              precision_oid="1.3.6.1.2.1.99.1.1.1.3"),  # entPhySensorPrecision
+              precision_oid="1.3.6.1.2.1.99.1.1.1.3",   # entPhySensorPrecision
+              type_oid="1.3.6.1.2.1.99.1.1.1.1"),    # entPhySensorType
         table("Sensor Status", "1.3.6.1.2.1.99.1.1.1.5",
               unit="1=ok 2=unavailable 3=nonoperational",
               name_oid=ENT_DESCR, name_oid2=ENT_NAME),  # entPhySensorOperStatus
