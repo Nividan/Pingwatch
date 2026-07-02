@@ -1545,20 +1545,41 @@ function _snmpRenderCandidates(){
   const body=_discHost('Discover with Template');
   const cands=_snmpCandidates;
   const hasGroups=cands.some(c=>c.group);
+  // "Unused/empty" detection for the preview filter. Blank = the OID returned
+  // no value. For interface (ifTable/ifXTable) metrics we additionally treat
+  // EVERY metric of an operationally-down interface as unused, keyed off that
+  // interface's ifOperStatus. A value of 0 alone is deliberately NOT enough —
+  // In Errors=0, HW-sensor 0=ok, CPU=0 and other health metrics are legitimately
+  // zero and must stay visible; only down interfaces are the dead weight.
+  const _IF_PFX=['1.3.6.1.2.1.2.2.1.','1.3.6.1.2.1.31.1.1.1.'];
+  const _OPER_PFX='1.3.6.1.2.1.2.2.1.8.';
+  const operByIdx={};
+  cands.forEach(c=>{ const o=String(c.oid||'');
+    if(o.indexOf(_OPER_PFX)===0) operByIdx[o.slice(_OPER_PFX.length)]=(c.value==null?'':String(c.value)).trim();
+  });
+  const _ifIdx=o=>{ o=String(o||''); for(const p of _IF_PFX){ if(o.indexOf(p)===0) return o.split('.').pop(); } return null; };
+  const _blank=v=>v==null||String(v).trim()==='';
+  const _unused=c=>{
+    if(_blank(c.value)) return true;                       // OID returned nothing
+    const idx=_ifIdx(c.oid);                               // interface metric?
+    if(idx!=null){ const st=operByIdx[idx]; if(st!=null&&st!==''&&st!=='1') return true; }  // down interface
+    return false;
+  };
   const groups={};
   cands.forEach((c,i)=>{ const g=hasGroups?(c.group||'Other'):''; (groups[g]=groups[g]||[]).push(i); });
-  let rows='';
+  let rows='', nUnused=0;
   Object.keys(groups).sort().forEach(g=>{
     if(g) rows+=`<div class="disc-grp">${esc(g)} <span class="disc-grp-n">${groups[g].length}</span></div>`;
     groups[g].forEach(i=>{
       const c=cands[i];
       // Tables + percents carry live values too (scaled/computed server-side)
       const val=String(c.value||'').slice(0,40);
+      const un=_unused(c); if(un) nUnused++;
       const search=esc(`${c.suggested_name||''} ${c.item_label||''} ${c.oid||''} ${c.unit||''}`.toLowerCase());
       // 64-bit toggle is its own control — kept outside the row-select label so
       // clicking it doesn't also toggle the row checkbox.
       const hc=c.hc_oid?`<label class="disc-hc" title="Monitor the 64-bit counter"><input type="checkbox" class="snmpc-hc"> 64-bit</label>`:'';
-      rows+=`<div class="disc-row snmpc-row" data-search="${search}">
+      rows+=`<div class="disc-row snmpc-row" data-search="${search}" data-unused="${un?1:0}">
         <label class="disc-pick">
           <input type="checkbox" class="snmpc-cb disc-cb" data-i="${i}" onchange="_snmpcUpdateCount()">
           <span class="disc-main"><span class="disc-name">${esc(c.suggested_name||c.item_label||'')}</span><span class="disc-sub">${esc(c.oid||'')}</span></span>
@@ -1568,9 +1589,14 @@ function _snmpRenderCandidates(){
       </div>`;
     });
   });
+  // Toggle only appears when there's dead weight to hide; default ON so the
+  // down-interface rows are collapsed out of the way immediately. Select-all
+  // then acts on the visible (in-use) rows only.
+  const hideCtl=nUnused?`<label class="disc-selall" title="Hide blank values and every metric of a down/unused interface"><input type="checkbox" id="snmpc-hide-unused" checked onchange="_snmpcApplyFilters()"> Hide unused/empty <span class="disc-count">(${nUnused})</span></label>`:'';
   body.innerHTML=`
     <div class="disc-tools">
-      <input type="text" id="snmpc-filter" class="disc-filter" placeholder="Filter metrics…" autocomplete="off" oninput="_snmpcFilter(this.value)"/>
+      <input type="text" id="snmpc-filter" class="disc-filter" placeholder="Filter metrics…" autocomplete="off" oninput="_snmpcApplyFilters()"/>
+      ${hideCtl}
       <span id="snmpc-filter-count" class="disc-count"></span>
     </div>
     <div class="disc-list">${rows}</div>
@@ -1579,20 +1605,26 @@ function _snmpRenderCandidates(){
       <span id="snmpc-sel-count" class="disc-count">0 selected</span>
       <button class="btn-p" id="snmpc-add-btn" onclick="_snmpAddSelectedCandidates()">Add Selected as Sensors</button>
     </div>`;
-  _snmpcUpdateCount();
+  _snmpcApplyFilters();
 }
 
-function _snmpcFilter(q){
-  q=(q||'').trim().toLowerCase();
+// Combined view filter for the discovery preview: free-text match AND the
+// "hide unused/empty" toggle. Select-all / add operate on visible rows only,
+// so hidden (unused) rows are never bulk-added.
+function _snmpcApplyFilters(){
+  const q=(document.getElementById('snmpc-filter')?.value||'').trim().toLowerCase();
+  const hideUn=!!document.getElementById('snmpc-hide-unused')?.checked;
   const rows=[...document.querySelectorAll('.snmpc-row')];
-  let shown=0;
+  let shown=0, hid=0;
   rows.forEach(tr=>{
-    const m=!q||(tr.getAttribute('data-search')||'').includes(q);
-    tr.style.display=m?'':'none';
-    if(m) shown++;
+    const textOk=!q||(tr.getAttribute('data-search')||'').includes(q);
+    const un=tr.getAttribute('data-unused')==='1';
+    const vis=textOk&&!(hideUn&&un);
+    tr.style.display=vis?'':'none';
+    if(vis) shown++; else if(textOk&&hideUn&&un) hid++;
   });
   const cnt=document.getElementById('snmpc-filter-count');
-  if(cnt) cnt.textContent=q?`${shown} of ${rows.length}`:'';
+  if(cnt) cnt.textContent=(q||hideUn)?`${shown} shown${hid?` · ${hid} hidden`:''}`:'';
   _snmpcUpdateCount();
 }
 
