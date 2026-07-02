@@ -498,6 +498,57 @@ function _showLoginErr(msg){
   if(err){err.textContent=msg; err.style.display='block';}
 }
 
+// SSO (SAML/OIDC) second-factor prompt. Reached when the IdP redirects back to
+// /?sso_totp=<pending> for a TOTP-enrolled user. Mirrors _show2faPrompt but
+// posts {pending, code} to /api/login/sso-totp and has no remember-device row.
+function _showSsoTotpPrompt(pending){
+  showLogin();
+  const userField=document.getElementById('login-user');
+  const passField=document.getElementById('login-pass');
+  if(userField){userField.value=''; userField.disabled=true; userField.placeholder='Signed in via SSO';}
+  if(passField){passField.style.display='none';}
+  const err=document.getElementById('login-err');
+  if(err){err.textContent=''; err.style.display='none';}
+  let codeField=document.getElementById('login-totp');
+  if(!codeField){
+    codeField=document.createElement('input');
+    codeField.type='text'; codeField.id='login-totp';
+    codeField.placeholder='6-digit code or recovery code';
+    codeField.autocomplete='one-time-code'; codeField.maxLength=20;
+    codeField.style.cssText='width:100%;padding:10px;margin-top:8px;background:var(--surface-inset,#0e141a);color:var(--text);border:1px solid var(--border);border-radius:6px;font-family:monospace;letter-spacing:0.5px;text-align:center;';
+    if(passField&&passField.parentNode){passField.parentNode.insertBefore(codeField, passField.nextSibling);}
+  }
+  codeField.style.display='block'; codeField.value='';
+  setTimeout(()=>codeField.focus(),50);
+  const btn=document.getElementById('login-btn');
+  if(btn){btn.textContent='Verify'; btn.disabled=false;}
+  const submit=async()=>{
+    const code=(codeField.value||'').trim();
+    if(!code){_showLoginErr('Enter your 2FA code'); return;}
+    btn.disabled=true; btn.textContent='Verifying…';
+    try{
+      const r=await fetch('/api/login/sso-totp',{method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({pending, code})});
+      const d=await r.json();
+      if(!r.ok||d.error){_showLoginErr(d.error||'Verification failed'); btn.disabled=false; btn.textContent='Verify'; return;}
+      _loggedOut=false;
+      S.role=d.role||'viewer';
+      // Strip ?sso_totp so a refresh doesn't re-trigger (the pending is single-use).
+      try{history.replaceState(null,'',window.location.pathname);}catch(e){}
+      try{const me=await fetch('/api/me').then(x=>x.ok?x.json():null);
+        if(me&&me.theme_preference&&typeof setTheme==='function')setTheme(me.theme_preference,{sync:false});}catch(e){}
+      hideLogin();
+      if(userField){userField.disabled=false; userField.placeholder='';}
+      if(passField){passField.style.display='block';}
+      if(codeField){codeField.style.display='none';}
+      try{localStorage.setItem('pw_tab','dashboard');}catch(e){}
+      onAuthenticated(d.username);
+    }catch(e){_showLoginErr('Server error. Try again.'); btn.disabled=false; btn.textContent='Verify';}
+  };
+  btn.onclick=submit;
+  codeField.onkeydown=(e)=>{ if(e.key==='Enter'){e.preventDefault(); submit();} };
+}
+
 // ── RADIUS Access-Challenge prompt ───────────────────────────────
 // Rendered when the RADIUS server returns Access-Challenge (typically for 2FA).
 // The server provides a human prompt ("Enter token code", "Approve push", etc.).
@@ -1411,6 +1462,12 @@ function applyRbac(){
 async function checkAuth(){
   // Hide UI controls until we confirm auth
   document.getElementById('usrDd').style.display='none';
+  // SSO second factor: the IdP redirected back with ?sso_totp=<pending>
+  // because this user has TOTP enabled. Collect the code before /api/me.
+  try{
+    const _ssoPending=new URLSearchParams(window.location.search).get('sso_totp');
+    if(_ssoPending){ _showSsoTotpPrompt(_ssoPending); return; }
+  }catch(e){}
   try{
     const r=await fetch('/api/me');
     if(r.ok){const d=await r.json(); S.role=d.role||'viewer'; S.me=d; if(d.session_ttl)_sessionTtl=d.session_ttl; if(d.theme_preference&&typeof setTheme==='function')setTheme(d.theme_preference,{sync:false}); onAuthenticated(d.username);}

@@ -239,20 +239,44 @@ def _restore_pg(snap):
     env = dict(os.environ)
     if pw:
         env["PGPASSWORD"] = pw
+    def _psql(sql=None, sql_file=None):
+        args = ["psql", "-h", host, "-p", port, "-U", user, "-d", db,
+                "-v", "ON_ERROR_STOP=1"]
+        if sql:      args += ["-c", sql]
+        if sql_file: args += ["-f", sql_file]
+        return subprocess.run(args, env=env, capture_output=True, text=True)
+
     for schema, fname, fatal in (("main", "main.sql", True), ("logs", "logs.sql", False)):
         path = os.path.join(snap, fname)
         if not os.path.isfile(path):
             continue
+        bak = schema + "_restorebak"
         try:
-            drop = subprocess.run(
-                ["psql", "-h", host, "-p", port, "-U", user, "-d", db, "-v", "ON_ERROR_STOP=1",
-                 "-c", "DROP SCHEMA IF EXISTS %s CASCADE; CREATE SCHEMA %s;" % (schema, schema)],
-                env=env, capture_output=True, text=True)
-            load = subprocess.run(
-                ["psql", "-h", host, "-p", port, "-U", user, "-d", db, "-v", "ON_ERROR_STOP=1", "-f", path],
-                env=env, capture_output=True, text=True)
-            if drop.returncode or load.returncode:
-                raise RuntimeError((load.stderr or drop.stderr or "psql failed").strip()[:200])
+            # Blue-green schema swap so a failed load can never leave an empty or
+            # partial schema (the old code DROPped then loaded in two separate,
+            # non-transactional psql calls — a load failure bricked the DB):
+            #   1. rename the live schema aside (clearing any leftover backup
+            #      from a prior interrupted restore),
+            prep = _psql("DROP SCHEMA IF EXISTS %s CASCADE; "
+                         "ALTER SCHEMA %s RENAME TO %s; "
+                         "CREATE SCHEMA %s;" % (bak, schema, bak, schema))
+            if prep.returncode:
+                raise RuntimeError((prep.stderr or "prep failed").strip()[:200])
+            #   2. load the snapshot into the fresh schema,
+            load = _psql(sql_file=path)
+            if load.returncode:
+                #   on failure: drop the half-loaded schema and rename the
+                #   preserved copy back — the DB is exactly as it was.
+                rb = _psql("DROP SCHEMA IF EXISTS %s CASCADE; "
+                           "ALTER SCHEMA %s RENAME TO %s;" % (schema, bak, schema))
+                if rb.returncode:
+                    _log("rollback: PG %s reload failed AND revert failed — "
+                         "manual recovery needed (backup schema %s)" % (schema, bak))
+                else:
+                    _log("rollback: PG %s reload failed, reverted to pre-restore copy" % schema)
+                raise RuntimeError((load.stderr or "load failed").strip()[:200])
+            #   3. success: drop the preserved copy.
+            _psql("DROP SCHEMA IF EXISTS %s CASCADE;" % bak)
             _log("rollback: restored PG schema %s" % schema)
         except Exception as e:
             lvl = "FAILED (fatal)" if fatal else "failed (non-fatal)"
@@ -309,7 +333,15 @@ def _begin_probation(st, active):
     remember the current good release as the rollback target, start probation."""
     target = st.get("target")
     window = _clamp_window(st.get("probation_window") or PROBATION_DEFAULT)
-    st["previous"] = active
+    # Trust the rollback target stage_image already recorded (core/upgrade.py) —
+    # do NOT recompute it from the live pointer. If a crash lands between the
+    # pointer flip and the state save, this runs again with active=target; the
+    # old `st["previous"] = active` then set previous=target (the bad release),
+    # so a later probation failure "rolled back" onto the broken build. The
+    # on-disk state from stage_image still holds the correct previous, so we
+    # only fall back to `active` if it's somehow unset.
+    if not st.get("previous"):
+        st["previous"] = active
     st["phase"] = "probation"
     st["probation_deadline"] = time.time() + window
     st["probation_window"] = window
@@ -469,11 +501,19 @@ def supervise():
                  % (active, ran_for, ret, fast_crashes, CRASH_MAX))
             prev = st.get("previous")
             if fast_crashes >= CRASH_MAX and release_runnable(prev) and prev != active:
-                _write_report("rolled_back", st, reason="committed release crash-looping")
-                _restore_snapshot(st.get("db_snapshot"), st.get("db_backend"))
+                # CODE-ONLY rollback. Unlike a probation-timeout rollback (fresh
+                # upgrade, minutes-old snapshot), a committed release may have run
+                # — and migrated the DB — for days or weeks before it began
+                # crash-looping. db_snapshot is the PRE-UPGRADE state, so
+                # restoring it here would silently discard everything written
+                # since the upgrade. Revert the code to the last runnable release
+                # (safe, reversible) and leave the DB intact for manual review.
+                _write_report("rolled_back", st,
+                              reason="committed release crash-looping (code-only rollback, DB left intact)")
                 write_pointer(prev)
                 _remove(HEALTH_PATH)
-                _log("CRASH-LOOP ROLLBACK: %s -> %s" % (active, prev))
+                _log("CRASH-LOOP ROLLBACK (code only — DB left intact, review manually): "
+                     "%s -> %s" % (active, prev))
                 fast_crashes = 0
             else:
                 time.sleep(RESTART_BACKOFF)

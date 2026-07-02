@@ -820,6 +820,13 @@ function _buildSettingsTab_integrations(sr) {
           <div class="fr"><label class="fl">Timeout (s)</label>
             <input type="number" id="ldap-timeout" value="10" min="1" max="120" style="max-width:80px"/></div>
         </div>
+        <div class="fr" id="ldap-tls-verify-row">
+          <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12px;color:var(--text2)">
+            <input type="checkbox" id="ldap-tls-verify" style="width:14px;height:14px;cursor:pointer"/>
+            Verify server TLS certificate (recommended)
+          </label>
+          <div class="fh">Validates the LDAPS/StartTLS certificate against the OS trust store plus any CA uploaded under <b>TLS &rarr; CA certificates</b>. If your AD uses an internal CA, upload that CA there first or logins will fail. Off = today's behavior (no verification). Only applies when Security is LDAPS or StartTLS.</div>
+        </div>
         <div class="fr"><label class="fl">Base DN</label>
           <input type="text" id="ldap-base-dn" placeholder="DC=example,DC=com" autocomplete="off"/></div>
         <div class="fgrid">
@@ -4325,6 +4332,7 @@ async function _loadLdapPanel() {
   set('ldap-port',              s.ldap_port   || 389);
   const sslEl = document.getElementById('ldap-ssl');
   if (sslEl) sslEl.value = String(s.ldap_ssl ?? 0);
+  setChk('ldap-tls-verify',     s.ldap_tls_verify);
   set('ldap-timeout',           s.ldap_timeout || 10);
   set('ldap-base-dn',           s.ldap_base_dn || '');
   set('ldap-bind-dn',           s.ldap_bind_dn || '');

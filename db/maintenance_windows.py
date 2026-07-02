@@ -105,13 +105,6 @@ def db_update_window(window_id: int, data: dict) -> bool:
         _vals)
 
 
-def db_set_window_enabled(window_id: int, enabled: bool) -> bool:
-    """Single-field toggle — used by the row toggle in the UI."""
-    return db_execute("main",
-        "UPDATE maintenance_windows SET enabled=? WHERE id=?",
-        (1 if enabled else 0, window_id))
-
-
 def db_delete_window(window_id: int) -> bool:
     return db_execute("main", "DELETE FROM maintenance_windows WHERE id=?", (window_id,))
 

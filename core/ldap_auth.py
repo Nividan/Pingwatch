@@ -99,6 +99,7 @@ def _get_cfg() -> dict:
         'server':         _settings.get('ldap_server', ''),
         'port':           int(_settings.get('ldap_port', 389) or 389),
         'ssl':            int(_settings.get('ldap_ssl', 0) or 0),
+        'tls_verify':     bool(int(_settings.get('ldap_tls_verify', 0) or 0)),
         'base_dn':        _settings.get('ldap_base_dn', ''),
         'bind_dn':        _settings.get('ldap_bind_dn', ''),
         'bind_pass':      bind_pass,
@@ -122,11 +123,36 @@ def _escape(value: str) -> str:
 
 
 def _build_server(cfg: dict):
-    """Create an ldap3 Server object from config."""
+    """Create an ldap3 Server object from config.
+
+    TLS validation (LDAPS / StartTLS) is gated by `ldap_tls_verify`:
+      • off (default) → CERT_OPTIONAL, today's behavior — but now an explicit,
+        logged choice rather than a silent default, so the AD bind (which
+        carries the service-account and every user password) isn't
+        unknowingly MITM-able;
+      • on  → CERT_REQUIRED. When a corporate CA has been uploaded (Settings →
+        TLS → CA certs) we verify against exactly that — the usual internal-CA
+        AD case; otherwise we fall back to the OS trust store (public certs).
+    Staged rollout: verification defaults OFF so existing logins don't break on
+    deploy; the admin uploads their CA, tests the bind, then turns it on.
+    """
     from ldap3 import Server, Tls
     import ssl as _ssl_mod
     ssl_mode = cfg['ssl']
-    tls_obj = Tls(validate=_ssl_mod.CERT_OPTIONAL) if ssl_mode in (1, 2) else None
+    tls_obj = None
+    if ssl_mode in (1, 2):
+        if cfg.get('tls_verify'):
+            try:
+                from core.ssl_trust import get_trusted_ca_pem
+                ca_pem = get_trusted_ca_pem()
+            except Exception:
+                ca_pem = None
+            if ca_pem:
+                tls_obj = Tls(validate=_ssl_mod.CERT_REQUIRED, ca_certs_data=ca_pem)
+            else:
+                tls_obj = Tls(validate=_ssl_mod.CERT_REQUIRED)
+        else:
+            tls_obj = Tls(validate=_ssl_mod.CERT_OPTIONAL)
     return Server(
         cfg['server'],
         port=cfg['port'],

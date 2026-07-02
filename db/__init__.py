@@ -87,8 +87,6 @@ from db.users       import (
     db_set_totp,
     db_clear_totp,
     # Trusted devices (Remember 2FA)
-    db_get_remember_hours,
-    db_set_remember_hours,
     db_add_trusted_device,
     db_lookup_trusted_device,
     db_touch_trusted_device,
@@ -307,7 +305,6 @@ __all__ = [
     # TOTP helpers
     "db_get_totp", "db_set_totp", "db_clear_totp",
     # Trusted devices
-    "db_get_remember_hours", "db_set_remember_hours",
     "db_add_trusted_device", "db_lookup_trusted_device", "db_touch_trusted_device",
     "db_list_trusted_devices", "db_revoke_trusted_device",
     "db_revoke_trusted_devices", "db_sweep_expired_trusted_devices",

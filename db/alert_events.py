@@ -317,27 +317,37 @@ def db_get_event(event_id: int) -> dict:
 
 
 def db_ack_event(event_id: int, actor: str) -> bool:
+    """Acknowledge an OPEN event. Returns True only if a row transitioned.
+
+    The `state IN ('active','acknowledged')` guard is essential: without it,
+    acking a RESOLVED event flips it back to 'acknowledged' — it re-surfaces in
+    unresolved views AND arms db_has_acked_event, whose ack-gate then silences
+    every dispatch of that sensor's NEXT incident. Suppressed rows are likewise
+    not ackable.
+    """
     if is_pg():
         from db.pg_pool import pg_cursor
         try:
             with pg_cursor("main") as cur:
                 cur.execute(
-                    "UPDATE alert_events SET state='acknowledged', ack_by=%s, ack_at=%s WHERE id=%s",
+                    "UPDATE alert_events SET state='acknowledged', ack_by=%s, ack_at=%s "
+                    "WHERE id=%s AND state IN ('active','acknowledged')",
                     (actor, time.time(), event_id)
                 )
-            return True
+                return cur.rowcount > 0
         except Exception as e:
             log.error(f"db_ack_event error: {e}")
             return False
     # SQLite
     con = _con()
     try:
-        con.execute(
-            "UPDATE alert_events SET state='acknowledged', ack_by=?, ack_at=? WHERE id=?",
+        cur = con.execute(
+            "UPDATE alert_events SET state='acknowledged', ack_by=?, ack_at=? "
+            "WHERE id=? AND state IN ('active','acknowledged')",
             (actor, time.time(), event_id)
         )
         con.commit()
-        return True
+        return cur.rowcount > 0
     except Exception as e:
         log.error(f"db_ack_event error: {e}")
         return False
@@ -565,12 +575,14 @@ def db_has_acked_event(profile_id: int, did: str, sid: str) -> bool:
 
 
 def db_clean_alert_events(retain_days: int = 90) -> int:
-    """Delete RESOLVED alert events older than `retain_days`.
+    """Delete terminal alert events older than `retain_days`.
 
     The table header promised "rotational, capped retention" but nothing ever
-    pruned it — resolved events accumulated forever in the main DB of a 24/7
-    service. Active/acknowledged rows are always kept (they're open incidents).
-    Returns rows deleted. Called from the hourly autosave cleanup.
+    pruned it — events accumulated forever in the main DB of a 24/7 service.
+    Prunes both RESOLVED rows (by resolved_at) and SUPPRESSED rows (terminal,
+    resolved_at stays 0 → pruned by triggered_at; a fleet with nightly recurring
+    maintenance windows writes these continuously). Active/acknowledged rows are
+    always kept (open incidents). Returns rows deleted; called hourly.
     """
     cutoff = time.time() - max(1, int(retain_days)) * 86400
     try:
@@ -578,18 +590,20 @@ def db_clean_alert_events(retain_days: int = 90) -> int:
             from db.pg_pool import pg_cursor
             with pg_cursor("main") as cur:
                 cur.execute(
-                    "DELETE FROM alert_events "
-                    "WHERE state='resolved' AND resolved_at>0 AND resolved_at < %s",
-                    (cutoff,)
+                    "DELETE FROM alert_events WHERE "
+                    "(state='resolved' AND resolved_at>0 AND resolved_at < %s) "
+                    "OR (state='suppressed' AND triggered_at>0 AND triggered_at < %s)",
+                    (cutoff, cutoff)
                 )
                 n = cur.rowcount or 0
         else:
             con = _con()
             try:
                 cur = con.execute(
-                    "DELETE FROM alert_events "
-                    "WHERE state='resolved' AND resolved_at>0 AND resolved_at < ?",
-                    (cutoff,)
+                    "DELETE FROM alert_events WHERE "
+                    "(state='resolved' AND resolved_at>0 AND resolved_at < ?) "
+                    "OR (state='suppressed' AND triggered_at>0 AND triggered_at < ?)",
+                    (cutoff, cutoff)
                 )
                 n = cur.rowcount or 0
                 con.commit()

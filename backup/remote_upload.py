@@ -25,7 +25,11 @@ from db.backups import decrypt_pw
 _PROBE_NAME = 'pingwatch-remote-probe.tmp'
 _PROBE_BODY = b'pingwatch remote backup probe\n'
 _CONNECT_TIMEOUT = 15
-_BACKUP_PREFIXES = ('pingwatch-main-', 'pingwatch-logs-')
+# Keep in sync with the local-retention prefixes in backup/db_backup.py.
+# 'pingwatch-bundle-' is the current (v1.5+) artifact; without it here the
+# remote SFTP/SMB prune matched nothing and bundles grew unbounded off-box.
+_BACKUP_PREFIXES = ('pingwatch-bundle-', 'pingwatch-main-',
+                    'pingwatch-logs-', 'pingwatch-db-')
 
 
 # ── Public API ──────────────────────────────────────────────────────

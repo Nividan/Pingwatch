@@ -266,13 +266,6 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return None
         return user
 
-    def _auth_role(self):
-        """Return (username, role) or (None, None) after sending 401."""
-        user, role, _scope, _kind = self._auth_principal()
-        if not user:
-            self._json(401, {"error": "unauthorized"}); return None, None
-        return user, role
-
     def _require(self, min_role="viewer"):
         """Return (username, role) if the principal meets `min_role`.
 

@@ -133,7 +133,7 @@ def _tpl_content_hash(name, vendor, description, items_str) -> str:
     return hashlib.sha256(basis.encode("utf-8")).hexdigest()[:16]
 
 
-def db_seed_snmp_templates(rows: list) -> None:
+def db_seed_snmp_templates(rows: list, prune: bool = True) -> None:
     """Seed built-in templates, keyed on builtin_key, with version refresh:
       - key not present                                → INSERT
       - present, un-edited, shipped content changed    → UPDATE in place
@@ -141,7 +141,13 @@ def db_seed_snmp_templates(rows: list) -> None:
       - un-edited built-in whose key is gone from the
         shipped set                                    → DELETE (pruned)
     User edits always win; Reset (delete + re-seed) restores the shipped
-    default. Each row: {name, vendor, description, items(list), builtin_key}."""
+    default. Each row: {name, vendor, description, items(list), builtin_key}.
+
+    `prune` must stay True for the startup seed, which is handed the FULL
+    shipped catalogue and legitimately removes built-ins dropped from it.
+    A single-key "Reset to default" (routes/monitoring.py) passes prune=False:
+    it hands only the one template being reset, so pruning would delete every
+    OTHER un-edited built-in whose key isn't in that one-element set."""
     shipped = {}
     for r in (rows or []):
         bkey = (r.get("builtin_key") or "").strip()
@@ -181,10 +187,11 @@ def db_seed_snmp_templates(rows: list) -> None:
                            builtin_version=?, updated_at=?
                        WHERE id=?""",
                     (name, vendor, desc, items_str, ver, now, cur.get("id")))
-        for bkey, cur in existing.items():
-            if bkey not in shipped and not int(cur.get("user_modified") or 0):
-                db_execute("main",
-                           "DELETE FROM snmp_sensor_templates WHERE id=?",
-                           (cur.get("id"),))
+        if prune:
+            for bkey, cur in existing.items():
+                if bkey not in shipped and not int(cur.get("user_modified") or 0):
+                    db_execute("main",
+                               "DELETE FROM snmp_sensor_templates WHERE id=?",
+                               (cur.get("id"),))
     except Exception as e:
         log.error(f"db_seed_snmp_templates error: {e}")

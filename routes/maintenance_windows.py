@@ -9,6 +9,8 @@ DELETE /api/alert/window/{id}  admin   — delete window
 """
 from __future__ import annotations
 
+import re
+
 from core.config import _RE_ALERT_WINDOWS, _RE_ALERT_WINDOW
 from db.maintenance_windows import (
     db_list_windows, db_get_window,
@@ -17,6 +19,7 @@ from db.maintenance_windows import (
 from db import db_log_audit
 
 _VALID_SCOPES = {"all", "site", "group", "device"}
+_HHMM_RE = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
 
 
 def _validate(body: dict) -> str | None:
@@ -34,6 +37,20 @@ def _validate(body: dict) -> str | None:
         return "start_ts and end_ts must be Unix timestamps"
     if end <= start:
         return "end_ts must be after start_ts"
+    # Recurrence fields — validated so a malformed value can't silently fail
+    # open (the engine's parse-error path just skips suppression) or, with only
+    # one time set, suppress all day. Days are ISO weekday 1=Mon..7=Sun.
+    if body.get("recurring"):
+        for d in [x.strip() for x in str(body.get("recur_days", "")).split(",") if x.strip()]:
+            if d not in ("1", "2", "3", "4", "5", "6", "7"):
+                return "recur_days must be comma-separated day numbers 1-7 (Mon-Sun)"
+        rs = str(body.get("recur_start", "")).strip()
+        re_ = str(body.get("recur_end", "")).strip()
+        if bool(rs) != bool(re_):
+            return "recur_start and recur_end must both be set, or both empty"
+        for t in (rs, re_):
+            if t and not _HHMM_RE.match(t):
+                return "recur_start / recur_end must be HH:MM (24-hour)"
     return None
 
 

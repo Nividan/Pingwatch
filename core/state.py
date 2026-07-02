@@ -1406,7 +1406,7 @@ class MonitorState:
         else:
             self._executor.submit(self._run_once, did, sid)
 
-    def stop_sensor(self, did, sid):
+    def stop_sensor(self, did, sid, resolve_events=True):
         from core.probe_assign import effective_probe
         _eff = ""
         with self._lock:
@@ -1422,6 +1422,20 @@ class MonitorState:
         # Remote sensors: the agent must drop the sensor from its schedule too.
         if _eff:
             _bump_probe_config(_eff)
+        # A deliberate pause closes the sensor's open incident (alert events +
+        # flaps + stage state), mirroring the delete paths — otherwise an
+        # acknowledged event lingers 'open' forever on a paused device, and its
+        # stale ACK then silences the sensor's NEXT incident when it resumes.
+        # resolve_events=False for a scheduling-mode swap (reassignment) and at
+        # shutdown, where the sensor isn't really being paused.
+        if resolve_events:
+            from db import _db_enqueue, _logs_enqueue
+            from db.alert_events import db_resolve_events_by_sensor
+            from db.alert_profiles import db_clear_stage_state_for_sensor
+            from db.events import db_resolve_flaps_by_sensor
+            _db_enqueue(lambda _d=did, _s=sid: db_resolve_events_by_sensor(_d, _s))
+            _db_enqueue(lambda _d=did, _s=sid: db_clear_stage_state_for_sensor(_d, _s))
+            _logs_enqueue(lambda _d=did, _s=sid: db_resolve_flaps_by_sensor(_d, _s))
 
     def start_device(self, did):
         with self._lock:
@@ -1431,13 +1445,16 @@ class MonitorState:
             self.start_sensor(did, sid)
 
     def stop_device(self, did, resolve_events=True):
-        from db import _logs_enqueue
-        from db.events import db_resolve_flaps_by_sensor
         with self._lock:
             dev = self.devices.get(did)
             sids = list(dev.sensors) if dev else []
+        # stop_sensor closes each sensor's incident (events + flaps + stage
+        # state) when resolve_events is set. Skipped at process shutdown
+        # (resolve_events=False): restarting the monitor mid-outage must not
+        # close open incidents — that destroys downtime continuity / ack state
+        # and re-fires fresh flaps on boot.
         for sid in sids:
-            self.stop_sensor(did, sid)
+            self.stop_sensor(did, sid, resolve_events=resolve_events)
         # Broadcast updated state so UI immediately reflects stopped/paused status
         with self._lock:
             dev = self.devices.get(did)
@@ -1446,13 +1463,6 @@ class MonitorState:
         batch = [("sensor", sd) for sd in sensor_dicts]
         batch.append(("device_status", {"did": did, "status": new_status}))
         self._broadcast_batch(batch)
-        # Auto-resolve active flap events — device is intentionally stopped.
-        # Skipped at process shutdown (resolve_events=False): restarting the
-        # monitor mid-outage must not close open incidents — that destroys
-        # downtime continuity / ack state and re-fires fresh flaps on boot.
-        if resolve_events:
-            for sid in sids:
-                _logs_enqueue(lambda d=did, s_=sid: db_resolve_flaps_by_sensor(d, s_))
 
     def start_sensors_staggered(self, pairs):
         """Start many sensors with their first probe spread across a window so a
@@ -2336,7 +2346,9 @@ class MonitorState:
                 s._sched_mode = "probe"
                 self._scheduler.cancel(did, sid)
             elif was_running:
-                self.stop_sensor(did, sid)
+                # Scheduling-mode swap (central↔probe), not a pause — keep the
+                # open incident and stage state intact across the handover.
+                self.stop_sensor(did, sid, resolve_events=False)
                 self.start_sensor(did, sid)   # sets _sched_mode='central'
             else:
                 s._sched_mode = "central"

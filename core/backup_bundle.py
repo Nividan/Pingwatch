@@ -399,11 +399,20 @@ def restore_secrets_from_zip(inner_zip: bytes) -> list:
     cert_names = [n for n in names if n.startswith(_SEC_CERTS_DIR + "/")]
     if cert_names:
         written = 0
+        base_abs = os.path.abspath(CERTS_DIR)
         for n in cert_names:
             rel = n[len(_SEC_CERTS_DIR) + 1:]
             if not rel:
                 continue
             dst = os.path.join(CERTS_DIR, rel.replace("/", os.sep))
+            # Zip-slip guard (mirrors core/upgrade.extract_zip): a crafted member
+            # like 'secrets/certs/../../../home/x/.ssh/authorized_keys' would
+            # escape CERTS_DIR and let an imported bundle plant a file anywhere
+            # the service user can write. Reject anything outside CERTS_DIR.
+            dst_abs = os.path.abspath(dst)
+            if dst_abs != base_abs and not dst_abs.startswith(base_abs + os.sep):
+                actions.append(f"cert {rel[:60]}: REJECTED (path escapes cert dir)")
+                continue
             if os.path.exists(dst):
                 continue
             try:

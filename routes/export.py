@@ -326,15 +326,30 @@ def _handle_pg_bundle_import(h, raw_bytes: bytes):
     ]
 
     def _restore(sql_file, schema):
+        # Blue-green schema swap: preserve the live schema by renaming it aside,
+        # load the bundle into a fresh schema, and only drop the preserved copy
+        # on success. A load failure reverts to the exact pre-import state
+        # instead of wiping the live schema (the old DROP-then-load left it
+        # empty/partial if the uploaded dump was corrupt).
+        bak = f"{schema}_importbak"
         r = _sp.run(
-            base_cmd + ["-c", f"DROP SCHEMA IF EXISTS {schema} CASCADE; CREATE SCHEMA {schema};"],
+            base_cmd + ["-c", f"DROP SCHEMA IF EXISTS {bak} CASCADE; "
+                              f"ALTER SCHEMA {schema} RENAME TO {bak}; "
+                              f"CREATE SCHEMA {schema};"],
             env=env, capture_output=True, text=True,
         )
         if r.returncode != 0:
-            raise RuntimeError(f"schema reset: {r.stderr.strip()}")
+            raise RuntimeError(f"schema prep: {r.stderr.strip()}")
         r = _sp.run(base_cmd + ["-f", sql_file], env=env, capture_output=True, text=True)
         if r.returncode != 0:
+            # Revert: drop the half-loaded schema, rename the preserved copy back.
+            _sp.run(base_cmd + ["-c", f"DROP SCHEMA IF EXISTS {schema} CASCADE; "
+                                      f"ALTER SCHEMA {bak} RENAME TO {schema};"],
+                    env=env, capture_output=True, text=True)
             raise RuntimeError(f"psql restore: {r.stderr.strip()}")
+        # Success — drop the preserved copy.
+        _sp.run(base_cmd + ["-c", f"DROP SCHEMA IF EXISTS {bak} CASCADE;"],
+                env=env, capture_output=True, text=True)
 
     try:
         if tmp_main:

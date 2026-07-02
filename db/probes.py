@@ -166,26 +166,6 @@ def db_probe_assignment_counts(probe_id: str) -> dict:
     return out
 
 
-def db_reassign_probe(old_probe_id: str, new_target: str) -> dict:
-    """Repoint every direct reference from old_probe_id to new_target.
-
-    new_target is another probe_id or the literal 'central'. Devices and
-    sensors that explicitly referenced the old probe get the explicit pin
-    ('central' stays literal so they don't silently fall through the site
-    cascade to a different probe). Sites get '' for central — a site
-    binding IS the cascade tier, there is nothing to pin against.
-    """
-    site_target = "" if new_target == "central" else new_target
-    counts = db_probe_assignment_counts(old_probe_id)
-    db_execute("main", "UPDATE devices SET probe_id = ? WHERE probe_id = ?",
-               (new_target, old_probe_id))
-    db_execute("main", "UPDATE sensors SET probe_id = ? WHERE probe_id = ?",
-               (new_target, old_probe_id))
-    db_execute("main", "UPDATE sites SET probe_id = ? WHERE probe_id = ?",
-               (site_target, old_probe_id))
-    return counts
-
-
 def db_site_probe_map() -> dict:
     """{site_name: probe_id} for every site with a probe binding."""
     rows = db_query("main",

@@ -9,7 +9,7 @@ import sqlite3
 import threading
 import time
 
-from core.auth   import _hash_pw, _SESSIONS, _SESSIONS_LOCK
+from core.auth   import _hash_pw
 from core.config import DB_PATH, LOGS_DB_PATH
 from core.logger import log
 from db.backend  import is_pg
@@ -413,6 +413,7 @@ def db_init():
             ("ldap_server",         ""),
             ("ldap_port",           "389"),
             ("ldap_ssl",            "0"),   # 0=none, 1=LDAPS, 2=StartTLS
+            ("ldap_tls_verify",     "0"),   # verify LDAPS/StartTLS cert (staged: default off)
             ("ldap_base_dn",        ""),
             ("ldap_bind_dn",        ""),
             ("ldap_bind_pass",      ""),    # Fernet-encrypted

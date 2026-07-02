@@ -158,13 +158,12 @@ def handle(h, method, path, body) -> bool:
             from db import db_get_totp
             totp_row = db_get_totp(resolved_username)
             if totp_row and int(totp_row.get("enabled", 0) or 0):
-                # Store pending login in relay store, redirect to TOTP page
+                # Park the pending login in the shared SSO-TOTP store; the
+                # frontend collects the code and POSTs /api/login/sso-totp.
                 import secrets as _sec
-                import time as _t
                 pending = _sec.token_urlsafe(24)
-                from core.saml_auth import _relay_put
-                _relay_put(f"sso-totp-{pending}",
-                           {"username": resolved_username, "role": role, "ts": _t.time()})
+                from core.sso_common import sso_totp_put
+                sso_totp_put(pending, resolved_username, role)
                 _send_302(h, f"/?sso_totp={pending}")
                 return True
         except Exception as e:

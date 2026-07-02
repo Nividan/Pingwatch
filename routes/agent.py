@@ -23,7 +23,7 @@ import threading
 import time
 
 from core.app_state import STATE, APP_VERSION, PROBE_PROTOCOL_VERSION
-from core.logger import log, log_probes
+from core.logger import log_probes
 from core.probe_assign import effective_probe
 from db.audit import db_log_audit
 from db.probes import (
@@ -395,16 +395,49 @@ def _status_fields(body: dict) -> dict:
     return fields
 
 
-def _ingest_results(probe: dict, results: list) -> tuple:
+def _clock_skew_from_body(body: dict):
+    """Agent-minus-server clock offset (seconds) for THIS checkin, or None if
+    the agent didn't report agent_now. Same signal stored as clock_skew_s;
+    computed fresh here so the correction tracks the batch being ingested."""
+    st = body.get("status") or {}
+    if isinstance(st, dict) and st.get("agent_now") is not None:
+        try:
+            return float(st["agent_now"]) - time.time()
+        except (TypeError, ValueError):
+            return None
+    return None
+
+
+# Below this magnitude (seconds) a reported offset is treated as clock noise /
+# network transit and left uncorrected, so well-synced agents behave exactly as
+# before. Matches the ±5s future-ts tolerance below.
+_SKEW_DEADBAND_S = 5.0
+
+
+def _ingest_results(probe: dict, results: list, skew_s=None) -> tuple:
     """Validate + inject one batch through the state machine.
 
     Returns (accepted, rejected). Rejected results are still acked to the
     agent — they're permanently unprocessable (unknown sensor, stale
     assignment, duplicate ts), so retrying would loop forever.
+
+    `skew_s` is the agent-minus-server clock offset (from this checkin). When
+    it exceeds the deadband, every sample's ts is shifted back by it so a
+    mis-set branch clock can't (a) skew uptime/history windows or (b) — worse —
+    push live results past the stale-backfill cutoff, which silently disables
+    alerting for that whole branch. A correct clock replaying offline-spooled
+    backfill reports skew≈0, so its genuinely-old timestamps are preserved and
+    correctly stay out of live alerting.
     """
     pid = probe["probe_id"]
     accepted = rejected = 0
     now = time.time()
+    try:
+        skew = float(skew_s) if skew_s is not None else 0.0
+    except (TypeError, ValueError):
+        skew = 0.0
+    if abs(skew) <= _SKEW_DEADBAND_S:
+        skew = 0.0
     try:
         results.sort(key=lambda r: float(r.get("ts") or 0)
                      if isinstance(r, dict) else 0)
@@ -421,12 +454,16 @@ def _ingest_results(probe: dict, results: list) -> tuple:
             rejected += 1; continue
         if ts <= 0:
             rejected += 1; continue
+        # Realign a mis-set agent clock to server time (see docstring). A
+        # constant per-batch shift preserves ordering, so the sort above holds.
+        if skew:
+            ts = ts - skew
         with STATE._lock:
             dev = STATE.devices.get(did)
             s = dev.sensors.get(sid) if dev else None
         if not s or effective_probe(dev, s) != pid:
             rejected += 1; continue     # deleted sensor / stale assignment
-        if ts > now + 5:                # clamp future ts (agent clock skew)
+        if ts > now + 5:                # backstop: clamp any still-future ts
             ts = now
         ms = r.get("ms")
         if ms is not None:
@@ -592,7 +629,8 @@ def handle(h, method, path, body) -> bool:
             return True
 
         with _probe_lock(pid):
-            accepted, rejected = _ingest_results(probe, results)
+            accepted, rejected = _ingest_results(
+                probe, results, skew_s=_clock_skew_from_body(body))
 
         fields = _status_fields(body)
         was_disconnected = (time.time() - float(probe.get("last_seen") or 0) >

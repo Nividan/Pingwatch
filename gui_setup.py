@@ -18,7 +18,7 @@ if _BASE not in sys.path:
     sys.path.insert(0, _BASE)
 
 import tkinter as tk
-from tkinter import ttk, filedialog
+from tkinter import ttk
 
 from core.setup_logic import (
     PACKAGES, check_import, pip_available, pip_install,

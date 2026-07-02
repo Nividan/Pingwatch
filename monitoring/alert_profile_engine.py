@@ -318,6 +318,36 @@ def _diag_log(sensor, label: str, msg: str) -> None:
     log.debug(f"alert_profile_engine: {label} — {msg}")
 
 
+def _resolve_orphan_event_if_ok(sensor, did, sid) -> None:
+    """Resolve a lingering open alert_event when the sensor is healthy but no
+    ENABLED profile governs it — i.e. the governing profile was disabled or
+    deleted while an incident was open. The normal recovery cleanup lives past
+    the no-profile / all-disabled early returns, so without this the
+    'active'/'acknowledged' row never resolves (it survives restarts too). No
+    dispatch — there's no enabled profile to dispatch through.
+
+    Bounded to one DB probe per process run per sensor (unless the sensor
+    actually fired), so it isn't a per-cycle DB hit on the cold no-profile path.
+    """
+    try:
+        if _classify(sensor)[0] != "ok":
+            return   # still failing — the incident is real, keep it open
+        if not getattr(sensor, "_alert_has_fired", False):
+            if getattr(sensor, "_orphan_checked", False):
+                return
+            sensor._orphan_checked = True
+        from db.alert_events import db_has_active_event, db_resolve_events_by_sensor
+        from db.alert_profiles import db_clear_stage_state_for_sensor
+        if db_has_active_event(did, sid):
+            db_clear_stage_state_for_sensor(did, sid)
+            db_resolve_events_by_sensor(did, sid)
+            sensor._alert_has_fired = False
+            log.info(f"alert_profile_engine: resolved orphaned event for "
+                     f"{did}/{sid} (no enabled profile governs it)")
+    except Exception as e:
+        log.warning(f"alert_profile_engine: orphan resolve error: {e}")
+
+
 def evaluate_and_fire(dev, sensor) -> None:
     """Run the profile evaluator for this sensor on this probe cycle.
 
@@ -365,6 +395,9 @@ def evaluate_and_fire(dev, sensor) -> None:
             _diag_log(sensor, label,
                       f"no dispatch — no profile resolved. Searched: {searched}. "
                       f"Profiles in DB: {dump}")
+        # No profile matches at all (all deleted). Resolve any event a
+        # now-deleted profile left open, once the sensor is healthy.
+        _resolve_orphan_event_if_ok(sensor, did, sid)
         return
 
     current_state, started_ts = _classify(sensor)
@@ -408,7 +441,10 @@ def evaluate_and_fire(dev, sensor) -> None:
         skip_reasons.extend(_skips)
 
     if not any_enabled:
-        # All matched profiles were disabled or stageless — treat as no-op.
+        # All matched profiles disabled or stageless. Normally a no-op — but if
+        # the profile was disabled/deleted mid-incident, resolve the now-orphan
+        # event once the sensor is healthy so it doesn't linger 'active' forever.
+        _resolve_orphan_event_if_ok(sensor, did, sid)
         return
 
     # Below this point, the rest of the function uses the narrowest profile
@@ -585,8 +621,16 @@ def _fire(stage, dev, sensor, trig, did, sid, session, profile,
     ctx = _build_ctx(dev, sensor, sensor._threshold_state, trig,
                      duration_s=duration_s)
 
+    # Recovery stages are exempt from maintenance suppression (as they are from
+    # the RCA gate below): a recovery signals the incident is OVER, and dropping
+    # it while deferring the DOWN left operators believing something was still
+    # down after it had recovered inside a window. No spurious "recovered" noise
+    # results — a recovery stage only reaches here when a DOWN actually fired
+    # (_had_prior_fire needs fire_count>0), and a DOWN suppressed by maintenance
+    # never records a fire, so a blip whose DOWN was itself suppressed emits no
+    # recovery.
     suppressed, mw_name = check_maintenance(ctx)
-    if suppressed:
+    if suppressed and not recovery:
         reason = f"Maintenance: {mw_name}" if mw_name else "Maintenance window"
         # Log the suppressed event once per (stage, sensor, session) — the
         # engine re-enters here every probe cycle while the window is open.

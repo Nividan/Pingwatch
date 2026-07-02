@@ -106,11 +106,14 @@ def handle(h, method, path, body):
             h._json(404, {"error": "not found"}); return True
 
         if action == "ack":
+            if evt.get("state") not in ("active", "acknowledged"):
+                h._json(409, {"error": "only an active alert can be acknowledged"})
+                return True
             ok = db_ack_event(event_id, user)
             if ok:
                 db_log_audit(user, h.client_address[0], 'alert_event_ack',
                              f"event {event_id} profile '{evt.get('profile_name','')}'")
-            h._json(200 if ok else 500, {"ok": ok})
+            h._json(200 if ok else 409, {"ok": ok})
         else:  # resolve
             ok = db_resolve_event(event_id)
             if ok:

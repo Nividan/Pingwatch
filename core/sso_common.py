@@ -12,7 +12,53 @@ Single entry point: sso_provision_or_sync().
 
 from __future__ import annotations
 
+import threading
+import time
+
 from core.logger import log
+
+
+# ── Pending SSO 2FA challenges (post-IdP, pre-TOTP) ──────────────────
+# When a TOTP-enrolled user authenticates via SAML/OIDC, the IdP step is done
+# but the second factor isn't. We park (username, role) here keyed by a random
+# `pending` id and redirect the browser to /?sso_totp=<pending>; the frontend
+# collects the code and POSTs /api/login/sso-totp, which verifies and issues the
+# real session. Shared by both SSO backends so the consumer is provider-neutral.
+# (Previously each backend wrote its own store and NOTHING consumed it, so a
+# TOTP-enrolled SSO user could never complete login.)
+_SSO_TOTP: dict = {}
+_SSO_TOTP_LOCK = threading.Lock()
+_SSO_TOTP_TTL = 300  # seconds
+
+
+def _sso_totp_prune_locked() -> None:
+    now = time.time()
+    for k in [k for k, v in _SSO_TOTP.items() if now - v["created"] > _SSO_TOTP_TTL]:
+        _SSO_TOTP.pop(k, None)
+
+
+def sso_totp_put(pending: str, username: str, role: str) -> None:
+    with _SSO_TOTP_LOCK:
+        _sso_totp_prune_locked()
+        _SSO_TOTP[pending] = {"username": username, "role": role,
+                              "created": time.time()}
+
+
+def sso_totp_peek(pending: str) -> dict | None:
+    """Return {username, role} WITHOUT removing (so a wrong 2FA code can be
+    retried within the TTL), or None if unknown/expired."""
+    if not pending:
+        return None
+    with _SSO_TOTP_LOCK:
+        _sso_totp_prune_locked()
+        entry = _SSO_TOTP.get(pending)
+    return {"username": entry["username"], "role": entry["role"]} if entry else None
+
+
+def sso_totp_consume(pending: str) -> None:
+    """Remove a pending challenge (call once the 2FA code has verified)."""
+    with _SSO_TOTP_LOCK:
+        _SSO_TOTP.pop(pending, None)
 
 
 def _match_group(groups: list, mapped_groups: list, value_key: str) -> dict | None:

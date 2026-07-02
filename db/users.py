@@ -363,6 +363,23 @@ def db_reorder_dashboards(username: str, ordered_ids: list):
 
 
 # ── TOTP (2FA) ───────────────────────────────────────────────────
+# The TOTP secret is Fernet-encrypted at rest (like every other stored auth
+# secret) so a DB leak / backup / pg_dump can't hand an attacker every user's
+# 2FA seed. Legacy rows stored the base32 secret in cleartext; a base32 secret
+# is never a valid Fernet token, so a failed decrypt means "legacy plaintext"
+# and db_get_totp transparently migrates it to ciphertext on first read.
+
+def _totp_decrypt(stored: str):
+    """Return (secret, was_encrypted). Falls back to the raw value for legacy
+    cleartext rows (Fernet decrypt raises → not encrypted)."""
+    if not stored:
+        return "", True
+    try:
+        from db.backups import _get_fernet
+        return _get_fernet().decrypt(stored.encode()).decode(), True
+    except Exception:
+        return stored, False
+
 
 def db_get_totp(username: str) -> dict:
     """Return {secret, enabled, recovery_json} for a user. Empty values if not set."""
@@ -372,19 +389,40 @@ def db_get_totp(username: str) -> dict:
     if not r:
         return {"secret": "", "enabled": 0, "recovery_json": ""}
     d = dict(r) if not isinstance(r, dict) else r
+    secret, was_encrypted = _totp_decrypt(d.get("totp_secret") or "")
+    if secret and not was_encrypted:
+        # One-time transparent migration: re-store the legacy plaintext secret
+        # encrypted, off the request path, so a DB leak stops exposing it.
+        try:
+            from db.backups import encrypt_pw
+            from db.core import _db_enqueue
+            enc = encrypt_pw(secret)
+            if enc:
+                _db_enqueue(lambda u=username, e=enc: db_execute(
+                    "main", "UPDATE users SET totp_secret=? WHERE username=?", (e, u)))
+        except Exception as e:
+            log.debug(f"TOTP secret migration skipped for {username}: {e}")
     return {
-        "secret":        d.get("totp_secret") or "",
+        "secret":        secret,
         "enabled":       int(d.get("totp_enabled") or 0),
         "recovery_json": d.get("totp_recovery") or "",
     }
 
 
 def db_set_totp(username: str, secret: str, enabled: int, recovery_json: str = "") -> bool:
-    """Upsert TOTP state for a user."""
+    """Upsert TOTP state for a user. The secret is Fernet-encrypted at rest."""
+    enc = ""
+    if secret:
+        try:
+            from db.backups import encrypt_pw
+            enc = encrypt_pw(secret)
+        except Exception as e:
+            log.error(f"TOTP secret encrypt failed for {username}: {e}")
+            return False
     return db_execute("main",
                       "UPDATE users SET totp_secret=?, totp_enabled=?, totp_recovery=? "
                       "WHERE username=?",
-                      (secret, int(bool(enabled)), recovery_json, username))
+                      (enc, int(bool(enabled)), recovery_json, username))
 
 
 def db_clear_totp(username: str) -> bool:
@@ -393,26 +431,9 @@ def db_clear_totp(username: str) -> bool:
 
 
 # ── Trusted devices (Remember 2FA) ──────────────────────────────
-
-def db_get_remember_hours(username: str) -> int:
-    """Return the user's max trusted-device duration in hours (default 9)."""
-    r = db_query_one("main", "SELECT totp_remember_hours FROM users WHERE username=?",
-                     (username,))
-    if not r:
-        return 9
-    v = r["totp_remember_hours"] if isinstance(r, dict) else r[0]
-    try:
-        return max(0, int(v or 9))
-    except (TypeError, ValueError):
-        return 9
-
-
-def db_set_remember_hours(username: str, hours: int) -> bool:
-    """Persist the user's preferred trusted-device duration (0–720 h)."""
-    hours = max(0, min(720, int(hours)))
-    return db_execute("main",
-                      "UPDATE users SET totp_remember_hours=? WHERE username=?",
-                      (hours, username))
+# NOTE: the per-user totp_remember_hours accessors were removed as dead code —
+# the live "Remember 2FA" duration is the GLOBAL `totp_remember_hours` app
+# setting (routes/auth.py), not a per-user column.
 
 
 def db_add_trusted_device(username: str, token_hash: str, device_label: str,

@@ -361,7 +361,7 @@ def _fire_recovery(lic: dict, old_status: str, did: str, sid: str,
         db_clear_stage_state_for_sensor,
     )
     from db.alert_events import db_auto_resolve_event
-    from monitoring.alert_dispatchers import dispatch, check_maintenance
+    from monitoring.alert_dispatchers import dispatch
 
     profile = (
         db_get_profile_for_scope("device", did)
@@ -415,12 +415,12 @@ def _fire_recovery(lic: dict, old_status: str, did: str, sid: str,
         "days_left":   days_left,
     }
 
-    suppressed, mw_name = check_maintenance(ctx)
-    if suppressed:
-        log.debug(f"license_checker: recovery suppressed by "
-                  f"maintenance window {mw_name!r}")
-        return
-
+    # Recovery is exempt from maintenance suppression (same as the sensor
+    # engine): the earlier `had_prior` guard means we only get here when a
+    # failure actually fired, so there's no spurious-recovery noise — and the
+    # old `if suppressed: return` here returned BEFORE the auto-resolve below,
+    # stranding the license alert_event 'active' forever (the ok-transition is
+    # consumed once and never replayed).
     for stage in stages:
         trig = stage.get("trigger_state")
         if trig not in recovery_triggers:

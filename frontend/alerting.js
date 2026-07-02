@@ -1055,7 +1055,16 @@ function _alertMaintOpen(id) {
   const w = id !== null ? (_alertMaintWindows.find(x => x.id === id) || null) : null;
 
   const now     = Math.floor(Date.now() / 1000);
-  const toLocal = ts => ts ? new Date(ts * 1000).toISOString().slice(0,16) : '';
+  // A <input type="datetime-local"> value is interpreted as LOCAL wall-clock,
+  // and save re-parses it as local (new Date(str)). So render local components
+  // too — using toISOString() here (UTC) drifted the window by the browser's
+  // UTC offset on every open-and-resave of a one-time window.
+  const toLocal = ts => {
+    if (!ts) return '';
+    const d = new Date(ts * 1000), p = n => String(n).padStart(2, '0');
+    return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())}`
+         + `T${p(d.getHours())}:${p(d.getMinutes())}`;
+  };
 
   const name       = w?.name        || '';
   const scopeType  = w?.scope_type  || 'all';

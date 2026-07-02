@@ -16,6 +16,7 @@ function _ldapCollectForm() {
     ldap_server:          (document.getElementById('ldap-server')?.value || '').trim(),
     ldap_port:            parseInt(document.getElementById('ldap-port')?.value || '389'),
     ldap_ssl:             parseInt(document.getElementById('ldap-ssl')?.value || '0'),
+    ldap_tls_verify:      document.getElementById('ldap-tls-verify')?.checked ? 1 : 0,
     ldap_base_dn:         (document.getElementById('ldap-base-dn')?.value || '').trim(),
     ldap_bind_dn:         (document.getElementById('ldap-bind-dn')?.value || '').trim(),
     ldap_bind_pass:       document.getElementById('ldap-bind-pass')?.value || '',

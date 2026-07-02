@@ -200,7 +200,7 @@ def _fire_recovery(cert_key: tuple[str, str], old_bucket: str,
         db_clear_stage_state_for_sensor,
     )
     from db.alert_events import db_auto_resolve_event
-    from monitoring.alert_dispatchers import dispatch, check_maintenance
+    from monitoring.alert_dispatchers import dispatch
 
     profile = db_get_profile_for_scope("global", "")
     if not profile or not profile.get("enabled", True):
@@ -233,11 +233,10 @@ def _fire_recovery(cert_key: tuple[str, str], old_bucket: str,
 
     ctx = _build_ctx(did, sid, dname, sname, "ok", days_left, not_after)
 
-    suppressed, mw_name = check_maintenance(ctx)
-    if suppressed:
-        log.debug(f"cert_alert: recovery suppressed by maintenance window {mw_name!r}")
-        return
-
+    # Recovery is exempt from maintenance suppression (same as the sensor
+    # engine): the `had_prior` guard above means no spurious-recovery noise,
+    # and the old `if suppressed: return` here returned BEFORE the auto-resolve
+    # below, stranding the cert alert_event 'active' forever.
     for stage in stages:
         trig = stage.get("trigger_state")
         if trig not in recovery_triggers:

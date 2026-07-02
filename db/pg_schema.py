@@ -1314,6 +1314,7 @@ def pg_seed_defaults(cur):
         ("ldap_server",         ""),
         ("ldap_port",           "389"),
         ("ldap_ssl",            "0"),
+        ("ldap_tls_verify",     "0"),   # verify LDAPS/StartTLS cert (staged: default off)
         ("ldap_base_dn",        ""),
         ("ldap_bind_dn",        ""),
         ("ldap_bind_pass",      ""),

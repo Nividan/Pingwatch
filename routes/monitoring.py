@@ -12,7 +12,7 @@ import sqlite3
 import time
 
 import core.app_state as app_state
-from core.config import DB_PATH, LOGS_DB_PATH
+from core.config import LOGS_DB_PATH
 from db import db_load_flaps, db_load_traps, db_ack_flap, db_resolve_flap, \
                db_sample_buffer_stats
 from db.backend import is_pg
@@ -601,7 +601,11 @@ def handle(h, method, path, body):
                     shipped = [t for t in SNMP_SENSOR_TEMPLATES
                                if (t.get("builtin_key") or "") == bkey]
                     if shipped:
-                        db_seed_snmp_templates(shipped)
+                        # prune=False: we hand only the one template being
+                        # reset, so the seeder must NOT prune the built-ins
+                        # whose keys aren't in this one-element set (that would
+                        # wipe every other un-edited built-in until restart).
+                        db_seed_snmp_templates(shipped, prune=False)
                         restored = True
                 except Exception as e:
                     log.error(f"snmp template reset re-seed failed: {e}")
@@ -623,6 +627,7 @@ def handle(h, method, path, body):
         params, perr = _snmp_conn_params(body)
         if perr:
             h._json(400, {"error": perr}); return True
+        db_log_audit(user, h.client_address[0], "snmp_interfaces", params.get("host", ""))
         mode, val = _snmp_route(params)
         if mode == "error":
             h._json(val[0], {"error": val[1]}); return True
@@ -687,6 +692,8 @@ def handle(h, method, path, body):
         params, perr = _snmp_conn_params(body)
         if perr:
             h._json(400, {"error": perr}); return True
+        db_log_audit(user, h.client_address[0], "snmp_discover",
+                     params.get("host", ""), f"template={tpl_id}")
         mode, val = _snmp_route(params)
         if mode == "error":
             h._json(val[0], {"error": val[1]}); return True
@@ -724,6 +731,7 @@ def handle(h, method, path, body):
         params, perr = _snmp_conn_params(body)
         if perr:
             h._json(400, {"error": perr}); return True
+        db_log_audit(user, h.client_address[0], "snmp_scan", params.get("host", ""))
         items = _snmp_all_known_items()
         if not items:
             h._json(200, {"candidates": []}); return True
@@ -845,6 +853,7 @@ def handle(h, method, path, body):
         actor = user or ""
         ok = db_ack_flap(flap_id, actor)
         if ok:
+            db_log_audit(user, h.client_address[0], 'flap_ack', f"flap {flap_id}")
             # Propagate ACK to matching alert events
             _flap_sensor = _get_flap_sensor(flap_id)
             if _flap_sensor:
@@ -865,6 +874,7 @@ def handle(h, method, path, body):
             h._json(400, {"error": "invalid id"}); return True
         ok = db_resolve_flap(flap_id)
         if ok:
+            db_log_audit(user, h.client_address[0], 'flap_resolve', f"flap {flap_id}")
             # Propagate resolve to matching alert events
             _flap_sensor = _get_flap_sensor(flap_id)
             if _flap_sensor:

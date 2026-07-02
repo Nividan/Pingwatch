@@ -117,11 +117,6 @@ def _user_exists(username: str) -> bool:
         return False
 
 
-def _ldap_autoprov_enabled() -> bool:
-    return bool(int(_settings.get('ldap_enabled', 0) or 0)
-                and int(_settings.get('ldap_auto_provision', 0) or 0))
-
-
 def _emit_post_auth(h, ip: str, username: str, role: str,
                     token: str, challenge_used: bool) -> None:
     """Session-issue path for a successful login.
@@ -586,6 +581,74 @@ def handle(h, method, path, body):
                   "session_ttl": int(_settings.get("session_ttl", 86400))},
             f"session={token}; HttpOnly; Path=/; SameSite=Strict; Max-Age=2592000{_sec}"
         )
+        return True
+
+    # ── /api/login/sso-totp POST ──────────────────────────────────
+    # Second factor for a SAML/OIDC user who has TOTP enabled. The IdP step
+    # already resolved (username, role) into the shared SSO-TOTP store keyed by
+    # `pending`; verify the code (or a recovery code) and issue the session.
+    # Mirrors /api/login/totp but sourced from the SSO store. (Previously both
+    # SSO backends parked this state and nothing consumed it, so a TOTP-enrolled
+    # SSO user could never finish logging in.)
+    if path == "/api/login/sso-totp" and method == "POST":
+        from core.auth import totp_available
+        if not totp_available():
+            h._json(503, {"error": "2FA support not installed on server (pyotp missing)"})
+            return True
+        from core.auth import (totp_verify, totp_consume_recovery, _create_session,
+                               parse_user_agent_label as _parse_ua)
+        from core.sso_common import sso_totp_peek, sso_totp_consume
+        from db.users import db_get_totp, db_set_totp
+        ip = h.client_address[0]
+        pending = (body.get("pending") or "").strip()
+        code    = (body.get("code") or "").strip()
+        st = sso_totp_peek(pending)
+        if not st:
+            h._json(401, {"error": "Session expired — please sign in again"})
+            return True
+        # Rate-limit failed second-factor attempts on the same IP.
+        with _FAIL_LOCK:
+            now = time.time()
+            _fail_window = int(_settings.get("login_fail_window", _FAIL_WINDOW))
+            _fail_max    = int(_settings.get("login_fail_max",    _FAIL_MAX))
+            _FAIL_LOG[ip] = [t for t in _FAIL_LOG.get(ip, []) if now - t < _fail_window]
+            if len(_FAIL_LOG[ip]) >= _fail_max:
+                h._json(429, {"error": f"Too many failed attempts. Try again in {_fail_window} s."})
+                return True
+        username = st["username"]
+        role     = st["role"]
+        totp     = db_get_totp(username)
+        ok = False
+        if totp_verify(totp.get("secret", ""), code):
+            ok = True
+        else:
+            consumed, new_json = totp_consume_recovery(totp.get("recovery_json", ""), code)
+            if consumed:
+                ok = True
+                try:
+                    db_set_totp(username, totp.get("secret", ""), 1, new_json)
+                except Exception:
+                    pass
+                db_log_audit(username, ip, 'totp_recovery_used', username)
+        if not ok:
+            with _FAIL_LOCK:
+                _FAIL_LOG.setdefault(ip, []).append(time.time())
+            db_log_audit(username, ip, 'totp_failed', username)
+            h._json(401, {"error": "Invalid 2FA code"})
+            return True
+        # Success — burn the pending challenge and issue the real session.
+        sso_totp_consume(pending)
+        with _FAIL_LOCK:
+            _FAIL_LOG.pop(ip, None)
+        _ua_raw = h.headers.get("User-Agent", "")
+        token = _create_session(username, role, ip=ip, user_agent=_ua_raw,
+                                device_label=_parse_ua(_ua_raw))
+        db_log_audit(username, ip, 'login_ok', username)
+        _sec = "; Secure" if tls_active else ""
+        _session_cookie = (f"session={token}; HttpOnly; Path=/; "
+                           f"SameSite=Strict; Max-Age=2592000{_sec}")
+        h._send_with_cookie(200, {"ok": True, "username": username, "role": role},
+                            _session_cookie)
         return True
 
     # ── /api/login/totp POST ──────────────────────────────────────

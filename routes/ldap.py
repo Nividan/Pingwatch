@@ -26,6 +26,7 @@ def handle(h, method, path, body):
             'ldap_server':           _settings.get('ldap_server', ''),
             'ldap_port':             int(_settings.get('ldap_port', 389) or 389),
             'ldap_ssl':              int(_settings.get('ldap_ssl', 0) or 0),
+            'ldap_tls_verify':       int(_settings.get('ldap_tls_verify', 0) or 0),
             'ldap_base_dn':          _settings.get('ldap_base_dn', ''),
             'ldap_bind_dn':          _settings.get('ldap_bind_dn', ''),
             'ldap_bind_pass_set':    bool(_settings.get('ldap_bind_pass', '')),
@@ -63,6 +64,8 @@ def handle(h, method, path, body):
             save['ldap_auto_provision'] = '1' if body['ldap_auto_provision'] else '0'
         if 'ldap_nested_groups' in body:
             save['ldap_nested_groups'] = '1' if body['ldap_nested_groups'] else '0'
+        if 'ldap_tls_verify' in body:
+            save['ldap_tls_verify'] = '1' if body['ldap_tls_verify'] else '0'
 
         if 'ldap_sync_interval' in body:
             try:
@@ -126,6 +129,8 @@ def handle(h, method, path, body):
             if body.get('ldap_ssl') is not None:
                 try: cfg['ssl'] = int(body['ldap_ssl'])
                 except (ValueError, TypeError): pass
+            if body.get('ldap_tls_verify') is not None:
+                cfg['tls_verify'] = bool(body['ldap_tls_verify'])
             if body.get('ldap_bind_dn'):
                 cfg['bind_dn'] = str(body['ldap_bind_dn']).strip()
             if body.get('ldap_bind_pass'):

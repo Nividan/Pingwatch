@@ -27,8 +27,20 @@ PROBE_OFFLINE_AFTER_S = 35     # ~3 missed 10s checkins
 _SWEEP_INTERVAL_S = 10
 _TASK_EXPIRE_S = 3600
 
+# A branch agent whose clock is off by more than the stale-backfill cutoff
+# (max(120s, 2*interval); floor 120s) has its live results filed as backfill,
+# silently disabling alerting for that branch. routes/agent.py now corrects the
+# sample timestamps, but a large offset still means broken NTP on the branch —
+# warn at half the 120s floor so it's visible before it bites the tightest
+# (short-interval) sensor.
+PROBE_CLOCK_SKEW_WARN_S = 60
+
 _stop = threading.Event()
 _BOOT_MONO = time.monotonic()
+# probe_ids currently flagged for clock skew (in-memory throttle; one alert per
+# crossing, cleared on recovery). Resets on restart, which re-surfaces a still-
+# skewed probe once — intentional.
+_skew_alerted = set()
 
 
 def _startup_holdoff_s() -> float:
@@ -125,6 +137,34 @@ def _maybe_email(probe: dict, silent_for: float):
         log_probes.warning(f"probe_offline email failed: {type(e).__name__}: {e}")
 
 
+def _check_clock_skew(p: dict):
+    """Warn (once per crossing, audited) when an enrolled probe's clock offset
+    exceeds the threshold; clear when it comes back. Visibility layer on top of
+    the ts correction in routes/agent.py — a big offset means the branch's NTP
+    is broken and the correction is being leaned on."""
+    from db import db_log_audit
+    pid = p["probe_id"]
+    try:
+        skew = float(p.get("clock_skew_s"))
+    except (TypeError, ValueError):
+        return   # never reported (old agent) — nothing to judge
+    name = p.get("name") or pid
+    ip = p.get("last_checkin_ip") or ""
+    if abs(skew) > PROBE_CLOCK_SKEW_WARN_S:
+        if pid not in _skew_alerted:
+            _skew_alerted.add(pid)
+            log_probes.warning(
+                f"PROBE CLOCK SKEW: {name} ({pid}) clock is {skew:+.0f}s off "
+                f"server time — check NTP on the branch host")
+            db_log_audit(f"probe:{pid}", ip, "probe_clock_skew", name,
+                         f"skew={skew:+.0f}s")
+    elif pid in _skew_alerted:
+        _skew_alerted.discard(pid)
+        log_probes.info(f"PROBE CLOCK SKEW cleared: {name} ({pid}) ({skew:+.0f}s)")
+        db_log_audit(f"probe:{pid}", ip, "probe_clock_skew_cleared", name,
+                     f"skew={skew:+.0f}s")
+
+
 def _sweep():
     from db.probes import db_list_probes, db_probe_checkin, db_expire_stale_tasks
     from db.helpers import db_execute
@@ -144,6 +184,10 @@ def _sweep():
                        "UPDATE probes SET offline_alerted = 1 WHERE probe_id = ?",
                        (p["probe_id"],))
             emit_probe_offline(p)
+        # Only judge skew for probes that are checking in (a stale last_seen
+        # means an old, possibly-unrelated reading).
+        if (now - last_seen) <= PROBE_OFFLINE_AFTER_S:
+            _check_clock_skew(p)
     expired = db_expire_stale_tasks(_TASK_EXPIRE_S)
     if expired:
         log_probes.warning(f"agent tasks expired by watchdog: {expired}")
