@@ -130,9 +130,13 @@ def _build_server(cfg: dict):
         logged choice rather than a silent default, so the AD bind (which
         carries the service-account and every user password) isn't
         unknowingly MITM-able;
-      • on  → CERT_REQUIRED. When a corporate CA has been uploaded (Settings →
-        TLS → CA certs) we verify against exactly that — the usual internal-CA
-        AD case; otherwise we fall back to the OS trust store (public certs).
+      • on  → CERT_REQUIRED against the OS trust store plus any corporate CAs
+        uploaded under Settings → Platform → Certificates → Trusted CA
+        Certificates (the usual internal-CA AD case). ldap3's Tls builds its
+        context from CA *data* alone — cadata loads INSTEAD OF the OS
+        defaults — so the exported system store is appended to keep uploaded
+        CAs additive (same convention as ssl_trust.apply_trusted_cas; an
+        unrelated uploaded CA must not break an AD with a public cert).
     Staged rollout: verification defaults OFF so existing logins don't break on
     deploy; the admin uploads their CA, tests the bind, then turns it on.
     """
@@ -143,8 +147,10 @@ def _build_server(cfg: dict):
     if ssl_mode in (1, 2):
         if cfg.get('tls_verify'):
             try:
-                from core.ssl_trust import get_trusted_ca_pem
+                from core.ssl_trust import get_trusted_ca_pem, get_system_ca_pem
                 ca_pem = get_trusted_ca_pem()
+                if ca_pem:
+                    ca_pem += get_system_ca_pem()
             except Exception:
                 ca_pem = None
             if ca_pem:

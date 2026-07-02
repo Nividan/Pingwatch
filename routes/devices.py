@@ -162,6 +162,12 @@ def _apply_executor_resize():
 _MAX_PARENT_IDS = 8
 _MAX_CYCLE_HOPS = 32
 
+# Per-sensor history points returned by the device GET. The tile sparkline only
+# needs a short preview; the full series is fetched on demand by the detail chart
+# (/api/sensors/{did}/{sid}/history). Trimming here cuts the payload ~4x on
+# sensor-dense devices (a firewall/switch with hundreds of interface sensors).
+_SPARK_POINTS = 20
+
 # SNMPv3 whitelists — single source of truth for server-side validation.
 # Empty string is accepted in every set so that an inherited / cleared value
 # round-trips correctly. Mirror of the frontend dropdown options in
@@ -713,8 +719,15 @@ def handle(h, method, path, body):
         user, _ = h._require("viewer")
         if not user: return True
         dev = STATE.get_device(m.group(1))
-        if dev: h._json(200, dev.to_dict())
-        else:   h._json(404, {"error": "not found"})
+        if dev:
+            _d = dev.to_dict()
+            for _s in _d.get("sensors", []):
+                _h = _s.get("history")
+                if isinstance(_h, list) and len(_h) > _SPARK_POINTS:
+                    _s["history"] = _h[-_SPARK_POINTS:]
+            h._json(200, _d)
+        else:
+            h._json(404, {"error": "not found"})
         return True
 
     # ── /api/devices/{did} PATCH ──────────────────────────────────

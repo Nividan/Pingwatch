@@ -1672,13 +1672,31 @@ async function submitAddGroup(){
   },80);
 }
 // �?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�? DEVICE WINDOW �?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?
+// Render a device's sensor tiles in frame-sized batches so a large sensor set
+// (e.g. hundreds of interface sensors) doesn't block the main thread in one
+// synchronous loop. Runs `done` after the last batch; bails if the window closed.
+function _renderTilesChunked(did,sensors,done){
+  const CHUNK=40;
+  let i=0;
+  (function step(){
+    if(!document.getElementById('sg-'+did)) return;   // window closed mid-render
+    const end=Math.min(i+CHUNK,sensors.length);
+    for(;i<end;i++) renderTile(did,sensors[i]);
+    if(i<sensors.length) requestAnimationFrame(step);
+    else if(typeof done==='function') done();
+  })();
+}
+
+// Close the device window and tear down its lazy-sparkline observer.
+function _closeDevWin(){ _closeSparkObserver(); closeM('dwo'); }
+
 function openDevWin(did){
   const dev=S.devices[did]; if(!dev)return;
   closeM('dwo');
   const st=dev.status||'unknown';
   const o=document.createElement('div');
   o.className='dwo';o.id='dwo';
-  o.onclick=e=>{if(e.target===o)closeM('dwo')};
+  o.onclick=e=>{if(e.target===o)_closeDevWin()};
   o.innerHTML=`
   <div class="dwbox">
     <div class="dw-hd">
@@ -1694,7 +1712,7 @@ function openDevWin(did){
         <button class="dp-btn rbac-op" onclick="openScanModal('${did}')">⊕ Scan</button>
         <button class="dp-btn"   onclick="openEditDevice('${did}')">✎ Edit</button>
         <button class="dp-btn d" onclick="closeM('dwo');delDev('${did}')">✕ Delete</button>
-        <button class="mclose"   onclick="closeM('dwo')">✕</button>
+        <button class="mclose"   onclick="_closeDevWin()">✕</button>
       </div>
     </div>
     <div class="dw-tabs">
@@ -1717,7 +1735,7 @@ function openDevWin(did){
       <div class="dw-log-body" id="dwlog-${did}"></div>
     </div>
     <div class="dw-ft">
-      <button class="btn-s" onclick="closeM('dwo')">Close</button>
+      <button class="btn-s" onclick="_closeDevWin()">Close</button>
     </div>
   </div>`;
   document.body.appendChild(o);
@@ -1735,22 +1753,23 @@ function openDevWin(did){
     if(!document.getElementById('dwo')) return; // panel closed while loading
     if(_sg) _sg.innerHTML=''; // clear skeletons
     _initSensorGrid(did);
+    // Lazy sparklines: only tiles scrolled into view draw their canvas, so a
+    // device with hundreds of sensors doesn't do N getContext+draw up front.
+    _openSparkObserver(document.getElementById('dwbody-sensors-'+did));
     if(freshDev){
       S.devices[did]=freshDev;
-      (freshDev.sensors||[]).forEach(s=>{
-        S.sensors[`${did}/${s.sensor_id}`]=s;
-        renderTile(did,s);
-      });
-    } else {
-      // fetch failed — render from cache silently
-      (S.devices[did]?.sensors||[]).forEach(s=>renderTile(did,s));
+      (freshDev.sensors||[]).forEach(s=>{ S.sensors[`${did}/${s.sensor_id}`]=s; });
     }
-    _applySensorOrder(did);
-    _vmApplySavedOrders(did);
-    setupChartsByDid(did);
-    // Re-apply any filter the user typed while tiles were still loading.
-    const _f=document.getElementById(`dw-snr-filter-${did}`);
-    if(_f&&_f.value.trim()) filterDevSensors(did,_f.value);
+    const _list = freshDev ? (freshDev.sensors||[]) : (S.devices[did]?.sensors||[]);
+    // Chunked render: build tiles in batches across frames so the window stays
+    // responsive (skeletons → tiles stream in) instead of one long blocking loop.
+    _renderTilesChunked(did,_list,()=>{
+      _applySensorOrder(did);
+      _vmApplySavedOrders(did);
+      // Re-apply any filter the user typed while tiles were still loading.
+      const _f=document.getElementById(`dw-snr-filter-${did}`);
+      if(_f&&_f.value.trim()) filterDevSensors(did,_f.value);
+    });
   });
 
   _logsFetch.then(data=>{
@@ -1872,6 +1891,7 @@ function setupChartsByDid(did){
       const key=`${did}/${s.sensor_id}`;
       const t=document.getElementById(`t-${key.replace('/','_')}`);
       if(!t)return;
+      if(_sparkObserveTile(t,key)) return;   // window open → draw lazily on scroll
       const c=t.querySelector('canvas.spk');
       if(c){S.charts[key]={canvas:c,ctx:c.getContext('2d')};if(s.history&&s.history.length>1)drawSpk(key,s.history);}
     });

@@ -825,7 +825,7 @@ function _buildSettingsTab_integrations(sr) {
             <input type="checkbox" id="ldap-tls-verify" style="width:14px;height:14px;cursor:pointer"/>
             Verify server TLS certificate (recommended)
           </label>
-          <div class="fh">Validates the LDAPS/StartTLS certificate against the OS trust store plus any CA uploaded under <b>TLS &rarr; CA certificates</b>. If your AD uses an internal CA, upload that CA there first or logins will fail. Off = today's behavior (no verification). Only applies when Security is LDAPS or StartTLS.</div>
+          <div class="fh">Validates the LDAPS/StartTLS certificate against the OS trust store plus any CA uploaded under <a href="javascript:void(0)" onclick="switchSettingsTab('certificates')" style="color:var(--accent)">Platform &rarr; Certificates &rarr; Trusted CA Certificates</a>. If your AD uses an internal CA, upload that CA there first or logins will fail. Off = no verification. Only applies when Security is LDAPS or StartTLS.</div>
         </div>
         <div class="fr"><label class="fl">Base DN</label>
           <input type="text" id="ldap-base-dn" placeholder="DC=example,DC=com" autocomplete="off"/></div>

@@ -279,6 +279,39 @@ function _applyActiveSensorFilter(did,s,tile){
   if(!hay.includes(q)) tile.style.display='none';
 }
 
+// ── Lazy sparkline observer (device detail window) ────────────────
+// Drawing a canvas per sensor (getContext + path) up front is the main jank
+// when a device has hundreds of sensors. While a device window is open, tiles
+// register with this IntersectionObserver and draw their sparkline only once
+// they scroll into the window's scroll area (one-shot). Off-screen tiles cost
+// nothing until seen; live updates redraw only tiles whose chart already exists
+// (drawSpk no-ops without one), and S.sensors[key].history stays fresh via SSE
+// so a late draw isn't stale. No observer active → callers draw eagerly.
+let _sparkObs=null;
+function _openSparkObserver(rootEl){
+  _closeSparkObserver();
+  if(typeof IntersectionObserver!=='function') return;   // very old browser → eager fallback
+  _sparkObs=new IntersectionObserver((ents,obs)=>{
+    for(const en of ents){
+      if(!en.isIntersecting) continue;
+      const t=en.target; obs.unobserve(t);
+      const key=t.dataset.spkKey; if(!key) continue;
+      const cvs=t.querySelector('canvas.spk'); if(!cvs) continue;
+      if(!S.charts[key]) S.charts[key]={canvas:cvs,ctx:cvs.getContext('2d')};
+      const h=S.sensors[key]?.history;
+      if(h&&h.length>1) drawSpk(key,h);
+    }
+  },{root:rootEl||null,rootMargin:'150px'});
+}
+function _closeSparkObserver(){ if(_sparkObs){ _sparkObs.disconnect(); _sparkObs=null; } }
+// True if the tile was handed to the lazy observer; false → caller draws eagerly.
+function _sparkObserveTile(t,key){
+  if(!_sparkObs) return false;
+  t.dataset.spkKey=key;
+  _sparkObs.observe(t);
+  return true;
+}
+
 function renderTile(did,s){
   // ── VMware sensors go into a VM group row, not a full tile ──────
   if(s.stype==='vmware'&&s.vmware_vm_id){
@@ -347,7 +380,9 @@ function renderTile(did,s){
   _applyActiveSensorFilter(did,s,t);
   t.addEventListener('animationend',()=>{t.classList.remove('stl-enter');t.style.animationDelay='';},{once:true});
   const cvs=t.querySelector('canvas.spk');
-  if(cvs){
+  if(cvs && !_sparkObserveTile(t,key)){
+    // No active window observer (single-tile update path) → draw now. During a
+    // bulk device-window open the observer defers this until the tile is seen.
     S.charts[key]={canvas:cvs,ctx:cvs.getContext('2d')};
     if(s.history&&s.history.length>1)drawSpk(key,s.history);
   }
@@ -917,7 +952,7 @@ async function delDev(did){
   await api('DELETE',`/api/device/${did}`);
   document.getElementById(`dp-${did}`)?.remove();
   document.getElementById(`dpl-${did}`)?.remove();
-  closeM('dwo');
+  _closeSparkObserver();closeM('dwo');
   delete S.devices[did];
   Object.keys(S.sensors).filter(k=>k.startsWith(did+'/')).forEach(k=>{delete S.sensors[k];delete S.charts[k];delete S.logs[k];});
   delete S._devSensors[did];
