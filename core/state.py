@@ -189,9 +189,11 @@ def _effective_enum_legend_py(snmp_unit: str, snmp_oid: str) -> dict:
     return _enum_for_oid_py(snmp_oid)
 
 def _enum_primary_code_py(snmp_unit: str) -> str:
+    """The 'healthy' enum code = the FIRST pair listed in the legend.
+    Legends where 1 is healthy ("1=up 2=down") list 1 first, so behavior is
+    unchanged for them — but authors can now lead with the real ok-state for
+    enums where 1 is a fault ("0=ok 1=alarm", "2=on … 8=failed", "3=ok …")."""
     legend = _parse_enum_legend_py(snmp_unit)
-    if "1" in legend:
-        return "1"
     return next(iter(legend), "1")
 
 def _fmt_duration_s(secs: float) -> str:
@@ -237,6 +239,7 @@ class Sensor:
                  warn_ms=None, crit_ms=None, loss_warn_pct=0, loss_crit_pct=0,
                  keyword="", keyword_case=False, banner_regex="",
                  alerts_muted=False, snmp_unit="",
+                 snmp_scale=0, snmp_oid2="", snmp_pct_mode="",
                  vmware_user="", vmware_password="",
                  vmware_vm_id="", vmware_vm_name="", vmware_metric="",
                  vmware_disk_path="",
@@ -292,6 +295,19 @@ class Sensor:
         self.banner_regex  = banner_regex or ""
         self.alerts_muted  = bool(alerts_muted)
         self.snmp_unit     = snmp_unit or ""   # semantic OID unit: "bytes","errors","packets","%","count", etc.
+        # v1.5 template-library fields:
+        #   snmp_scale    — static value divisor applied centrally in
+        #                   _process_result (deci-°C → 10, KB→MB → 1024).
+        #                   0/1 = off. Never applied to counter types (the
+        #                   agent computes remote rates from raw values).
+        #   snmp_oid2 +   — computed-percentage sensor: probe both OIDs and
+        #   snmp_pct_mode   combine per mode (used_total/used_free/free_total).
+        try:
+            self.snmp_scale = float(snmp_scale or 0)
+        except (TypeError, ValueError):
+            self.snmp_scale = 0.0
+        self.snmp_oid2     = snmp_oid2 or ""
+        self.snmp_pct_mode = snmp_pct_mode or ""
         self.snmp_type     = ""   # SNMP ASN.1 type from probe (Counter32 / Counter64 / Gauge32 / Integer / TimeTicks / OCTET STRING) — populated on first successful SNMP probe; empty for non-SNMP sensors. Drives the frontend's typed rendering (enum vs gauge vs duration vs text).
         # v0.9.7: prev-value tracking for typed SNMP event transitions.
         # _prev_enum_code — last seen enum code (str), used to detect state flips
@@ -476,6 +492,12 @@ class Sensor:
                                                    self.port or 53, self.timeout)
         if self.stype == "snmp":
             v3_creds = self._resolve_snmp_v3_creds() if self.snmp_version == "3" else None
+            if self.snmp_oid2 and self.snmp_pct_mode:
+                from monitoring.probes import probe_snmp_percent
+                return probe_snmp_percent(self.host, self.snmp_community,
+                                          self.snmp_oid, self.snmp_oid2,
+                                          self.snmp_pct_mode, self.port or 161,
+                                          self.timeout, self.snmp_version, v3_creds)
             return probe_snmp(self.host, self.snmp_community,
                               self.snmp_oid, self.port or 161,
                               self.timeout, self.snmp_version, v3_creds)
@@ -577,6 +599,9 @@ class Sensor:
             "probe_id":              getattr(self, "probe_id", "") or "",
             "snmp_unit":             self.snmp_unit,
             "snmp_type":             self.snmp_type,
+            "snmp_scale":            getattr(self, "snmp_scale", 0) or 0,
+            "snmp_oid2":             getattr(self, "snmp_oid2", ""),
+            "snmp_pct_mode":         getattr(self, "snmp_pct_mode", ""),
             "vmware_user":           self.vmware_user,
             "vmware_vm_id":          self.vmware_vm_id,
             "vmware_vm_name":        self.vmware_vm_name,
@@ -1177,6 +1202,7 @@ class MonitorState:
                    fail_after=3, recover_after=2,
                    warn_ms=None, crit_ms=None, loss_warn_pct=0, loss_crit_pct=0,
                    keyword="", keyword_case=False, banner_regex="", snmp_unit="",
+                   snmp_scale=0, snmp_oid2="", snmp_pct_mode="",
                    vmware_user="", vmware_password="",
                    vmware_vm_id="", vmware_vm_name="", vmware_metric="",
                    vmware_disk_path="",
@@ -1207,6 +1233,8 @@ class MonitorState:
                        loss_warn_pct=loss_warn_pct, loss_crit_pct=loss_crit_pct,
                        keyword=keyword, keyword_case=keyword_case, banner_regex=banner_regex,
                        snmp_unit=snmp_unit,
+                       snmp_scale=snmp_scale, snmp_oid2=snmp_oid2,
+                       snmp_pct_mode=snmp_pct_mode,
                        vmware_user=vmware_user, vmware_password=vmware_password,
                        vmware_vm_id=vmware_vm_id, vmware_vm_name=vmware_vm_name,
                        vmware_metric=vmware_metric, vmware_disk_path=vmware_disk_path,
@@ -1262,7 +1290,7 @@ class MonitorState:
                         "http_expected_status", "cert_warn_days", "cert_crit_days",
                         "warn_ms", "crit_ms", "loss_warn_pct", "loss_crit_pct",
                         "keyword", "keyword_case", "banner_regex", "alerts_muted",
-                        "snmp_unit",
+                        "snmp_unit", "snmp_scale", "snmp_oid2", "snmp_pct_mode",
                         "vmware_user", "vmware_password",
                         "vmware_vm_id", "vmware_vm_name", "vmware_metric",
                         "vmware_disk_path",
@@ -1623,6 +1651,30 @@ class MonitorState:
                 return False   # duplicate / out-of-order replay
         s._last_processed_ts = ts_float
 
+        # v1.5: static value scale — normalize raw SNMP gauge readings
+        # (deci-°C, KB, RFC-3433 milli-volts) into display units before
+        # anything downstream sees them: the sample buffer (live AND stale
+        # backfill), last_value, threshold evaluation, and the typed-
+        # transition detector. Applied centrally so local and remote
+        # (probe-injected) results scale identically. Counter types are
+        # exempt — the agent computes remote rates from raw values and knows
+        # nothing of the scale, so scaling local counters would diverge from
+        # remote ones.
+        if s.stype == "snmp" and result.get("ok") and result.get("value") is not None:
+            _sc = getattr(s, "snmp_scale", 0) or 0
+            if _sc and _sc != 1 and \
+                    str(result.get("snmp_type", "")).lower() not in _COUNTER_TYPES:
+                try:
+                    _sv = float(result["value"]) / _sc
+                    result = dict(result)   # never mutate the caller's dict
+                    if _sv == int(_sv) and abs(_sv) < 1e15:
+                        result["value"] = str(int(_sv))
+                    else:
+                        result["value"] = ("%.4f" % _sv).rstrip("0").rstrip(".")
+                    result["detail"] = result["value"]
+                except (ValueError, TypeError):
+                    pass
+
         if not state_eval:
             # Stale backfill — persist the sample for gapless charts, touch
             # nothing else (no debounce, no flaps, no alerts, no broadcast).
@@ -1759,7 +1811,8 @@ class MonitorState:
                         _prev_code = s._prev_enum_code
                         if _prev_code is not None and _cur_code != _prev_code:
                             legend  = _effective_enum_legend_py(s.snmp_unit, s.snmp_oid)
-                            primary = "1" if "1" in legend else (next(iter(legend), "1") if legend else "1")
+                            # First-listed code = healthy (mirrors _enum_primary_code_py)
+                            primary = next(iter(legend), "1") if legend else "1"
                             prev_lbl = legend.get(_prev_code, f"state {_prev_code}")
                             cur_lbl  = legend.get(_cur_code,  f"state {_cur_code}")
                             if _cur_code != primary and _prev_code == primary:

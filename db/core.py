@@ -952,6 +952,17 @@ def db_init():
             con.commit()
         except Exception:
             pass
+        # v1.5 SNMP template library — static value scale divisor (deci-°C,
+        # KB→MB, RFC-3433 entity-sensor factors) + computed-percentage sensors
+        # (two OIDs combined per snmp_pct_mode: used_total/used_free/free_total).
+        for _col, _ddl in (("snmp_scale",    "REAL DEFAULT 0"),
+                           ("snmp_oid2",     "TEXT DEFAULT ''"),
+                           ("snmp_pct_mode", "TEXT DEFAULT ''")):
+            try:
+                con.execute(f"ALTER TABLE sensors ADD COLUMN {_col} {_ddl}")
+                con.commit()
+            except Exception:
+                pass
         # Anomaly detection — EWMA baseline checkpoints (restored on startup)
         con.execute("""
             CREATE TABLE IF NOT EXISTS sensor_anomaly_baselines (
@@ -1118,17 +1129,19 @@ def db_init():
         # ── SNMP sensor templates (per-vendor OID bundles) ───────────
         con.execute("""
             CREATE TABLE IF NOT EXISTS snmp_sensor_templates (
-                id          TEXT PRIMARY KEY,
-                name        TEXT NOT NULL,
-                vendor      TEXT NOT NULL DEFAULT '',
-                description TEXT DEFAULT '',
-                items_json  TEXT NOT NULL DEFAULT '[]',
-                source      TEXT NOT NULL DEFAULT 'user',
-                builtin_key TEXT DEFAULT '',
-                enabled     INTEGER DEFAULT 1,
-                created_by  TEXT DEFAULT '',
-                created_at  REAL DEFAULT 0,
-                updated_at  REAL DEFAULT 0
+                id              TEXT PRIMARY KEY,
+                name            TEXT NOT NULL,
+                vendor          TEXT NOT NULL DEFAULT '',
+                description     TEXT DEFAULT '',
+                items_json      TEXT NOT NULL DEFAULT '[]',
+                source          TEXT NOT NULL DEFAULT 'user',
+                builtin_key     TEXT DEFAULT '',
+                enabled         INTEGER DEFAULT 1,
+                created_by      TEXT DEFAULT '',
+                created_at      REAL DEFAULT 0,
+                updated_at      REAL DEFAULT 0,
+                builtin_version TEXT DEFAULT '',
+                user_modified   INTEGER DEFAULT 0
             )""")
         # Partial-unique index so re-seeding built-ins is an idempotent
         # upsert keyed on builtin_key (empty for user rows → not constrained).
@@ -1136,6 +1149,15 @@ def db_init():
             "CREATE UNIQUE INDEX IF NOT EXISTS ix_snmptpl_builtin "
             "ON snmp_sensor_templates(builtin_key) WHERE builtin_key <> ''"
         )
+        # v1.5 versioned seed refresh — shipped corrections reach un-edited
+        # built-ins automatically; user_modified rows are never clobbered.
+        for _col, _ddl in (("builtin_version", "TEXT DEFAULT ''"),
+                           ("user_modified",   "INTEGER DEFAULT 0")):
+            try:
+                con.execute(f"ALTER TABLE snmp_sensor_templates ADD COLUMN {_col} {_ddl}")
+                con.commit()
+            except Exception:
+                pass
         # ── Reports: templates, schedules, generated history ─────────
         con.execute("""
             CREATE TABLE IF NOT EXISTS report_templates (

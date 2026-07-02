@@ -433,6 +433,9 @@ def pg_create_main_schema(cur):
             radius_username      TEXT DEFAULT '',
             radius_password      TEXT DEFAULT '',
             radius_nas_id        TEXT DEFAULT '',
+            snmp_scale           REAL DEFAULT 0,
+            snmp_oid2            TEXT DEFAULT '',
+            snmp_pct_mode        TEXT DEFAULT '',
             PRIMARY KEY (did, sid)
         )""")
 
@@ -514,6 +517,14 @@ def pg_create_main_schema(cur):
         # v1.4 — HTTPS cert-expiry thresholds on http sensors (days; 0 = off)
         ("sensors", "cert_warn_days", "INTEGER DEFAULT 0"),
         ("sensors", "cert_crit_days", "INTEGER DEFAULT 0"),
+        # v1.5 — SNMP template library: static value scale divisor + computed-
+        # percentage sensors (oid2 combined with snmp_oid per snmp_pct_mode).
+        ("sensors", "snmp_scale",    "REAL DEFAULT 0"),
+        ("sensors", "snmp_oid2",     "TEXT DEFAULT ''"),
+        ("sensors", "snmp_pct_mode", "TEXT DEFAULT ''"),
+        # v1.5 — versioned seed refresh for built-in SNMP templates.
+        ("snmp_sensor_templates", "builtin_version", "TEXT DEFAULT ''"),
+        ("snmp_sensor_templates", "user_modified",   "INTEGER DEFAULT 0"),
         # Pause persistence — 0 = paused (left stopped on restart), 1 = running.
         # Without this a paused device/sensor came back running after a restart.
         ("sensors", "running", "INTEGER DEFAULT 1"),
@@ -882,17 +893,19 @@ def pg_create_main_schema(cur):
     # ── SNMP sensor templates (per-vendor OID bundles) ──────────────
     cur.execute("""
         CREATE TABLE IF NOT EXISTS snmp_sensor_templates (
-            id          TEXT PRIMARY KEY,
-            name        TEXT NOT NULL,
-            vendor      TEXT NOT NULL DEFAULT '',
-            description TEXT DEFAULT '',
-            items_json  TEXT NOT NULL DEFAULT '[]',
-            source      TEXT NOT NULL DEFAULT 'user',
-            builtin_key TEXT DEFAULT '',
-            enabled     INTEGER DEFAULT 1,
-            created_by  TEXT DEFAULT '',
-            created_at  DOUBLE PRECISION DEFAULT 0,
-            updated_at  DOUBLE PRECISION DEFAULT 0
+            id              TEXT PRIMARY KEY,
+            name            TEXT NOT NULL,
+            vendor          TEXT NOT NULL DEFAULT '',
+            description     TEXT DEFAULT '',
+            items_json      TEXT NOT NULL DEFAULT '[]',
+            source          TEXT NOT NULL DEFAULT 'user',
+            builtin_key     TEXT DEFAULT '',
+            enabled         INTEGER DEFAULT 1,
+            created_by      TEXT DEFAULT '',
+            created_at      DOUBLE PRECISION DEFAULT 0,
+            updated_at      DOUBLE PRECISION DEFAULT 0,
+            builtin_version TEXT DEFAULT '',
+            user_modified   INTEGER DEFAULT 0
         )""")
     # Idempotent-reseed key (built-ins only; user rows have empty key).
     cur.execute(

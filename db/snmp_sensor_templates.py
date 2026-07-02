@@ -11,6 +11,7 @@ pattern in db/trap_defs.py. All queries go through the backend-agnostic
 helpers in db/helpers.py (write '?' placeholders — rewritten to %s for PG).
 """
 
+import hashlib
 import json
 import time
 import uuid
@@ -92,8 +93,9 @@ def db_create_snmp_template(data: dict, created_by: str = "") -> str:
 
 def db_update_snmp_template(template_id: str, data: dict) -> bool:
     """Update name/vendor/description/items/enabled. Never changes `source`
-    or `builtin_key` — an edited built-in stays a built-in (its edits are
-    preserved across re-seeds; use delete + re-seed to reset to default)."""
+    or `builtin_key` — an edited built-in stays a built-in. Marks the row
+    user_modified so shipped updates to that built-in never clobber the
+    user's edits (Reset = delete + re-seed restores the shipped default)."""
     items = data.get("items")
     items_str = items if isinstance(items, str) else json.dumps(items or [])
     _vals = (
@@ -108,7 +110,8 @@ def db_update_snmp_template(template_id: str, data: dict) -> bool:
     return db_execute(
         "main",
         """UPDATE snmp_sensor_templates
-           SET name=?, vendor=?, description=?, items_json=?, enabled=?, updated_at=?
+           SET name=?, vendor=?, description=?, items_json=?, enabled=?,
+               updated_at=?, user_modified=1
            WHERE id=?""",
         _vals,
     )
@@ -120,48 +123,68 @@ def db_delete_snmp_template(template_id: str) -> bool:
                       (template_id,))
 
 
-# ── Seeding (idempotent, built-ins only) ─────────────────────────────
+# ── Seeding (versioned refresh, built-ins only) ──────────────────────
+
+def _tpl_content_hash(name, vendor, description, items_str) -> str:
+    """Deterministic content version for a shipped built-in — changes when
+    any shipped field changes, so unedited installs pick up corrections."""
+    basis = "|".join((str(name or ""), str(vendor or ""),
+                      str(description or ""), str(items_str or "")))
+    return hashlib.sha256(basis.encode("utf-8")).hexdigest()[:16]
+
 
 def db_seed_snmp_templates(rows: list) -> None:
-    """Insert built-in templates, keyed on builtin_key. Idempotent: an
-    existing key is left untouched (ON CONFLICT DO NOTHING / INSERT OR
-    IGNORE), so user edits to a built-in survive re-seeding on every start.
-    Each row: {name, vendor, description, items(list), builtin_key}."""
-    if not rows:
-        return
-    now = time.time()
-    prepped = []
-    for r in rows:
+    """Seed built-in templates, keyed on builtin_key, with version refresh:
+      - key not present                                → INSERT
+      - present, un-edited, shipped content changed    → UPDATE in place
+      - present, user-edited (user_modified=1)         → left untouched
+      - un-edited built-in whose key is gone from the
+        shipped set                                    → DELETE (pruned)
+    User edits always win; Reset (delete + re-seed) restores the shipped
+    default. Each row: {name, vendor, description, items(list), builtin_key}."""
+    shipped = {}
+    for r in (rows or []):
         bkey = (r.get("builtin_key") or "").strip()
         if not bkey:
             continue  # a built-in must carry a stable key
         items = r.get("items")
         items_str = items if isinstance(items, str) else json.dumps(items or [])
-        prepped.append((
-            _new_id(), r.get("name", ""), r.get("vendor", ""),
-            r.get("description", ""), items_str, "builtin", bkey,
-            1, "system", now, now,
-        ))
-    if not prepped:
-        return
-    cols = ("id, name, vendor, description, items_json, source, builtin_key, "
-            "enabled, created_by, created_at, updated_at")
+        shipped[bkey] = (r.get("name", ""), r.get("vendor", ""),
+                         r.get("description", ""), items_str)
+    now = time.time()
     try:
-        if is_pg():
-            with db_cursor("main") as cur:
-                import psycopg2.extras
-                psycopg2.extras.execute_values(
-                    cur,
-                    f"INSERT INTO snmp_sensor_templates ({cols}) VALUES %s "
-                    f"ON CONFLICT (builtin_key) WHERE builtin_key <> '' DO NOTHING",
-                    prepped,
-                )
-        else:
-            with db_cursor("main") as cur:
-                cur.executemany(
-                    f"INSERT OR IGNORE INTO snmp_sensor_templates ({cols}) "
-                    f"VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                    prepped,
-                )
+        existing = {}
+        for er in db_query("main",
+                           "SELECT id, builtin_key, builtin_version, user_modified "
+                           "FROM snmp_sensor_templates "
+                           "WHERE source='builtin' AND builtin_key <> ''"):
+            d = dict(er)
+            existing[d.get("builtin_key")] = d
+        for bkey, (name, vendor, desc, items_str) in shipped.items():
+            ver = _tpl_content_hash(name, vendor, desc, items_str)
+            cur = existing.get(bkey)
+            if cur is None:
+                db_execute(
+                    "main",
+                    """INSERT INTO snmp_sensor_templates
+                       (id, name, vendor, description, items_json, source,
+                        builtin_key, enabled, created_by, created_at,
+                        updated_at, builtin_version, user_modified)
+                       VALUES (?, ?, ?, ?, ?, 'builtin', ?, 1, 'system', ?, ?, ?, 0)""",
+                    (_new_id(), name, vendor, desc, items_str, bkey, now, now, ver))
+            elif (not int(cur.get("user_modified") or 0)
+                    and (cur.get("builtin_version") or "") != ver):
+                db_execute(
+                    "main",
+                    """UPDATE snmp_sensor_templates
+                       SET name=?, vendor=?, description=?, items_json=?,
+                           builtin_version=?, updated_at=?
+                       WHERE id=?""",
+                    (name, vendor, desc, items_str, ver, now, cur.get("id")))
+        for bkey, cur in existing.items():
+            if bkey not in shipped and not int(cur.get("user_modified") or 0):
+                db_execute("main",
+                           "DELETE FROM snmp_sensor_templates WHERE id=?",
+                           (cur.get("id"),))
     except Exception as e:
         log.error(f"db_seed_snmp_templates error: {e}")

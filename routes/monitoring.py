@@ -64,7 +64,8 @@ def _get_flap_sensor(flap_id):
 
 
 # ── SNMP sensor template validation/cleaning ─────────────────────────
-_SNMP_TPL_KINDS = ("scalar", "table")
+_SNMP_TPL_KINDS = ("scalar", "table", "percent")
+_SNMP_PCT_MODES = ("used_total", "used_free", "free_total")
 
 
 def _is_oid(s: str) -> bool:
@@ -112,8 +113,25 @@ def _snmp_tpl_clean_items(raw) -> list:
             "crit": _clean_num(it.get("crit")),
             "interval": _clean_num(it.get("interval")),
         }
+        # Static value scale divisor (deci-°C → 10, KB→MB → 1024); > 0 only.
+        _sc = _clean_num(it.get("scale"))
+        if _sc and _sc > 0:
+            item["scale"] = _sc
+        # Computed-%: partner OID + combination mode. Valid on kind="percent"
+        # (scalar pair) and on kind="table" (per-row pair, walked).
+        oid2 = str(it.get("oid2") or "").strip()
+        mode = str(it.get("percent_mode") or "").strip()
+        if kind == "percent":
+            if not _is_oid(oid2):
+                continue   # a percent item without a valid partner is useless
+            item["oid2"] = oid2[:255]
+            item["percent_mode"] = mode if mode in _SNMP_PCT_MODES else "used_total"
         if kind == "table":
-            for k in ("name_oid", "name_oid2", "speed_oid", "hc_variant_oid"):
+            if _is_oid(oid2):
+                item["oid2"] = oid2[:255]
+                item["percent_mode"] = mode if mode in _SNMP_PCT_MODES else "used_total"
+            for k in ("name_oid", "name_oid2", "speed_oid", "hc_variant_oid",
+                      "scale_oid", "precision_oid"):
                 v = str(it.get(k) or "").strip()
                 if v:
                     item[k] = v[:255]
@@ -570,7 +588,22 @@ def handle(h, method, path, body):
         if method == "DELETE":
             db_delete_snmp_template(tid)
             _snmp_tpl_audit(h, user, "snmp_template_delete", existing.get("name", ""))
-            h._json(200, {"ok": True}); return True
+            # Deleting a built-in = "Reset to default": re-seed the shipped
+            # version immediately so it's back without a server restart.
+            restored = None
+            bkey = (existing.get("builtin_key") or "").strip()
+            if existing.get("source") == "builtin" and bkey:
+                try:
+                    from db import db_seed_snmp_templates
+                    from snmp.seeds.snmp_templates import SNMP_SENSOR_TEMPLATES
+                    shipped = [t for t in SNMP_SENSOR_TEMPLATES
+                               if (t.get("builtin_key") or "") == bkey]
+                    if shipped:
+                        db_seed_snmp_templates(shipped)
+                        restored = True
+                except Exception as e:
+                    log.error(f"snmp template reset re-seed failed: {e}")
+            h._json(200, {"ok": True, "restored": bool(restored)}); return True
         err = _snmp_tpl_validate(body)
         if err:
             h._json(400, {"error": err}); return True

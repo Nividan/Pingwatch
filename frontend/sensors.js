@@ -1266,6 +1266,17 @@ function _parseEnumLegend(snmpUnit) {
   return map;
 }
 
+// Healthy enum code = the FIRST pair listed in the legend string (mirrors
+// _enum_primary_code_py). Must parse the raw string — JS objects reorder
+// integer-like keys numerically, losing author order — so "0=ok 1=alarm"
+// and "2=on … 8=failed" resolve to 0 / 2, not 1. Falls back to the legend
+// object's first key (implicit OID legends all lead with 1).
+function _enumPrimaryCode(unitStr, legend) {
+  const m = String(unitStr || '').match(/(\d+)\s*=\s*[a-z]/i);
+  if (m && legend && legend[m[1]] !== undefined) return m[1];
+  return legend && legend['1'] ? '1' : Object.keys(legend || {})[0] || '1';
+}
+
 // Well-known OID prefix → implicit enum legend.  Kicks in when the user
 // added a sensor via the "Auto-detect" Display-as option (unit left blank)
 // but the OID is a standard IF-MIB / ENTITY-MIB / UPS-MIB enum so we can
@@ -1862,8 +1873,8 @@ function _buildKpiBar(summary, samples, did, sid, rateSamples, snmpUnit) {
       const lastG = [...okG].reverse()[0];
       const lastCode = lastG ? String(Math.round(lastG.v)) : null;
       const lastLbl  = lastCode != null ? (legend[lastCode] || ('state ' + lastCode)) : '—';
-      // Primary state = legend key "1" if defined (RFC convention), else first key.
-      const primaryCode = legend['1'] ? '1' : Object.keys(legend)[0] || '1';
+      // Primary state = first pair listed in the legend (author-ordered).
+      const primaryCode = _enumPrimaryCode(_snmpSen && _snmpSen.snmp_unit, legend);
       const primaryLbl  = legend[primaryCode] || ('state ' + primaryCode);
       const inPrimary = okG.filter(g => String(Math.round(g.v)) === primaryCode).length;
       const pct = okG.length ? (inPrimary / okG.length * 100) : 0;
@@ -2757,7 +2768,7 @@ function _drawTypedSnmpChart(ctx, P) {
     // colored by primary-state match (green) vs non-primary (red).  Draw as
     // thick strokes so brief visits are visible at zoomed-out ranges.
     const legend = _sen ? _effectiveEnumLegend(_sen) : _parseEnumLegend(snmpUnit);
-    const primaryCode = legend['1'] ? '1' : Object.keys(legend)[0] || '1';
+    const primaryCode = _enumPrimaryCode((_sen && _sen.snmp_unit) || snmpUnit, legend);
     ctx.lineWidth = 3;
     for (let i = 0; i < sortedG.length; i++) {
       const g = sortedG[i];
@@ -2926,7 +2937,8 @@ function _buildSummaryTable(sumEl, summary, minutes, rateSamples, snmpUnit, did,
     const legend = _typedCat === 'enum_state'
       ? (_summarySen ? _effectiveEnumLegend(_summarySen) : _parseEnumLegend(snmpUnit))
       : null;
-    const primaryCode = legend && (legend['1'] ? '1' : Object.keys(legend)[0] || '1');
+    const primaryCode = legend && _enumPrimaryCode(
+      (_summarySen && _summarySen.snmp_unit) || snmpUnit, legend);
     const primaryLbl = legend ? (legend[primaryCode] || ('state ' + primaryCode)) : null;
     const _bk = {};
     for (const r of summary) {

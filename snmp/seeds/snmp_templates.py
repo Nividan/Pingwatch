@@ -1,19 +1,28 @@
 """
 snmp/seeds/snmp_templates.py — Built-in SNMP sensor templates.
 
-Seeded idempotently at startup (source='builtin', keyed by builtin_key). Scalar
-templates are generated from snmp.catalog.SNMP_CATALOG so there's a single
-source of OID truth; the Interfaces template mirrors the interface metrics the
-"Discover Interfaces" flow uses (table items with per-row naming, speed-based
-auto-thresholds, and 64-bit counter variants).
+Seeded with versioned refresh at startup (source='builtin', keyed by
+builtin_key; unedited built-ins are updated in place when the shipped
+content changes, user-edited ones are never touched — see
+db/snmp_sensor_templates.db_seed_snmp_templates).
+
+The vendor templates are authored, MIB-verified modules under
+snmp/seeds/templates/ (walked table items with per-row naming, computed
+percentages, static + RFC 3433 auto scaling, enum legends with the healthy
+state listed first). They replace the earlier fixed-index templates
+generated from snmp/catalog.py — the catalog remains only as the manual
+Add-Sensor OID picker and a scan-aggregation source. The Interfaces
+template mirrors the interface metrics the "Discover Interfaces" flow uses
+(speed-based auto-thresholds, 64-bit counter variants).
 """
 
-import re
+from snmp.seeds.templates import (host_generic, cisco, fortinet, juniper,
+                                  paloalto, mikrotik, hp_aruba, f5, ups,
+                                  vmware, meraki, aruba_wlc, ubiquiti,
+                                  dell_idrac, hpe_ilo)
 
-from snmp.catalog import SNMP_CATALOG
-
-# Shared interface naming/speed OIDs (index appended at discovery time where the
-# base ends in a dot).
+# Shared interface naming/speed OIDs (index appended at discovery time where
+# the base ends in a dot).
 _IF_NAME  = "1.3.6.1.2.1.31.1.1.1.1"   # ifName (ifXTable)
 _IF_DESCR = "1.3.6.1.2.1.2.2.1.2"      # ifDescr (fallback name)
 _IF_SPEED = "1.3.6.1.2.1.2.2.1.5."     # ifSpeed (base)
@@ -53,34 +62,21 @@ _INTERFACES = {
 }
 
 
-def _slug(s: str) -> str:
-    return re.sub(r"[^a-z0-9]+", "-", (s or "").lower()).strip("-")[:40] or "vendor"
-
-
-def _catalog_templates() -> list:
-    """One scalar template per SNMP_CATALOG vendor group."""
-    out = []
-    for group in SNMP_CATALOG:
-        vendor = (group.get("vendor") or "").strip()
-        items = []
-        for e in (group.get("oids") or []):
-            oid = (e.get("oid") or "").strip()
-            label = (e.get("label") or "").strip()
-            if not oid or not label:
-                continue
-            items.append({"kind": "scalar", "label": label, "oid": oid,
-                          "unit": (e.get("unit") or "").strip(),
-                          "warn": None, "crit": None, "interval": None})
-        if not items:
-            continue
-        out.append({
-            "builtin_key": f"builtin:catalog:{_slug(vendor)}",
-            "name": vendor or "Catalog",
-            "vendor": vendor,
-            "description": "Built-in scalar OIDs from the SNMP catalog.",
-            "items": items,
-        })
-    return out
-
-
-SNMP_SENSOR_TEMPLATES = [_INTERFACES] + _catalog_templates()
+SNMP_SENSOR_TEMPLATES = (
+    [_INTERFACES]
+    + host_generic.TEMPLATES
+    + cisco.TEMPLATES
+    + fortinet.TEMPLATES
+    + juniper.TEMPLATES
+    + paloalto.TEMPLATES
+    + mikrotik.TEMPLATES
+    + hp_aruba.TEMPLATES
+    + f5.TEMPLATES
+    + ups.TEMPLATES
+    + vmware.TEMPLATES
+    + meraki.TEMPLATES
+    + aruba_wlc.TEMPLATES
+    + ubiquiti.TEMPLATES
+    + dell_idrac.TEMPLATES
+    + hpe_ilo.TEMPLATES
+)

@@ -514,11 +514,60 @@ def probe_snmp(host, community, oid, port=161, timeout=5, version="2c", v3_creds
         return {"ok": False, "ms": None, "detail": str(e)[:80]}
 
 
+# Computed-percentage modes: how two OID readings (A, B) combine into a
+# utilisation %. Most vendors expose memory/storage as raw used+free/total
+# counters rather than a native percent gauge.
+_PCT_MODES = ("used_total", "used_free", "free_total")
+
+
+def _snmp_pct_value(a, b, mode):
+    """Combine two numeric readings into a percentage per mode. Returns None
+    on a non-numeric operand or zero denominator (the probe reports failure
+    rather than a fake 0%)."""
+    try:
+        a = float(a)
+        b = float(b)
+    except (TypeError, ValueError):
+        return None
+    if mode == "used_free":            # A=used, B=free → used/(used+free)
+        den = a + b
+        return (a / den) * 100.0 if den > 0 else None
+    if mode == "free_total":           # A=free, B=total → (total-free)/total
+        return ((b - a) / b) * 100.0 if b > 0 else None
+    return (a / b) * 100.0 if b > 0 else None   # used_total: A=used, B=total
+
+
+def probe_snmp_percent(host, community, oid_a, oid_b, mode="used_total",
+                       port=161, timeout=5, version="2c", v3_creds=None):
+    """Two-OID computed-percentage probe (e.g. memory used/total). Reads both
+    OIDs via probe_snmp and returns the combined % as the sensor value."""
+    ra = probe_snmp(host, community, oid_a, port=port, timeout=timeout,
+                    version=version, v3_creds=v3_creds)
+    if not ra.get("ok"):
+        return ra
+    rb = probe_snmp(host, community, oid_b, port=port, timeout=timeout,
+                    version=version, v3_creds=v3_creds)
+    if not rb.get("ok"):
+        return rb
+    pct = _snmp_pct_value(ra.get("value"), rb.get("value"), mode)
+    if pct is None:
+        return {"ok": False, "ms": None,
+                "detail": "Non-numeric reading or zero denominator for % computation"}
+    val = ("%.1f" % pct).rstrip("0").rstrip(".")
+    ms = round((ra.get("ms") or 0) + (rb.get("ms") or 0), 1)
+    return {"ok": True, "ms": ms, "detail": val, "value": val,
+            "snmp_type": "Gauge32", "raw": ""}
+
+
 def _snmpwalk_indexed(auth_args, target, base_oid, timeout):
     """Run `snmpwalk -O nq` (numeric OIDs, quick/no type) on one subtree and
-    return {last-index-int: value:str}. Returns None if the snmpwalk binary is
-    missing, {} on timeout / no rows. Shared by snmpwalk_interfaces and
-    snmpwalk_oid so both walk identically."""
+    return {index-suffix:str -> value:str}, where the key is the full OID
+    remainder after the base — "3" for single-index tables (ifTable), but
+    "9.1.0.0" for composite-index tables (jnxOperatingTable, cempMemPool,
+    F5 per-core CPU). Keying on only the last component would collapse a
+    composite-index table to a single row. Returns None if the snmpwalk
+    binary is missing, {} on timeout / no rows. Shared by
+    snmpwalk_interfaces and snmpwalk_oid so both walk identically."""
     kw = {"creationflags": subprocess.CREATE_NO_WINDOW} if SYS == "Windows" else {}
     cmd = ["snmpwalk", *auth_args,
            "-t", str(timeout), "-r", "1",
@@ -531,6 +580,7 @@ def _snmpwalk_indexed(auth_args, target, base_oid, timeout):
         return None          # snmpwalk not installed
     except subprocess.TimeoutExpired:
         return {}
+    base_n = str(base_oid).strip().lstrip(".").rstrip(".")
     result = {}
     for line in r.stdout.splitlines():
         line = line.strip()
@@ -548,19 +598,23 @@ def _snmpwalk_indexed(auth_args, target, base_oid, timeout):
         if (vlow.startswith("no such object") or vlow.startswith("no such instance")
                 or vlow.startswith("no more variables")):
             continue
-        try:
-            idx = int(oid_str.rstrip(".").rsplit(".", 1)[-1])
-            result[idx] = val
-        except (ValueError, IndexError):
-            pass
+        oid_n = oid_str.strip().lstrip(".").rstrip(".")
+        if not oid_n.startswith(base_n + "."):
+            continue   # response outside the requested subtree
+        suffix = oid_n[len(base_n) + 1:]
+        if not suffix or not all(c in "0123456789." for c in suffix):
+            continue
+        result[suffix] = val
     return result
 
 
 def snmpwalk_oid(host, base_oid, community="public", port=161, timeout=8,
                  version="2c", v3_creds=None):
-    """Walk an arbitrary OID subtree → {index:int -> value:str}. Returns None if
-    the snmpwalk binary is missing or the SNMP auth is invalid. Generic building
-    block for template/table discovery (generalizes snmpwalk_interfaces)."""
+    """Walk an arbitrary OID subtree → {index-suffix:str -> value:str}. Suffix
+    keys carry the full composite index ("3", or "9.1.0.0" for multi-component
+    tables). Returns None if the snmpwalk binary is missing or the SNMP auth is
+    invalid. Generic building block for template/table discovery (generalizes
+    snmpwalk_interfaces)."""
     auth_args, auth_err = _snmp_auth_args(community, version, v3_creds)
     if auth_err:
         log_sensors.warning("snmpwalk_oid %s: %s", host, auth_err)
@@ -581,7 +635,19 @@ def snmpwalk_interfaces(host, community="public", port=161, timeout=8, version="
     target = f"{host}:{port}"
 
     def _walk(base_oid):
-        return _snmpwalk_indexed(auth_args, target, base_oid, timeout)
+        rows = _snmpwalk_indexed(auth_args, target, base_oid, timeout)
+        if rows is None:
+            return None
+        # ifTable/ifXTable rows are single-component (ifIndex) — coerce the
+        # suffix keys back to ints so interface discovery keeps its
+        # historical {int: value} shape byte-for-byte.
+        out = {}
+        for k, v in rows.items():
+            try:
+                out[int(k)] = v
+            except ValueError:
+                pass
+        return out
 
     # Walk the five tables we care about
     descrs   = _walk("1.3.6.1.2.1.2.2.1.2")      # ifDescr
@@ -634,58 +700,130 @@ def snmpwalk_interfaces(host, community="public", port=161, timeout=8, version="
     return interfaces
 
 
+# RFC 3433 EntitySensorDataScale exponents, shared by the standard
+# ENTITY-SENSOR-MIB (1.3.6.1.2.1.99) and CISCO-ENTITY-SENSOR-MIB (9.9.91).
+# Note the RFC's own ordering quirk: exa(14)=10^18 but peta(15)=10^15.
+_ENT_SCALE_EXP = {1: -24, 2: -21, 3: -18, 4: -15, 5: -12, 6: -9, 7: -6, 8: -3,
+                  9: 0, 10: 3, 11: 6, 12: 9, 13: 12, 14: 18, 15: 15, 16: 21, 17: 24}
+
+
+def _clean_scale(v):
+    """Validate an item's static scale divisor → float > 0, or 0 (= none)."""
+    try:
+        f = float(v)
+        return f if f > 0 else 0
+    except (TypeError, ValueError):
+        return 0
+
+
+def _apply_scale(val, scale):
+    """Divide a raw reading by a scale divisor, rendered compactly
+    (415 ÷ 10 → "41.5"; 240 ÷ 10 → "24")."""
+    if not scale or scale == 1:
+        return val
+    try:
+        f = float(val) / float(scale)
+    except (TypeError, ValueError, ZeroDivisionError):
+        return val
+    if f == int(f) and abs(f) < 1e15:
+        return str(int(f))
+    return ("%.4f" % f).rstrip("0").rstrip(".")
+
+
+def _idx_sort_key(sfx):
+    """Numeric sort for index suffixes ("2" < "10"; composite "1.2" < "1.10")."""
+    try:
+        return tuple(int(p) for p in str(sfx).split("."))
+    except (TypeError, ValueError):
+        return (1 << 30,)
+
+
 def snmp_discover_template(host, items, community="public", port=161, timeout=8,
                            version="2c", v3_creds=None):
     """Probe a device against a template's items; return candidate rows for only
     the metrics that responded.
 
-    Scalars → one concurrent snmpget each (kept if ok). Tables → walk the item's
-    base OID once, resolve each row's name from name_oid/name_oid2 (walked once
-    and cached), and emit one candidate per responding index. Returns None if the
-    snmpwalk binary is missing (so the caller can tell "install net-snmp" apart
-    from "device exposes nothing"). Total candidates are capped at 4096 to keep
-    the result inside a single sync-waiter chunk.
+    Item kinds:
+      scalar  — one snmpget (concurrent across items); kept if it answers.
+      percent — two OIDs (oid + oid2) combined per percent_mode
+                (used_total / used_free / free_total).
+      table   — the base OID is walked once; one candidate per responding row,
+                named via name_oid → name_oid2 → index suffix. Composite
+                indexes are preserved ("9.1.0.0" for jnxOperatingTable).
+
+    Per-item value transforms (all optional):
+      scale                     — static divisor (deci-°C → scale 10).
+      scale_oid + precision_oid — RFC 3433 entity-sensor columns walked
+                                  alongside a table base; each row gets an
+                                  auto-computed divisor (beats static scale).
+      oid2 + percent_mode       — on a table item, walks the partner column
+                                  and emits per-row computed percentages.
+
+    Returns None if the snmpwalk binary is missing (so the caller can tell
+    "install net-snmp" apart from "device exposes nothing"). Total candidates
+    are capped at 4096 to keep the result inside a single sync-waiter chunk.
     """
     from concurrent.futures import ThreadPoolExecutor
     _CAP = 4096
     items = items or []
-    scalars = [it for it in items if (it.get("kind") or "scalar") == "scalar"]
+    scalars = [it for it in items
+               if (it.get("kind") or "scalar") in ("scalar", "percent")]
     tables  = [it for it in items if it.get("kind") == "table"]
     candidates = []
 
-    # ── Scalars — concurrent snmpget, keep responders ──
+    # ── Scalars & scalar percents — concurrent snmpget, keep responders ──
     def _do_scalar(it):
         oid = (it.get("oid") or "").strip()
         if not oid:
             return None
-        r = probe_snmp(host, community, oid, port=port, timeout=timeout,
-                       version=version, v3_creds=v3_creds)
+        kind = it.get("kind") or "scalar"
+        scale = _clean_scale(it.get("scale"))
+        if kind == "percent":
+            oid2 = (it.get("oid2") or "").strip()
+            mode = it.get("percent_mode") or "used_total"
+            if not oid2 or mode not in _PCT_MODES:
+                return None
+            r = probe_snmp_percent(host, community, oid, oid2, mode,
+                                   port=port, timeout=timeout,
+                                   version=version, v3_creds=v3_creds)
+        else:
+            r = probe_snmp(host, community, oid, port=port, timeout=timeout,
+                           version=version, v3_creds=v3_creds)
         if not r.get("ok"):
             return None
         label = it.get("label") or oid
-        return {"kind": "scalar", "item_label": label, "oid": oid,
-                "unit": it.get("unit") or "", "value": r.get("value"),
-                "snmp_type": r.get("snmp_type") or "",
-                "warn": it.get("warn"), "crit": it.get("crit"),
-                "interval": it.get("interval"), "suggested_name": label,
-                "group": it.get("group") or ""}
+        c = {"kind": kind, "item_label": label, "oid": oid,
+             "unit": it.get("unit") or ("%" if kind == "percent" else ""),
+             "value": (r.get("value") if kind == "percent"
+                       else _apply_scale(r.get("value"), scale)),
+             "snmp_type": r.get("snmp_type") or "",
+             "warn": it.get("warn"), "crit": it.get("crit"),
+             "interval": it.get("interval"), "suggested_name": label,
+             "group": it.get("group") or ""}
+        if kind == "percent":
+            c["oid2"] = oid2
+            c["percent_mode"] = mode
+        elif scale:
+            c["scale"] = scale
+        return c
     if scalars:
         with ThreadPoolExecutor(max_workers=min(16, len(scalars))) as ex:
             for c in ex.map(_do_scalar, scalars):
                 if c:
                     candidates.append(c)
 
-    # ── Tables — walk each base once; resolve names via cached name walks ──
-    _name_cache = {}   # oid -> {index: value}
+    # ── Tables — walk each base once; shared columns (names, speeds, scale/
+    #    precision, percent partners) are walked once and cached across items ──
+    _walk_cache = {}   # oid -> {index-suffix: value}
 
     def _walk_cached(oid):
         oid = (oid or "").strip().rstrip(".")
         if not oid:
             return {}
-        if oid not in _name_cache:
-            _name_cache[oid] = snmpwalk_oid(host, oid, community, port,
+        if oid not in _walk_cache:
+            _walk_cache[oid] = snmpwalk_oid(host, oid, community, port,
                                             timeout, version, v3_creds) or {}
-        return _name_cache[oid]
+        return _walk_cache[oid]
 
     for it in tables:
         if len(candidates) >= _CAP:
@@ -703,24 +841,62 @@ def snmp_discover_template(host, items, community="public", port=161, timeout=8,
         speed_base = (it.get("speed_oid") or "").strip().rstrip(".")
         speeds = _walk_cached(speed_base) if (it.get("speed_auto_threshold") and speed_base) else {}
         hc_base = (it.get("hc_variant_oid") or "").strip().rstrip(".")
+        pct_base = (it.get("oid2") or "").strip().rstrip(".")
+        pct_mode = it.get("percent_mode") or "used_total"
+        pcts = _walk_cached(pct_base) if (pct_base and pct_mode in _PCT_MODES) else {}
+        if pct_base and not pcts:
+            pct_base = ""   # partner column didn't answer → plain table rows
+        static_scale = _clean_scale(it.get("scale"))
+        sc_base = (it.get("scale_oid") or "").strip().rstrip(".")
+        pr_base = (it.get("precision_oid") or "").strip().rstrip(".")
+        ent_scales = _walk_cached(sc_base) if sc_base else {}
+        ent_precs  = _walk_cached(pr_base) if pr_base else {}
         label = it.get("label") or base
-        for idx in sorted(vals):
+        for idx in sorted(vals, key=_idx_sort_key):
             row_name = names1.get(idx) or names2.get(idx) or str(idx)
             try:
                 speed_raw = int(speeds.get(idx) or 0)
             except (TypeError, ValueError):
                 speed_raw = 0
-            candidates.append({
-                "kind": "table", "item_label": label, "index": idx,
+            # Effective per-row divisor: entity-sensor scale/precision wins
+            # over the item's static scale.
+            row_scale = static_scale
+            if ent_scales or ent_precs:
+                try:
+                    exp = _ENT_SCALE_EXP.get(int(ent_scales.get(idx)))
+                    prec = int(ent_precs.get(idx) or 0)
+                    if exp is not None:
+                        d = 10.0 ** (prec - exp)
+                        if d > 0:
+                            row_scale = d
+                except (TypeError, ValueError):
+                    pass
+            if pct_base:
+                pv = _snmp_pct_value(vals.get(idx), pcts.get(idx), pct_mode)
+                if pv is None:
+                    continue   # partner row missing/non-numeric → skip row
+                disp_val = ("%.1f" % pv).rstrip("0").rstrip(".")
+            else:
+                disp_val = _apply_scale(vals.get(idx), row_scale)
+            c = {
+                "kind": "percent" if pct_base else "table",
+                "item_label": label, "index": idx,
                 "row_name": row_name, "oid": f"{base}.{idx}",
                 "hc_oid": f"{hc_base}.{idx}" if hc_base else "",
-                "unit": it.get("unit") or "",
+                "unit": it.get("unit") or ("%" if pct_base else ""),
+                "value": disp_val,
                 "speed_auto_threshold": bool(it.get("speed_auto_threshold")),
                 "speed_raw": speed_raw,
                 "warn": it.get("warn"), "crit": it.get("crit"),
                 "interval": it.get("interval"),
                 "suggested_name": f"{row_name} {label}".strip(),
-                "group": it.get("group") or ""})
+                "group": it.get("group") or ""}
+            if pct_base:
+                c["oid2"] = f"{pct_base}.{idx}"
+                c["percent_mode"] = pct_mode
+            elif row_scale and row_scale != 1:
+                c["scale"] = row_scale
+            candidates.append(c)
             if len(candidates) >= _CAP:
                 break
     return candidates

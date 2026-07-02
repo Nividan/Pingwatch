@@ -410,6 +410,14 @@ def run_probe(cfg):
                                     cfg.get("dns_server") or "",
                                     port or 53, timeout)
         if st == "snmp":
+            if cfg.get("snmp_oid2") and cfg.get("snmp_pct_mode"):
+                return probes.probe_snmp_percent(
+                    host, cfg.get("snmp_community") or "public",
+                    cfg.get("snmp_oid") or "1.3.6.1.2.1.1.1.0",
+                    cfg.get("snmp_oid2"), cfg.get("snmp_pct_mode"),
+                    port or 161, timeout,
+                    cfg.get("snmp_version") or "2c",
+                    cfg.get("snmp_v3"))
             return probes.probe_snmp(host, cfg.get("snmp_community") or "public",
                                      cfg.get("snmp_oid") or "1.3.6.1.2.1.1.1.0",
                                      port or 161, timeout,

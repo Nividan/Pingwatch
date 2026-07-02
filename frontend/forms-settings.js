@@ -1666,19 +1666,28 @@ function _snmpTplAddItemRow(item) {
   const box = document.getElementById('snmptpl-items');
   if (!box) return;
   item = item || {};
-  const kind = item.kind === 'table' ? 'table' : 'scalar';
+  const kind = item.kind === 'table' ? 'table'
+             : item.kind === 'percent' ? 'percent' : 'scalar';
   const row = document.createElement('div');
   row.className = 'snmptpl-item';
   row.style.cssText = 'border:1px solid var(--border);border-radius:6px;padding:8px;background:var(--bg2)';
   const unitOpts = _SNMP_TPL_UNITS.map(u => `<option value="${esc(u)}"${(item.unit || '') === u ? ' selected' : ''}>${u || '— unit —'}</option>`).join('');
+  const pctMode = item.percent_mode || 'used_total';
+  const pctOpts = [
+    ['used_total', 'A used / B total'],
+    ['used_free',  'A used / B free'],
+    ['free_total', 'A free / B total'],
+  ].map(([v, l]) => `<option value="${v}"${pctMode === v ? ' selected' : ''}>${l}</option>`).join('');
+  const showPct = kind === 'percent' || (kind === 'table' && item.oid2);
   row.innerHTML = `
     <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
-      <select class="it-kind" style="width:92px" onchange="_snmpTplRowKind(this)">
+      <select class="it-kind" style="width:100px" onchange="_snmpTplRowKind(this)">
         <option value="scalar"${kind === 'scalar' ? ' selected' : ''}>Scalar</option>
         <option value="table"${kind === 'table' ? ' selected' : ''}>Table</option>
+        <option value="percent"${kind === 'percent' ? ' selected' : ''}>Percent A/B</option>
       </select>
       <input type="text" class="it-label" value="${esc(item.label || '')}" placeholder="Label (e.g. CPU Load)" style="flex:1;min-width:130px"/>
-      <input type="text" class="it-oid" value="${esc(item.oid || '')}" placeholder="OID (base for table)" style="flex:1.4;min-width:170px;font-family:monospace;font-size:11px"/>
+      <input type="text" class="it-oid" value="${esc(item.oid || '')}" placeholder="OID (base for table; A for percent)" style="flex:1.4;min-width:170px;font-family:monospace;font-size:11px"/>
       <button class="btn-xs" type="button" title="Remove" onclick="this.closest('.snmptpl-item').remove()" style="color:var(--down)">✕</button>
     </div>
     <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-top:6px">
@@ -1686,9 +1695,17 @@ function _snmpTplAddItemRow(item) {
       <input type="number" class="it-warn" value="${item.warn ?? ''}" placeholder="warn" style="width:78px" title="Warn threshold (blank = default)"/>
       <input type="number" class="it-crit" value="${item.crit ?? ''}" placeholder="crit" style="width:78px" title="Crit threshold (blank = default)"/>
       <input type="number" class="it-interval" value="${item.interval ?? ''}" placeholder="interval" style="width:88px" title="Poll interval s (blank = default)"/>
+      <input type="number" class="it-scale" value="${item.scale ?? ''}" placeholder="÷ scale" step="any" style="width:82px" title="Divide the raw value by this (10 for deci-°C, 1024 for KB→MB; blank = off)"/>
+    </div>
+    <div class="it-pct-extra" style="display:${showPct ? 'flex' : 'none'};gap:6px;align-items:center;flex-wrap:wrap;margin-top:6px">
+      <input type="text" class="it-oid2" value="${esc(item.oid2 || '')}" placeholder="Partner OID B (total/free)" style="flex:1.4;min-width:170px;font-family:monospace;font-size:11px"/>
+      <select class="it-pct-mode" style="width:150px" title="How A and B combine into a %">${pctOpts}</select>
     </div>
     <div class="it-table-extra" style="display:${kind === 'table' ? 'flex' : 'none'};gap:6px;align-items:center;flex-wrap:wrap;margin-top:6px">
       <input type="text" class="it-name-oid" value="${esc(item.name_oid || '')}" placeholder="Name OID (e.g. ifName)" style="flex:1;min-width:150px;font-family:monospace;font-size:11px"/>
+      <input type="text" class="it-name-oid2" value="${esc(item.name_oid2 || '')}" placeholder="Fallback name OID" style="flex:1;min-width:130px;font-family:monospace;font-size:11px"/>
+      <input type="text" class="it-scale-oid" value="${esc(item.scale_oid || '')}" placeholder="Scale OID (entity-sensor)" title="RFC 3433 scale column — per-row auto-scale" style="flex:1;min-width:130px;font-family:monospace;font-size:11px"/>
+      <input type="text" class="it-precision-oid" value="${esc(item.precision_oid || '')}" placeholder="Precision OID" title="RFC 3433 precision column" style="flex:1;min-width:120px;font-family:monospace;font-size:11px"/>
       <label style="display:flex;align-items:center;gap:5px;font-size:11px;color:var(--text2)">
         <input type="checkbox" class="it-speed-auto"${item.speed_auto_threshold ? ' checked' : ''}/> speed auto-threshold</label>
     </div>`;
@@ -1696,8 +1713,12 @@ function _snmpTplAddItemRow(item) {
 }
 
 function _snmpTplRowKind(sel) {
-  const extra = sel.closest('.snmptpl-item')?.querySelector('.it-table-extra');
-  if (extra) extra.style.display = sel.value === 'table' ? 'flex' : 'none';
+  const root = sel.closest('.snmptpl-item');
+  if (!root) return;
+  const tbl = root.querySelector('.it-table-extra');
+  const pct = root.querySelector('.it-pct-extra');
+  if (tbl) tbl.style.display = sel.value === 'table' ? 'flex' : 'none';
+  if (pct) pct.style.display = sel.value !== 'scalar' ? 'flex' : 'none';
 }
 
 function _snmpTplReadItems() {
@@ -1715,9 +1736,22 @@ function _snmpTplReadItems() {
       crit: num(row.querySelector('.it-crit')),
       interval: num(row.querySelector('.it-interval')),
     };
+    const sc = num(row.querySelector('.it-scale'));
+    if (sc && sc > 0) it.scale = sc;
+    const oid2 = row.querySelector('.it-oid2').value.trim();
+    if (kind !== 'scalar' && oid2) {
+      it.oid2 = oid2;
+      it.percent_mode = row.querySelector('.it-pct-mode').value;
+    }
     if (kind === 'table') {
       const nOid = row.querySelector('.it-name-oid').value.trim();
       if (nOid) it.name_oid = nOid;
+      const nOid2 = row.querySelector('.it-name-oid2').value.trim();
+      if (nOid2) it.name_oid2 = nOid2;
+      const scOid = row.querySelector('.it-scale-oid').value.trim();
+      if (scOid) it.scale_oid = scOid;
+      const prOid = row.querySelector('.it-precision-oid').value.trim();
+      if (prOid) it.precision_oid = prOid;
       it.speed_auto_threshold = row.querySelector('.it-speed-auto').checked;
     }
     out.push(it);
@@ -1768,13 +1802,13 @@ async function _snmpTplDelete(id) {
   if (!t) return;
   const isB = t.source === 'builtin';
   const msg = isB
-    ? `Reset built-in template "${t.name}" to default? It will be restored on the next server restart.`
+    ? `Reset built-in template "${t.name}" to the shipped defaults? Your edits to it will be discarded.`
     : `Delete template "${t.name}"?`;
   if (!confirm(msg)) return;
   try {
     await api('DELETE', `/api/snmp/templates/${id}`);
     await _snmpTplLoad();
-    toast(isB ? 'Template reset' : 'Template deleted', 'ok');
+    toast(isB ? 'Template reset to shipped defaults' : 'Template deleted', 'ok');
   } catch (e) { toast(e.message || 'Delete failed', 'err'); }
 }
 
@@ -1916,7 +1950,8 @@ function _snmpScanRender() {
     html += `<div style="padding:5px 8px;background:var(--bg3);font-size:11px;font-weight:600;color:var(--text2)">${esc(g)} <span style="color:var(--text3)">(${groups[g].length})</span></div>`;
     groups[g].forEach(i => {
       const c = _snmpScanCands[i];
-      const val = c.kind === 'scalar' ? String(c.value || '').slice(0, 40) : '';
+      // Tables + percents carry live values too (scaled/computed server-side)
+      const val = String(c.value || '').slice(0, 40);
       html += `<label style="display:flex;gap:8px;align-items:center;padding:4px 10px;border-top:1px solid var(--border);font-size:11px;cursor:pointer">
         <input type="checkbox" class="scan-cb" data-i="${i}" onchange="_snmpScanCbCount()">
         <span style="flex:1">${esc(c.suggested_name || c.item_label || '')}</span>
@@ -1953,18 +1988,38 @@ async function _snmpScanSave() {
     .map(cb => _snmpScanCands[parseInt(cb.dataset.i)]).filter(Boolean);
   if (!sel.length) { toast('Select at least one metric', 'err'); return; }
   // Collapse table candidates (per-index rows) back to their base table item;
-  // dedup scalars by OID. Keeps the saved template device-agnostic.
+  // dedup scalars by OID. Keeps the saved template device-agnostic. Index
+  // suffixes may be composite ("9.1.0.0"), so strip the row's actual index
+  // rather than assuming a single trailing component.
+  const stripIdx = (oid, idx) => {
+    oid = String(oid || ''); idx = String(idx || '');
+    if (idx && oid.endsWith('.' + idx)) return oid.slice(0, oid.length - idx.length - 1) + '.';
+    return oid.replace(/\.\d+$/, '.');
+  };
   const seen = new Set(), items = [];
   sel.forEach(c => {
-    if (c.kind === 'table') {
-      const base = (c.oid || '').replace(/\.\d+$/, '.');
+    const isRow = c.index !== undefined && c.index !== null && c.index !== '';
+    if (c.kind === 'table' || (c.kind === 'percent' && isRow)) {
+      const base = stripIdx(c.oid, c.index);
       const key = 't|' + (c.item_label || '') + '|' + base;
       if (seen.has(key)) return; seen.add(key);
-      items.push({ kind: 'table', label: c.item_label || base, oid: base,
-                   unit: c.unit || '', speed_auto_threshold: !!c.speed_auto_threshold });
+      const it = { kind: 'table', label: c.item_label || base, oid: base,
+                   unit: c.unit || '', speed_auto_threshold: !!c.speed_auto_threshold };
+      if (c.kind === 'percent' && c.oid2) {
+        it.oid2 = stripIdx(c.oid2, c.index);
+        it.percent_mode = c.percent_mode || 'used_total';
+      }
+      items.push(it);
+    } else if (c.kind === 'percent') {
+      if (seen.has('p|' + c.oid)) return; seen.add('p|' + c.oid);
+      items.push({ kind: 'percent', label: c.item_label || c.oid, oid: c.oid,
+                   oid2: c.oid2 || '', percent_mode: c.percent_mode || 'used_total',
+                   unit: c.unit || '%' });
     } else {
       if (seen.has('s|' + c.oid)) return; seen.add('s|' + c.oid);
-      items.push({ kind: 'scalar', label: c.item_label || c.oid, oid: c.oid, unit: c.unit || '' });
+      const it = { kind: 'scalar', label: c.item_label || c.oid, oid: c.oid, unit: c.unit || '' };
+      if (c.scale) it.scale = c.scale;
+      items.push(it);
     }
   });
   const btn = document.getElementById('scan-save-btn');

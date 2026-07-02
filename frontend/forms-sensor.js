@@ -1545,7 +1545,8 @@ function _snmpRenderCandidates(){
     if(g) rows+=`<div class="disc-grp">${esc(g)} <span class="disc-grp-n">${groups[g].length}</span></div>`;
     groups[g].forEach(i=>{
       const c=cands[i];
-      const val=c.kind==='scalar'?String(c.value||'').slice(0,40):'';
+      // Tables + percents carry live values too (scaled/computed server-side)
+      const val=String(c.value||'').slice(0,40);
       const search=esc(`${c.suggested_name||''} ${c.item_label||''} ${c.oid||''} ${c.unit||''}`.toLowerCase());
       // 64-bit toggle is its own control — kept outside the row-select label so
       // clicking it doesn't also toggle the row checkbox.
@@ -1646,6 +1647,13 @@ async function _snmpAddSelectedCandidates(){
       warn_ms:wms,crit_ms:cms,
       loss_warn_pct:0,loss_crit_pct:0,keyword:'',keyword_case:false,banner_regex:''
     };
+    // v1.5 template fields: static/auto-computed value scale divisor, and the
+    // partner OID + mode for computed-% sensors.
+    if(c.scale) body.snmp_scale=c.scale;
+    if(c.kind==='percent'&&c.oid2){
+      body.snmp_oid2=c.oid2;
+      body.snmp_pct_mode=c.percent_mode||'used_total';
+    }
     // Carry live v3 creds so a not-yet-saved device still polls correctly.
     ['snmp_v3_user','snmp_v3_level','snmp_v3_auth_proto','snmp_v3_priv_proto',
      'snmp_v3_context','snmp_v3_auth_pass','snmp_v3_priv_pass'].forEach(k=>{ if(conn[k]!=null) body[k]=conn[k]; });

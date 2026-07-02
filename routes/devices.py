@@ -996,7 +996,7 @@ def handle(h, method, path, body):
                   "warn_ms", "crit_ms",
                   "loss_warn_pct", "loss_crit_pct",
                   "keyword", "keyword_case", "banner_regex", "alerts_muted",
-                  "snmp_unit",
+                  "snmp_unit", "snmp_scale", "snmp_oid2", "snmp_pct_mode",
                   "vmware_user", "vmware_vm_id", "vmware_vm_name", "vmware_metric",
                   "vmware_disk_path",
                   "smtp_tls", "smtp_user", "smtp_from", "smtp_rcpt", "smtp_test_level",
@@ -1035,6 +1035,20 @@ def handle(h, method, path, body):
                     kwargs[_cf] = max(0, min(3650, int(kwargs[_cf])))
                 except (TypeError, ValueError):
                     h._json(400, {"error": f"{_cf} must be an integer"}); return True
+        # v1.5 SNMP template fields — coerce/validate
+        if "snmp_scale" in kwargs:
+            try:
+                _sc = float(kwargs["snmp_scale"] or 0)
+                kwargs["snmp_scale"] = _sc if _sc > 0 else 0
+            except (TypeError, ValueError):
+                h._json(400, {"error": "snmp_scale must be a number"}); return True
+        if "snmp_oid2" in kwargs:
+            kwargs["snmp_oid2"] = str(kwargs["snmp_oid2"] or "").strip()[:255]
+        if "snmp_pct_mode" in kwargs:
+            _pm = str(kwargs["snmp_pct_mode"] or "").strip()
+            if _pm and _pm not in ("used_total", "used_free", "free_total"):
+                h._json(400, {"error": "invalid snmp_pct_mode"}); return True
+            kwargs["snmp_pct_mode"] = _pm
         # VMware password: encrypt if provided, skip if empty (keep existing)
         if body.get("vmware_password"):
             from db.backups import encrypt_pw
@@ -1210,6 +1224,17 @@ def handle(h, method, path, body):
         oid   = body.get("snmp_oid", "1.3.6.1.2.1.1.1.0")
         sver  = body.get("snmp_version", "2c")
         sunit = body.get("snmp_unit", "")
+        # v1.5 SNMP template fields — static scale divisor + computed-%
+        try:
+            sscale = float(body.get("snmp_scale") or 0)
+            if sscale <= 0:
+                sscale = 0
+        except (TypeError, ValueError):
+            sscale = 0
+        soid2 = str(body.get("snmp_oid2") or "").strip()[:255]
+        spct  = str(body.get("snmp_pct_mode") or "").strip()
+        if spct not in ("", "used_total", "used_free", "free_total"):
+            spct = ""
         try:
             xstat = int(body.get("http_expected_status", 0))
             wms   = int(body["warn_ms"])  if body.get("warn_ms")  else None
@@ -1340,6 +1365,8 @@ def handle(h, method, path, body):
                                loss_warn_pct=lwp, loss_crit_pct=lcp,
                                keyword=kw, keyword_case=kwc, banner_regex=bnr,
                                snmp_unit=sunit,
+                               snmp_scale=sscale, snmp_oid2=soid2,
+                               snmp_pct_mode=spct,
                                vmware_user=vm_user, vmware_password=vm_pw,
                                vmware_vm_id=vm_vmid, vmware_vm_name=vm_vmname,
                                vmware_metric=vm_metric, vmware_disk_path=vm_disk_path,

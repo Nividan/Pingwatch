@@ -273,7 +273,9 @@ def _sanitize_candidate(r) -> dict:
     probe into the shape the frontend renders."""
     if not isinstance(r, dict):
         return None
-    kind = "table" if r.get("kind") == "table" else "scalar"
+    kind = r.get("kind")
+    if kind not in ("table", "percent"):
+        kind = "scalar"
     oid = str(r.get("oid") or "").strip()
     if not oid:
         return None
@@ -293,15 +295,27 @@ def _sanitize_candidate(r) -> dict:
          "warn": _num(r.get("warn")), "crit": _num(r.get("crit")),
          "interval": _num(r.get("interval")),
          "group": str(r.get("group") or "")[:80],
-         "suggested_name": str(r.get("suggested_name") or "")[:120]}
-    if kind == "scalar":
-        c["value"] = str(r.get("value") or "")[:120]
-        c["snmp_type"] = str(r.get("snmp_type") or "")[:32]
-    else:
-        try:
-            c["index"] = int(r.get("index"))
-        except (TypeError, ValueError):
+         "suggested_name": str(r.get("suggested_name") or "")[:120],
+         "value": str(r.get("value") or "")[:120],
+         "snmp_type": str(r.get("snmp_type") or "")[:32]}
+    # Static/auto-computed value scale divisor (baked into the sensor on add)
+    _sc = _num(r.get("scale"))
+    if _sc and _sc > 0:
+        c["scale"] = _sc
+    # Computed-% candidates carry the partner OID + combination mode
+    if kind == "percent":
+        c["oid2"] = str(r.get("oid2") or "")[:255]
+        _pm = str(r.get("percent_mode") or "")
+        c["percent_mode"] = _pm if _pm in ("used_total", "used_free",
+                                           "free_total") else "used_total"
+    if r.get("index") is not None or kind == "table":
+        # Index suffixes may be composite ("9.1.0.0" for jnxOperatingTable) —
+        # keep them as bounded digits-and-dots strings, never int-coerced.
+        idx = str(r.get("index") if r.get("index") is not None else "").strip()
+        if kind == "table" and (not idx or len(idx) > 64
+                                or not all(ch in "0123456789." for ch in idx)):
             return None
+        c["index"] = idx
         c["row_name"] = str(r.get("row_name") or "")[:128]
         c["hc_oid"] = str(r.get("hc_oid") or "")[:255]
         c["speed_auto_threshold"] = bool(r.get("speed_auto_threshold"))
@@ -796,6 +810,12 @@ def _build_agent_config(pid: str) -> list:
                 "snmp_version": s.snmp_version or
                                 getattr(dev, "snmp_version_default", "") or "2c",
                 "snmp_unit": s.snmp_unit or "",
+                # Computed-% sensors probe two OIDs on the agent; the static
+                # scale divisor is deliberately NOT sent — it is applied
+                # centrally in _process_result so local and remote results
+                # scale identically.
+                "snmp_oid2": getattr(s, "snmp_oid2", "") or "",
+                "snmp_pct_mode": getattr(s, "snmp_pct_mode", "") or "",
             })
             if cfg["snmp_version"] == "3":
                 try:
