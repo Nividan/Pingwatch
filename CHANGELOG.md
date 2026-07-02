@@ -109,6 +109,10 @@ A pre-release review turned up a batch of correctness, security, and reliability
 
 No wire-protocol change; the remote agent is unaffected.
 
+### Build 9 — Hotfix: audit logging crashed five SNMP/flap endpoints
+
+Build 8 added `db_log_audit` calls to `snmp_interfaces`, `snmp_discover`, `snmp_scan`, `flap_ack`, and `flap_resolve` in [routes/monitoring.py](routes/monitoring.py), but the module imported `db_log_audit` **only locally**, inside `handle()`'s pre-existing `snmp_reenrich` branch. A local `from db import …` binds the name for the *entire* function, so on every branch that never reaches that import the new calls raised `UnboundLocalError: cannot access local variable 'db_log_audit'`. Effect: the three SNMP endpoints 500'd *before* doing any work (discovery/scan never ran), and flap ack/resolve wrote the flap row but then crashed *before* propagating the ACK/resolve to the linked alert event and updating the live tile — leaving the client a 500 and the flap and its alert event out of sync. Fixed by importing `db_log_audit` at module scope and dropping the two shadowing local imports ([routes/monitoring.py](routes/monitoring.py)). Only `snmp_reenrich` (whose branch happened to hit the local import) was unaffected. Server-only; no wire-protocol change.
+
 ---
 
 ## v1.4 — Root Cause & Acknowledgement

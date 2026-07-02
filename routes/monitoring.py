@@ -14,7 +14,7 @@ import time
 import core.app_state as app_state
 from core.config import LOGS_DB_PATH
 from db import db_load_flaps, db_load_traps, db_ack_flap, db_resolve_flap, \
-               db_sample_buffer_stats
+               db_sample_buffer_stats, db_log_audit
 from db.backend import is_pg
 from core.logger import log
 
@@ -167,7 +167,6 @@ def _snmp_tpl_clean(body: dict) -> dict:
 
 def _snmp_tpl_audit(h, user, action, detail):
     try:
-        from db import db_log_audit
         db_log_audit(user, h.client_address[0], action, str(detail)[:200])
     except Exception:
         pass
@@ -764,7 +763,6 @@ def handle(h, method, path, body):
         user, _ = h._require("admin")
         if not user: return True
         from db.trap_defs import db_lookup_trap
-        from db import db_log_audit
         scanned = 0
         updated = 0
         try:
