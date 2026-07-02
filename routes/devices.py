@@ -95,25 +95,68 @@ def _get_scan_targets():
     return targets or _SCAN_TARGETS
 
 
-def _maybe_resize_executor():
-    """Re-evaluate auto worker count after sensor count changes.
+# Debounced executor auto-resize. Bulk sensor changes (add / import / delete)
+# call _maybe_resize_executor once per sensor; without coalescing that rebuilds
+# the whole thread pool once per 4 sensors — a resize + INFO line each step (a
+# 400-sensor add produced ~100). A short reset-on-each-call timer collapses a
+# burst into a single resize (and a single log line) once it settles.
+_RESIZE_DEBOUNCE_S = 3.0
+_resize_lock  = threading.Lock()
+_resize_timer = None   # threading.Timer or None, guarded by _resize_lock
 
-    No-op when max_workers_executor is set to a manual value (>= 4).
-    Called via _db_enqueue so it runs after the STATE is already saved.
+
+def _maybe_resize_executor():
+    """Schedule a debounced re-evaluation of the auto worker count.
+
+    No-op when max_workers_executor is a manual value (>= 4). Called via
+    _db_enqueue after STATE is saved; the actual pool swap runs later on the
+    timer thread (_apply_executor_resize) so the DB writer queue isn't blocked
+    and a bulk change resizes once instead of once per 4 sensors.
     """
+    global _resize_timer
+    with _resize_lock:
+        if _resize_timer is not None:
+            _resize_timer.cancel()
+        _resize_timer = threading.Timer(_RESIZE_DEBOUNCE_S, _apply_executor_resize)
+        _resize_timer.daemon = True
+        _resize_timer.start()
+
+
+def _apply_executor_resize():
+    """Re-evaluate the auto worker count and swap the executor if it changed.
+    Runs on the debounce timer thread; see _maybe_resize_executor."""
+    global _resize_timer
+    with _resize_lock:
+        _resize_timer = None
     import concurrent.futures as _cf
     import core.settings as _settings
-    _mw_override = int(_settings.get("max_workers_executor", 0) or 0)
-    if _mw_override >= 4:
-        return  # manual override in effect
-    _count = sum(len(d.sensors) for d in STATE.devices.values())
-    _mw = max(64, min(512, _count // 4 or 64))
-    if STATE._executor._max_workers != _mw:
-        STATE._executor = _cf.ThreadPoolExecutor(
-            max_workers=_mw, thread_name_prefix='pw-sensor'
-        )
-        STATE._scheduler._executor = STATE._executor
-        log.info(f"Executor auto-resized to {_mw} workers ({_count} sensors)")
+    try:
+        if int(_settings.get("max_workers_executor", 0) or 0) >= 4:
+            return  # manual override in effect
+        old       = getattr(STATE, "_executor", None)
+        scheduler = getattr(STATE, "_scheduler", None)
+        if old is None or scheduler is None:
+            return  # not started yet / shutting down
+        # Snapshot devices so a concurrent add on a request thread can't raise
+        # "dict changed size during iteration" while we count.
+        count  = sum(len(d.sensors) for d in list(STATE.devices.values()))
+        target = max(64, min(512, count // 4 or 64))
+        if old._max_workers == target:
+            return  # already the right size
+        new = _cf.ThreadPoolExecutor(max_workers=target, thread_name_prefix='pw-sensor')
+        STATE._executor    = new
+        scheduler._executor = new
+        # Drain the old pool without blocking: queued/in-flight probes finish on
+        # it, then its idle threads exit instead of lingering for GC. The
+        # scheduler's submit is guarded (core/state.py), so the rare "submit
+        # during swap" just re-queues that one probe (+5s) rather than losing it.
+        try:
+            old.shutdown(wait=False)
+        except Exception:
+            pass
+        log.info(f"Executor auto-resized to {target} workers ({count} sensors)")
+    except Exception as e:
+        log.error(f"Executor resize failed: {type(e).__name__}: {e}")
 
 
 _MAX_PARENT_IDS = 8
